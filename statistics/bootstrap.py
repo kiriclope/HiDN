@@ -32,15 +32,19 @@ def my_boots_ci(X, statfunc, conf=0.95, n_samples=1000, n_jobs=-1, verbose=1):
     """
 
     if verbose:
-        with pgb.tqdm_joblib(pgb.tqdm(desc='bootstrap', total=n_samples)) as progress_bar:
-            res = Parallel(n_jobs=n_jobs)(delayed(bootstrap_parloop)(X, statfunc)
-                                          for _ in range(n_samples))
+        with pgb.tqdm_joblib(
+            pgb.tqdm(desc="bootstrap", total=n_samples)
+        ) as progress_bar:
+            res = Parallel(n_jobs=n_jobs)(
+                delayed(bootstrap_parloop)(X, statfunc) for _ in range(n_samples)
+            )
     else:
-        res = Parallel(n_jobs=n_jobs)(delayed(bootstrap_parloop)(X, statfunc)
-                                      for _ in range(n_samples))
+        res = Parallel(n_jobs=n_jobs)(
+            delayed(bootstrap_parloop)(X, statfunc) for _ in range(n_samples)
+        )
 
     res = np.asarray(res)
-    # print('stats', res.shape)
+    print("stats", res.shape)
 
     # Sort the array of per-sample statistics and cut off ends
     # ostats = sorted(stats)

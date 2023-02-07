@@ -10,7 +10,9 @@ def set_options(**kwargs):
     opts["n_jobs"] = int(0.5 * multiprocessing.cpu_count())
     opts["verbose"] = 0
 
+    ################################
     # task param
+    ################################
     opts["tasks"] = np.array(["DPA", "DualGo", "DualNoGo"])
 
     opts["trials"] = "correct"  # 'correct', 'incorrect', ''
@@ -22,7 +24,9 @@ def set_options(**kwargs):
 
     opts["overlap"] = "Dist"
 
+    ################################
     # perm/boots param
+    ################################
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
     opts["n_boots"] = 1000  # for bootstrap
@@ -33,18 +37,36 @@ def set_options(**kwargs):
 
     opts["add_vlines"] = 0
 
+    ################################
     # preprocessing parameters
+    ################################
     opts["epochs"] = ["ED", "MD", "LD"]
+    opts["epoch"] = ["ED"]
 
     # scaling fluo
-    opts["scaler_BL"] = "robust"  # standard, robust, center
+    opts["scaler_BL"] = "robust"  # "robust"  # standard, robust, center
     opts["center_BL"] = None
     opts["scale_BL"] = None
-    opts["avg_mean_BL"] = 0
+    opts["avg_mean_BL"] = 1
     opts["avg_noise_BL"] = 1
+    opts["unit_var_BL"] = 1
     opts["return_center_scale"] = 0
 
+    ################################
+    # Synthetic augmentation
+    ################################
+    # create synthetic traces with spawner
+    opts["augment"] = False
+    opts["sig_aug"] = 0.005
+    opts["n_aug"] = 1
+
+    # adjust imbalance in trial types
+    opts["imbalance"] = False
+
+    ################################
     # classification parameters
+    ################################
+
     opts["clf_name"] = "bootstrap"  # '' or 'bolasso' or 'bootstrap'
 
     opts["tol"] = 1e-3
@@ -64,7 +86,7 @@ def set_options(**kwargs):
     opts["standardize"] = None  # 'standard', 'robust', 'center', None
 
     # prescreening
-    opts["prescreen"] = True
+    opts["prescreen"] = False
     opts["pval"] = 0.05
 
     # outer cv for score estimates
@@ -76,8 +98,8 @@ def set_options(**kwargs):
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"
     opts["n_in"] = 5
-    opts["n_repeats"] = 1000
-    opts["inner_score"] = "neg_log_loss"  # accuracy
+    opts["n_repeats"] = 10
+    opts["inner_score"] = "f1_weighted"  # accuracy
 
     # multiclass/label
     opts["multilabel"] = False

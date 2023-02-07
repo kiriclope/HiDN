@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import norm, circmean
 
 # from scipy.signal import savgol_filter, detrend
 
@@ -270,7 +270,79 @@ def avg_epochs(X, epochs=None):
             X_epochs[i_epoch] = X_RWD
 
     X_epochs = np.moveaxis(X_epochs, 0, -1)
-    print("X_epochs", X_epochs.shape, epochs)
+    # print("X_epochs", X_epochs.shape, epochs)
+
+    if X_epochs.shape[-1] == 1:
+        X_epochs = X_epochs[..., 0]
+
+    return X_epochs
+
+
+def avg_phase_epochs(X, epochs=None):
+
+    X_avg = np.nanmean(X, axis=-1)
+
+    if epochs is None:
+        epochs = gv.epochs
+
+    X_epochs = np.empty(tuple([len(epochs)]) + X_avg.shape)
+    # print('X', X_epochs.shape, 'X_avg', X_avg.shape)
+    # print('start', gv.bin_start, 'epochs', gv.epochs)
+    # print('average over epochs', epochs)
+
+    for i_epoch, epoch in enumerate(epochs):
+
+        if epoch == "BL":
+            X_BL = circmean(X[..., gv.bins_BL], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_BL
+        elif epoch == "STIM":
+            X_STIM = circmean(X[..., gv.bins_STIM], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_STIM
+        elif epoch == "STIM_ED":
+            X_STIM_ED = circmean(
+                X[..., gv.bins_STIM + gv.bins_ED], axis=-1, high=360, low=0
+            )
+            X_epochs[i_epoch] = X_STIM_ED
+        elif epoch == "ED":
+            X_ED = circmean(X[..., gv.bins_ED], axis=-1, high=360, low=0)
+            # print('X_ED', X_ED.shape, 'bins', gv.bins_ED)
+            X_epochs[i_epoch] = X_ED
+        elif epoch == "DIST":
+            X_DIST = circmean(X[..., gv.bins_DIST], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_DIST
+        elif epoch == "MD":
+            X_MD = circmean(X[..., gv.bins_MD], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_MD
+        elif epoch == "CUE":
+            X_CUE = circmean(X[..., gv.bins_CUE], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_CUE
+        elif epoch == "LD":
+            X_LD = circmean(X[..., gv.bins_LD], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_LD
+        elif epoch == "RWD":
+            X_RWD = circmean(X[..., gv.bins_RWD], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_RWD
+        elif epoch == "TEST":
+            X_TEST = circmean(X[..., gv.bins_TEST], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_TEST
+        elif epoch == "DELAY":
+            X_DELAY = circmean(X[..., gv.bins_DELAY], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_DELAY
+        elif epoch == "Before":
+            X_bef = circmean(X[..., gv.time < gv.t_DIST[0]], axis=-1, high=360, low=0)
+            print(X_bef.shape)
+            X_epochs[i_epoch] = X_bef
+        elif epoch == "After":
+            X_bef = circmean(
+                X[..., np.where(gv.time > gv.t_DIST[1])], axis=-1, high=360, low=0
+            )
+            X_epochs[i_epoch] = X_bef
+        elif epoch == "RWD2":
+            X_RWD = circmean(X[..., gv.bins_RWD2], axis=-1, high=360, low=0)
+            X_epochs[i_epoch] = X_RWD
+
+    X_epochs = np.moveaxis(X_epochs, 0, -1)
+    # print("X_epochs", X_epochs.shape, epochs)
 
     if X_epochs.shape[-1] == 1:
         X_epochs = X_epochs[..., 0]

@@ -131,13 +131,16 @@ bins_DIST = bins[int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * fram
 bins_MD = bins[int((t_MD[0] + T_WINDOW) * frame_rate) : int(t_MD[1] * frame_rate)]
 bins_CUE = bins[int((t_CUE[0] + T_WINDOW) * frame_rate) : int(t_CUE[1] * frame_rate)]
 bins_RWD = bins[int((t_RWD[0] + T_WINDOW) * frame_rate) : int(t_RWD[1] * frame_rate)]
-bins_LD = bins[
-    int((t_LD[0] + T_WINDOW) * frame_rate) : int(t_LD[1] * frame_rate * frame_rate)
+bins_LD = bins[int((t_LD[0] + T_WINDOW) * frame_rate) : int(t_LD[1] * frame_rate)]
+bins_TEST = bins[
+    int((t_TEST[1]) * frame_rate) : int((t_TEST[1] + T_WINDOW) * frame_rate)
 ]
-bins_TEST = bins[int((t_TEST[0] + T_WINDOW) * frame_rate) : int(t_TEST[1] * frame_rate)]
+
 bins_RWD2 = bins[int((t_RWD2[0] + T_WINDOW) * frame_rate) : int(t_RWD2[1] * frame_rate)]
 
-print("bins ED", bins_ED)
+# print("bins ED", bins_ED)
+# print("bins MD", bins_MD)
+# print("bins LD", bins_LD)
 
 global data_type
 data_type = "raw"  # 'raw' or 'dF'

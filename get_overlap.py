@@ -10,7 +10,7 @@ from common.options import set_options
 from common.plot_utils import save_fig, pkl_save
 
 from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs
+from preprocess.helpers import avg_epochs, preprocess_X
 from preprocess.augmentation import spawner
 
 from decode.classifiers import get_clf
@@ -47,7 +47,6 @@ def get_overlap(X, y, coefs, RETURN_SAMPLE=None):
     overlap_A = np.nanmean(overlap[:, idx], axis=1) / X.shape[1]
     overlap_B = np.nanmean(overlap[:, ~idx], axis=1) / X.shape[1]
 
-
     if RETURN_SAMPLE == "A":
         return -overlap_A
     elif RETURN_SAMPLE == "B":
@@ -74,13 +73,21 @@ def get_mean_overlap(X, y, coefs, sign=1):
     return A + sign * B
 
 
-def main(day="first", overlap="sample", features="sample", IF_RELOAD=False):
+def plot_overlap(day="first", overlap="sample", features="sample", IF_RELOAD=False):
     options = set_options()
 
     options["day"] = day
     options["overlap"] = overlap
 
-    X_days, y_days = get_X_y_days(IF_PREP=1, IF_RELOAD=IF_RELOAD)
+    X_days, y_days = get_X_y_days(IF_PREP=0, IF_RELOAD=IF_RELOAD)
+
+    X_days = preprocess_X(
+        X_days,
+        scaler=options["scaler_BL"],
+        avg_mean=options["avg_mean_BL"],
+        avg_noise=options["avg_noise_BL"],
+        unit_var=1,
+    )
 
     model = get_clf(**options)
 
@@ -88,26 +95,34 @@ def main(day="first", overlap="sample", features="sample", IF_RELOAD=False):
 
     if options["overlap"].lower() == "sample":
         options["features"] = "sample"
+        options["task"] = " "
     elif options["overlap"].lower() == "test":
         options["features"] = "test"
     elif options["overlap"].lower() == "reward":
         options["features"] = "reward"
     else:
         options["features"] = "distractor"
+        options["task"] = "Dual"
 
     trials = options["trials"]
     # options['trials'] = 'correct'
 
+    print("getting X, y")
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    print(X_S1_S2.shape, y_S1_S2.shape)
+    print("X", X_S1_S2.shape, "y", y_S1_S2.shape)
 
-    for _ in range(2):
-        X_aug = spawner(X_S1_S2, y_S1_S2, sigma=0.2)
-        X_S1_S2 = np.vstack((X_S1_S2, X_aug))
-        y_S1_S2 = np.hstack((y_S1_S2, y_S1_S2))
+    if options["augment"] == True:
+        print("Augment Data with spawner")
+
+        for _ in range(opts["n_aug"]):
+            X_aug = spawner(X_S1_S2, y_S1_S2, sigma=options["sig_aug"])
+            X_S1_S2 = np.vstack((X_S1_S2, X_aug))
+            y_S1_S2 = np.hstack((y_S1_S2, y_S1_S2))
+
+        print("X", X_S1_S2.shape, "y", y_S1_S2.shape)
 
     if options["overlap"].lower() == "sample":
-        X_avg = avg_epochs(X_S1_S2, epochs=["ED"])
+        X_avg = avg_epochs(X_S1_S2, epochs=options["epoch"])
         sign = -1
     elif options["overlap"].lower() == "test":
         X_avg = avg_epochs(X_S1_S2, epochs=["TEST"])
@@ -120,6 +135,7 @@ def main(day="first", overlap="sample", features="sample", IF_RELOAD=False):
         sign = 1
 
     # X_avg, y_S1_S2 = SVMSMOTE().fit_resample(X_avg, y_S1_S2)
+    print("getting coefficients")
     coefs = get_coefs(model, X_avg, y_S1_S2, **options)
 
     print(
@@ -128,12 +144,12 @@ def main(day="first", overlap="sample", features="sample", IF_RELOAD=False):
 
     options["task"] = "DualGo"
     options["features"] = features
-
     options["trials"] = trials
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    print(X_S1_S2.shape, y_S1_S2.shape)
+    print("X", X_S1_S2.shape, "y", y_S1_S2.shape)
 
+    print("computing overlap")
     overlap_A, overlap_B = get_overlap(X_S1_S2, y_S1_S2, coefs)
 
     # _, overlap_A_ci = my_boots_ci(X_S1_S2,
@@ -142,6 +158,7 @@ def main(day="first", overlap="sample", features="sample", IF_RELOAD=False):
     # _, overlap_B_ci = my_boots_ci(X_S1_S2,
     #                               lambda X: get_overlap(X, y_S1_S2, coefs, 'B'))
 
+    print("bootstrapping")
     _, overlap_ci = my_boots_ci(
         X_S1_S2, lambda X: get_mean_overlap(X, y_S1_S2, coefs, sign)
     )
@@ -203,11 +220,11 @@ def main(day="first", overlap="sample", features="sample", IF_RELOAD=False):
 
 if __name__ == "__main__":
 
-    # main(day="first", overlap="sample")
-    # main(day="last", overlap="sample")
+    plot_overlap(day="first", overlap="sample")
+    plot_overlap(day="last", overlap="sample")
 
     # main(day="first", overlap="reward", features="reward")
     # main(day="last", overlap="reward", features="reward")
 
-    main(day="first", overlap="Dist")
-    main(day="last", overlap="Dist")
+    plot_overlap(day="first", overlap="Dist")
+    plot_overlap(day="last", overlap="Dist")

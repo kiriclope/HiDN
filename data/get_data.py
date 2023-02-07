@@ -230,15 +230,15 @@ def get_X_y_mice():
 def get_X_y_S1_S2(X, y, **kwargs):
 
     print(
-        "features",
+        "FEATURES",
         kwargs["features"],
-        "tasks",
+        "TASK",
         kwargs["task"],
-        "trials",
+        "TRIALS",
         kwargs["trials"],
-        "days",
+        "DAYS",
         kwargs["day"],
-        "laser",
+        "LASER",
         kwargs["laser"],
     )
 

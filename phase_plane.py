@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 from imblearn.over_sampling import SVMSMOTE
 
@@ -9,7 +8,7 @@ from common.options import set_options
 from common.plot_utils import save_fig, pkl_save
 
 from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs
+from preprocess.helpers import avg_epochs, preprocess_X
 from preprocess.augmentation import spawner
 
 from decode.classifiers import get_clf
@@ -39,14 +38,24 @@ def get_overlap(X, y, coefs):
     # return -overlap / X.shape[1]  # normalized by number of neurons
 
 
-def get_overlap_trials(day, overlap, features="sample"):
+def get_overlap_trials(
+    day, overlap, features="sample", task="DualGo", trials="correct", IF_RELOAD=False
+):
 
     options = set_options()
 
     options["day"] = day
     options["overlap"] = overlap
 
-    X_days, y_days = get_X_y_days(IF_PREP=1, IF_RELOAD=False)
+    X_days, y_days = get_X_y_days(IF_PREP=0, IF_RELOAD=IF_RELOAD)
+
+    X_days = preprocess_X(
+        X_days,
+        scaler=options["scaler_BL"],
+        avg_mean=options["avg_mean_BL"],
+        avg_noise=options["avg_noise_BL"],
+        unit_var=options["unit_var_BL"],
+    )
 
     model = get_clf(**options)
 
@@ -54,27 +63,38 @@ def get_overlap_trials(day, overlap, features="sample"):
 
     if options["overlap"].lower() == "sample":
         options["features"] = "sample"
-        options["task"] = ""
+        options["task"] = " "
     else:
         options["features"] = "distractor"
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     print(X_S1_S2.shape, y_S1_S2.shape)
 
+    if options["augment"] == True:
+        print("Augment Data with spawner")
+
+        for _ in range(options["n_aug"]):
+            X_aug = spawner(X_S1_S2, y_S1_S2, sigma=options["sig_aug"])
+            X_S1_S2 = np.vstack((X_S1_S2, X_aug))
+            y_S1_S2 = np.hstack((y_S1_S2, y_S1_S2))
+
+        print("X", X_S1_S2.shape, "y", y_S1_S2.shape)
+
     if options["overlap"].lower() == "sample":
-        X_avg = avg_epochs(X_S1_S2, epochs=["ED"])
+        X_avg = avg_epochs(X_S1_S2, epochs=options["epoch"])
     else:  # distractor
         X_avg = avg_epochs(X_S1_S2, epochs=["MD"])
 
+    options["trials"] = "correct"
     coefs = get_coefs(model, X_avg, y_S1_S2, **options)
 
     print(
         "trials", X_S1_S2.shape[0], "coefs", coefs.shape, "non_zero", np.sum(coefs != 0)
     )
 
-    options["task"] = "DualGo"
-    options["features"] = "sample"
-    options["trials"] = "correct"
+    options["task"] = task
+    options["features"] = features
+    options["trials"] = trials
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     print(X_S1_S2.shape, y_S1_S2.shape)
@@ -109,9 +129,15 @@ def plot_kappa_plane(day="first"):
 
 def carteToPolar(x, y):
     radius = np.sqrt(x * x + y * y)
-    theta = np.arctan2(y, x)
+    theta = np.arctan2(y, x) % (2 * np.pi)
 
-    return radius, theta * 180 / np.pi
+    # theta_0 = theta[:, 0]
+    # theta_1 = theta[:, 1:]
+    # idx = np.diff(theta, axis=1) <= 0
+
+    # theta_1[idx] = np.nan
+    # theta = np.hstack((theta_0, theta_1))
+    return radius, theta
 
 
 def plot_phase_dist(day, theta):

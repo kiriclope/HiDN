@@ -9,8 +9,11 @@ from decode.classifiers import get_clf
 
 def rescale_coefs(model, coef):
 
-    scale = model.named_steps["scaler"].scale_
-    coefs = np.true_divide(coef, scale)
+    try:
+        scale = model.named_steps["scaler"].scale_
+        coefs = np.true_divide(coef, scale)
+    except:
+        coefs = coef.copy()
 
     return coefs
 
@@ -79,7 +82,7 @@ def get_coefs(model, X, y, **options):
         if options["standardize"] is not None:
             coefs = rescale_coefs(model, coefs)
 
-        print("trials", X.shape[0], "coefs", coefs.shape, "non_zero", coef.shape)
+        # print("trials", X.shape[0], "coefs", coefs.shape, "non_zero", coef.shape)
     else:
         coefs = model.named_steps["clf"].coef_[0]
 
