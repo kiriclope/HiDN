@@ -5,6 +5,19 @@ import matplotlib.pyplot as plt
 import pickle as pkl
 import copy
 
+import common.constants as gv
+
+
+def add_vlines(ax=None):
+    time_periods = [gv.t_STIM, gv.t_DIST, gv.t_TEST, gv.t_CUE]
+    colors = ["b", "b", "b", "g"]
+    if ax is None:
+        for period, color in zip(time_periods, colors):
+            plt.axvspan(period[0], period[1], alpha=0.1, color=color)
+    else:
+        for period, color in zip(time_periods, colors):
+            ax.axvspan(period[0], period[1], alpha=0.1, color=color)
+
 
 def save_fig(fig, figname, path=".", format="svg", dpi="figure"):
 

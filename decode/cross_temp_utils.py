@@ -8,6 +8,7 @@ from collections import Counter
 import numpy as np
 import scipy.sparse as sp
 from joblib import Parallel, logger
+from tqdm import tqdm
 
 from sklearn.base import is_classifier, clone
 from sklearn.utils import indexable, check_random_state, _safe_indexing
@@ -17,9 +18,9 @@ from sklearn.utils.fixes import delayed
 from sklearn.utils.metaestimators import _safe_split
 from sklearn.metrics import check_scoring
 from sklearn.metrics._scorer import _check_multimetric_scoring, _MultimetricScorer
-from sklearn.exceptions import FitFailedWarning, NotFittedError 
-from sklearn.model_selection._split import check_cv 
-from sklearn.preprocessing import LabelEncoder 
+from sklearn.exceptions import FitFailedWarning, NotFittedError
+from sklearn.model_selection._split import check_cv
+from sklearn.preprocessing import LabelEncoder
 
 __all__ = [
     "temp_cross_validate",
@@ -29,6 +30,7 @@ __all__ = [
     "learning_curve",
     "validation_curve",
 ]
+
 
 def temp_cross_validate(
     estimator,
@@ -47,19 +49,19 @@ def temp_cross_validate(
     return_estimator=False,
     error_score=np.nan,
 ):
-    
-    X_t_train, y, groups = indexable(X_t_train, y, groups) 
-    X_t_test, _, _ = indexable(X_t_test, y, groups) 
-    
+
+    X_t_train, y, groups = indexable(X_t_train, y, groups)
+    X_t_test, _, _ = indexable(X_t_test, y, groups)
+
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
-    
+
     if callable(scoring):
         scorers = scoring
     elif scoring is None or isinstance(scoring, str):
         scorers = check_scoring(estimator, scoring)
     else:
         scorers = _check_multimetric_scoring(estimator, scoring)
-    
+
     # We clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
     parallel = Parallel(n_jobs=n_jobs, verbose=verbose, pre_dispatch=pre_dispatch)
@@ -80,9 +82,9 @@ def temp_cross_validate(
             return_estimator=return_estimator,
             error_score=error_score,
         )
-        for train, test in cv.split(X_t_train, y, groups) 
+        for train, test in cv.split(X_t_train, y, groups)
     )
-    
+
     _warn_about_fit_failures(results, error_score)
 
     # For callabe scoring, the return type is only know after calling. If the
@@ -99,18 +101,19 @@ def temp_cross_validate(
 
     if return_estimator:
         ret["estimator"] = results["estimator"]
-    
+
     test_scores_dict = _normalize_score_results(results["test_scores"])
     if return_train_score:
         train_scores_dict = _normalize_score_results(results["train_scores"])
-    
+
     for name in test_scores_dict:
         ret["test_%s" % name] = test_scores_dict[name]
         if return_train_score:
             key = "train_%s" % name
             ret[key] = train_scores_dict[name]
-    
+
     return ret
+
 
 def temp_cross_val_score(
     estimator,
@@ -127,9 +130,9 @@ def temp_cross_val_score(
     pre_dispatch="2*n_jobs",
     error_score=np.nan,
 ):
-    
+
     scorer = check_scoring(estimator, scoring=scoring)
-    
+
     cv_results = temp_cross_validate(
         estimator=estimator,
         X_t_train=X_t_train,
@@ -144,8 +147,9 @@ def temp_cross_val_score(
         pre_dispatch=pre_dispatch,
         error_score=error_score,
     )
-    
-    return cv_results["test_score"]
+
+    return cv_results["test_score"], np.nan, np.nan
+
 
 def temp_fit_and_score(
     estimator,
@@ -194,8 +198,8 @@ def temp_fit_and_score(
 
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
-    fit_params = _check_fit_params(X_t_train, fit_params, train) 
-    
+    fit_params = _check_fit_params(X_t_train, fit_params, train)
+
     if parameters is not None:
         # clone after setting parameters in case any parameters
         # are estimators (like pipeline steps)
@@ -203,21 +207,21 @@ def temp_fit_and_score(
         cloned_parameters = {}
         for k, v in parameters.items():
             cloned_parameters[k] = clone(v, safe=False)
-        
+
         estimator = estimator.set_params(**cloned_parameters)
-    
+
     start_time = time.time()
-    
-    X_train, y_train = _safe_split(estimator, X_t_train, y, train) 
-    X_test, y_test = _safe_split(estimator, X_t_test, y, test, train) 
-    
+
+    X_train, y_train = _safe_split(estimator, X_t_train, y, train)
+    X_test, y_test = _safe_split(estimator, X_t_test, y, test, train)
+
     result = {}
     try:
         if y_train is None:
             estimator.fit(X_train, **fit_params)
         else:
             estimator.fit(X_train, y_train, **fit_params)
-    
+
     except Exception:
         # Note fit time as time until error
         fit_time = time.time() - start_time
@@ -281,6 +285,7 @@ def temp_fit_and_score(
     if return_estimator:
         result["estimator"] = estimator
     return result
+
 
 def _insert_error_scores(results, error_score):
     """Insert error in `results` by replacing them inplace with `error_score`.
@@ -339,6 +344,7 @@ def _warn_about_fit_failures(results, error_score):
         )
         warnings.warn(some_fits_failed_message, FitFailedWarning)
 
+
 def _fit_and_score(
     estimator,
     X_t_train,
@@ -386,8 +392,8 @@ def _fit_and_score(
 
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
-    fit_params = _check_fit_params(X_t_train, fit_params, train) 
-    
+    fit_params = _check_fit_params(X_t_train, fit_params, train)
+
     if parameters is not None:
         # clone after setting parameters in case any parameters
         # are estimators (like pipeline steps)
@@ -399,9 +405,9 @@ def _fit_and_score(
         estimator = estimator.set_params(**cloned_parameters)
 
     start_time = time.time()
-    
-    X_train, y_train = _safe_split(estimator, X_t_train, y, train) 
-    X_test, y_test = _safe_split(estimator, X_t_test, y, test, train) 
+
+    X_train, y_train = _safe_split(estimator, X_t_train, y, train)
+    X_test, y_test = _safe_split(estimator, X_t_test, y, test, train)
 
     result = {}
     try:
@@ -473,6 +479,7 @@ def _fit_and_score(
     if return_estimator:
         result["estimator"] = estimator
     return result
+
 
 def _score(estimator, X_test, y_test, scorer, error_score="raise"):
     """Compute the score(s) of an estimator on a given test set.
@@ -1097,7 +1104,14 @@ def permutation_test_temp_score(
     # We clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
     score = _permutation_test_temp_score(
-        clone(estimator), X_t_train, X_t_test, y, groups, cv, scorer, fit_params=fit_params
+        clone(estimator),
+        X_t_train,
+        X_t_test,
+        y,
+        groups,
+        cv,
+        scorer,
+        fit_params=fit_params,
     )
     permutation_scores = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(_permutation_test_temp_score)(
@@ -1110,14 +1124,17 @@ def permutation_test_temp_score(
             scorer,
             fit_params=fit_params,
         )
-        for _ in range(n_permutations)
+        for _ in tqdm(range(n_permutations), desc="permutations")
     )
+
     permutation_scores = np.array(permutation_scores)
     pvalue = (np.sum(permutation_scores >= score) + 1.0) / (n_permutations + 1)
     return score, permutation_scores, pvalue
 
 
-def _permutation_test_temp_score(estimator, X_t_train, X_t_test, y, groups, cv, scorer, fit_params):
+def _permutation_test_temp_score(
+    estimator, X_t_train, X_t_test, y, groups, cv, scorer, fit_params
+):
     """Auxiliary function for permutation_test_score"""
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
@@ -1592,6 +1609,7 @@ def validation_curve(
     test_scores = results["test_scores"].reshape(-1, n_params).T
 
     return train_scores, test_scores
+
 
 def _aggregate_score_dicts(scores):
     """Aggregate the list of dict to dict of np ndarray

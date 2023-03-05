@@ -1,11 +1,15 @@
 import numpy as np
-
-from sklearn.model_selection import GridSearchCV, cross_val_score, cross_val_predict
 from sklearn.model_selection import (
+    cross_val_score,
     StratifiedKFold,
     LeaveOneOut,
     RepeatedStratifiedKFold,
 )
+
+from sklearn.base import clone
+
+from joblib import Parallel, delayed, parallel_backend
+from tqdm import tqdm
 
 from .cross_temp_utils import temp_cross_val_score, permutation_test_temp_score
 
@@ -45,6 +49,23 @@ def outer_cv(
     return np.nanmean(cv_scores)
 
 
+def score_parloop(model, method, X_t_train, X_t_test, y, cv, scoring):
+
+    score, perm_score, pval = method(
+        model,
+        X_t_train,
+        X_t_test,
+        y,
+        cv=cv,
+        scoring=scoring,
+        n_jobs=None,
+    )
+
+    # print("score", score.shape)
+
+    return score, perm_score, pval
+
+
 def outer_temp_cv(
     model,
     X_t_train,
@@ -59,81 +80,54 @@ def outer_temp_cv(
     IF_SHUFFLE=0,
 ):
 
-    if IF_SHUFFLE:
-        method = permutation_test_temp_score
-        # folds = 'stratified'
-    else:
-        method = temp_cross_val_score
-
     if folds == "stratified":
-        cv_outer = StratifiedKFold(
-            n_splits=n_out, shuffle=True, random_state=random_state
-        )  # outer cv loop for scoring
-    if folds == "loo":
-        cv_outer = LeaveOneOut()
-    if folds == "repeated":
-        cv_outer = RepeatedStratifiedKFold(
+        cv = StratifiedKFold(n_splits=n_out, shuffle=True, random_state=random_state)
+    elif folds == "loo":
+        cv = LeaveOneOut()
+    elif folds == "repeated":
+        cv = RepeatedStratifiedKFold(
             n_splits=n_out, n_repeats=n_repeats, random_state=random_state
         )
 
-    if X_t_train.ndim > 2:
-        cv_score = []
-        pval = []
-        for i in range(X_t_train.shape[-1]):
-            X_t_train_i = X_t_train[..., i]
-            X_t_test_i = X_t_test[..., i]
-
-            if IF_SHUFFLE:
-                cv_score_i, _, pval_i = method(
-                    model,
-                    X_t_train_i,
-                    X_t_test_i,
-                    y,
-                    cv=cv_outer,
-                    scoring=outer_score,
-                    n_jobs=n_jobs,
-                )
-                pval.append(pval_i)
-
-            else:
-                cv_score_i = method(
-                    model,
-                    X_t_train_i,
-                    X_t_test_i,
-                    y,
-                    cv=cv_outer,
-                    scoring=outer_score,
-                    n_jobs=n_jobs,
-                )
-
-            cv_score.append(cv_score_i)
-    else:
-        if IF_SHUFFLE:
-            cv_score, shuffle, pval = method(
-                model,
-                X_t_train,
-                X_t_test,
-                y,
-                cv=cv_outer,
-                scoring=outer_score,
-                n_jobs=n_jobs,
-            )
-
-            print("cv_score", cv_score, "shuffle", shuffle.shape, "pval", pval)
-        else:
-            cv_score = method(
-                model,
-                X_t_train,
-                X_t_test,
-                y,
-                cv=cv_outer,
-                scoring=outer_score,
-                n_jobs=n_jobs,
-            )
-
-            print("cv_score", cv_score.shape)
-
     if IF_SHUFFLE:
-        return cv_score, pval
+        method = permutation_test_temp_score
     else:
-        return np.nanmean(cv_score, axis=-1), None
+        method = temp_cross_val_score
+
+    if X_t_train.ndim > 2:
+
+        with parallel_backend("dask"):
+            scores, perm_scores, pvals = zip(
+                *Parallel(n_jobs=n_jobs)(
+                    delayed(score_parloop)(
+                        clone(model),
+                        method,
+                        X_t_train[..., i],
+                        X_t_test[..., i],
+                        y,
+                        cv=cv,
+                        scoring=outer_score,
+                    )
+                    for i in tqdm(range(X_t_train.shape[-1]), desc="cv_score")
+                )
+            )
+
+    else:
+        scores, perm_scores, pvals = score_parloop(
+            clone(model),
+            method,
+            X_t_train,
+            X_t_test,
+            y,
+            cv=cv,
+            scoring=outer_score,
+        )
+
+    scores = np.array(scores)
+    perm_scores = np.array(perm_scores)
+    pvals = np.array(pvals)
+
+    print(
+        "scores", scores.shape, "perm_scores", perm_scores.shape, "pvals", pvals.shape
+    )
+    return scores, perm_scores, pvals

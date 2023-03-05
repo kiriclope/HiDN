@@ -8,23 +8,23 @@ data_path = "/home/leon/dual_task_data"
 path = "/home/leon/bebopalula/python/dual"
 
 global mouse, mice
-mouse = "JawsM15"
+mouse = 'ACCM04' 
 mice = [
-    "C57_2_DualTask",
+    # "C57_2_DualTask",
     "ChRM04",
     "JawsM15",
     "JawsM18",
     "ACCM03",
     "ACCM04",
-    "PrL",
-    "ACC",
-    "AP02",
-    "AP12",
-    "PP09",
+    # "PrL",
+    # "ACC",
+    # "AP02",
+    # "AP12",
+    # "PP09",
 ]
 
 figdir = path + "/figs/" + mouse
-filedir = path + "/data/" + mouse
+filedir = path + "/data/"
 
 if not os.path.isdir(figdir):
     os.makedirs(figdir)
@@ -68,7 +68,7 @@ epochs = ["ED", "MD", "LD"]
 
 global frame_rate, duration, time
 frame_rate = 6
-inv_frame = 1 / frame_rate
+inv_frame = 0  # 1 / frame_rate
 duration = 14  # 14, 19.2
 if "P" in mouse:
     duration = 19.2
@@ -133,7 +133,11 @@ bins_CUE = bins[int((t_CUE[0] + T_WINDOW) * frame_rate) : int(t_CUE[1] * frame_r
 bins_RWD = bins[int((t_RWD[0] + T_WINDOW) * frame_rate) : int(t_RWD[1] * frame_rate)]
 bins_LD = bins[int((t_LD[0] + T_WINDOW) * frame_rate) : int(t_LD[1] * frame_rate)]
 bins_TEST = bins[
-    int((t_TEST[1]) * frame_rate) : int((t_TEST[1] + T_WINDOW) * frame_rate)
+    int((t_TEST[0] + T_WINDOW) * frame_rate) : int((t_TEST[1]) * frame_rate)
+]
+
+bins_CHOICE = bins[
+    int((t_TEST[1] + T_WINDOW) * frame_rate) : int(t_RWD2[0] * frame_rate)
 ]
 
 bins_RWD2 = bins[int((t_RWD2[0] + T_WINDOW) * frame_rate) : int(t_RWD2[1] * frame_rate)]

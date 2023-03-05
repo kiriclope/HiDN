@@ -12,7 +12,6 @@ def center_BL(X, center=None, avg_mean=0):
         X_BL = X[..., gv.bins_BL]
 
         if avg_mean:
-            print("avg mean over trials")
             center = np.mean(np.hstack(X_BL), axis=-1)
         else:
             center = np.nanmean(X_BL, axis=-1)
@@ -30,14 +29,12 @@ def standard_scaler_BL(X, center=None, scale=None, avg_mean=0, avg_noise=0):
     X_BL = X[..., gv.bins_BL]
     if center is None:
         if avg_mean:
-            print("avg mean over trials")
             center = np.mean(np.hstack(X_BL), axis=-1)
         else:
             center = np.nanmean(X_BL, axis=-1)
 
     if scale is None:
         if avg_noise:
-            print("avg noise over trials")
             scale = np.nanstd(np.hstack(X_BL), axis=-1)
         else:
             scale = np.nanstd(X_BL, axis=-1)
@@ -64,14 +61,12 @@ def robust_scaler_BL(X, center=None, scale=None, avg_mean=0, avg_noise=0, unit_v
 
     if center is None:
         if avg_mean:
-            print("avg mean over trials")
             center = np.nanmedian(np.hstack(X_BL), axis=-1)
         else:
             center = np.nanmedian(X_BL, axis=-1)
 
     if scale is None:
         if avg_noise:
-            print("avg noise over trials")
             quantiles = np.nanpercentile(np.hstack(X_BL), q=[25, 75], axis=-1)
         else:
             quantiles = np.nanpercentile(X_BL, q=[25, 75], axis=-1)
@@ -120,7 +115,6 @@ def df_f_scaler_BL(X, center=None, avg_mean=0):
 
     if center is None:
         if avg_mean:
-            print("avg mean over trials")
             center = np.mean(np.hstack(X_BL), axis=-1)
         else:
             center = np.nanmean(X_BL, axis=-1)
@@ -204,6 +198,19 @@ def preprocess_X(
 
     # X_scale = detrend(X_scale, bp=[gv.bins_STIM[0], gv.bins_DIST[0]])
 
+    print("##########################################")
+    print(
+        "PREPROCESSING:",
+        "SCALER",
+        scaler,
+        "AVG MEAN",
+        bool(avg_mean),
+        "AVG NOISE",
+        bool(avg_noise),
+        "UNIT VAR",
+        bool(unit_var),
+    )
+
     if return_center_scale:
         return X_scale, center, scale
     else:
@@ -223,19 +230,14 @@ def avg_epochs(X, epochs=None):
     # print('average over epochs', epochs)
 
     for i_epoch, epoch in enumerate(epochs):
-
         if epoch == "BL":
             X_BL = np.nanmean(X[..., gv.bins_BL], axis=-1)
             X_epochs[i_epoch] = X_BL
         elif epoch == "STIM":
             X_STIM = np.nanmean(X[..., gv.bins_STIM], axis=-1)
             X_epochs[i_epoch] = X_STIM
-        elif epoch == "STIM_ED":
-            X_STIM_ED = np.nanmean(X[..., gv.bins_STIM + gv.bins_ED], axis=-1)
-            X_epochs[i_epoch] = X_STIM_ED
         elif epoch == "ED":
             X_ED = np.nanmean(X[..., gv.bins_ED], axis=-1)
-            # print('X_ED', X_ED.shape, 'bins', gv.bins_ED)
             X_epochs[i_epoch] = X_ED
         elif epoch == "DIST":
             X_DIST = np.nanmean(X[..., gv.bins_DIST], axis=-1)
@@ -246,28 +248,24 @@ def avg_epochs(X, epochs=None):
         elif epoch == "CUE":
             X_CUE = np.nanmean(X[..., gv.bins_CUE], axis=-1)
             X_epochs[i_epoch] = X_CUE
-        elif epoch == "LD":
-            X_LD = np.nanmean(X[..., gv.bins_LD], axis=-1)
-            X_epochs[i_epoch] = X_LD
         elif epoch == "RWD":
             X_RWD = np.nanmean(X[..., gv.bins_RWD], axis=-1)
             X_epochs[i_epoch] = X_RWD
+        elif epoch == "LD":
+            X_LD = np.nanmean(X[..., gv.bins_LD], axis=-1)
+            X_epochs[i_epoch] = X_LD
         elif epoch == "TEST":
             X_TEST = np.nanmean(X[..., gv.bins_TEST], axis=-1)
             X_epochs[i_epoch] = X_TEST
-        elif epoch == "DELAY":
-            X_DELAY = np.nanmean(X[..., gv.bins_DELAY], axis=-1)
-            X_epochs[i_epoch] = X_DELAY
-        elif epoch == "Before":
-            X_bef = np.nanmean(X[..., gv.time < gv.t_DIST[0]], axis=-1)
-            print(X_bef.shape)
-            X_epochs[i_epoch] = X_bef
-        elif epoch == "After":
-            X_bef = np.nanmean(X[..., np.where(gv.time > gv.t_DIST[1])], axis=-1)
-            X_epochs[i_epoch] = X_bef
+        elif epoch == "CHOICE":
+            X_RWD = np.nanmean(X[..., gv.bins_CHOICE], axis=-1)
+            X_epochs[i_epoch] = X_RWD
         elif epoch == "RWD2":
             X_RWD = np.nanmean(X[..., gv.bins_RWD2], axis=-1)
             X_epochs[i_epoch] = X_RWD
+        elif epoch == "DELAY":
+            X_DELAY = np.nanmean(X[..., gv.bins_DELAY], axis=-1)
+            X_epochs[i_epoch] = X_DELAY
 
     X_epochs = np.moveaxis(X_epochs, 0, -1)
     # print("X_epochs", X_epochs.shape, epochs)

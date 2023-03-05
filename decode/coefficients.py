@@ -58,10 +58,13 @@ def get_coefs(model, X, y, **options):
 
     model.fit(X, y)
 
-    if options["clf_name"] == "bootstrap":
+    if options["method"] == "gridsearch":
+        model = model.best_estimator_
+
+    if options["method"] == "bootstrap":
         coefs = bagged_coefs(model, X, **options)
 
-    elif options["clf_name"] == "bolasso":
+    elif options["method"] == "bolasso":
         coefs = model.coef_
 
     elif options["prescreen"]:

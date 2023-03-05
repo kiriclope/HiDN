@@ -122,8 +122,8 @@ class bolasso(BaseEstimator, ClassifierMixin):
             print(
                 "coef",
                 self.coef_.shape,
-                "lambda",
-                self.model_.named_steps["clf"].C_,
+                # "lambda",
+                # self.model_.named_steps["clf"].C_,
                 "non zero",
                 np.sum(idx),
             )
@@ -136,8 +136,8 @@ class bolasso(BaseEstimator, ClassifierMixin):
             print(
                 "coef",
                 coef.shape,
-                "lambda",
-                self.model_.named_steps["clf"].C_,
+                # "lambda",
+                # self.model_.named_steps["clf"].C_,
                 "non zero",
                 np.sum(self.fs_idx_),
             )

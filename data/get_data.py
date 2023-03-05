@@ -1,11 +1,14 @@
+from importlib import reload
 import pickle
 import numpy as np
 import pandas as pd
 import mat73
 from scipy.io import loadmat
+from preprocess.helpers import preprocess_X, avg_epochs
 
 from common import constants as gv
-from preprocess.helpers import preprocess_X, avg_epochs
+
+reload(gv)
 
 
 def get_X_y_days_multi():
@@ -162,12 +165,14 @@ def get_fluo_data():
     return X_raw, y_raw
 
 
-def get_X_y_days(IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
+def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
+
+    # print(gv.mouse)
 
     if IF_RELOAD == 0:
-        print("loading files from", gv.filedir)
-        X_days = pickle.load(open(gv.filedir + "/X_days.pkl", "rb"))
-        y_days = pd.read_pickle(gv.filedir + "/y_days.pkl")
+        print("loading files from", gv.filedir + gv.mouse)
+        X_days = pickle.load(open(gv.filedir + gv.mouse + "/X_days.pkl", "rb"))
+        y_days = pd.read_pickle(gv.filedir + gv.mouse + "/y_days.pkl")
     else:
         print("reading raw data")
 
@@ -189,8 +194,8 @@ def get_X_y_days(IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
             X_days = np.vstack(np.array(X_days))
             y_days = pd.concat(y_days, axis=0, ignore_index=True)
 
-        pickle.dump(X_days, open(gv.filedir + "/X_days.pkl", "wb"))
-        y_days.to_pickle(gv.filedir + "/y_days.pkl")
+        pickle.dump(X_days, open(gv.filedir + gv.mouse + "/X_days.pkl", "wb"))
+        y_days.to_pickle(gv.filedir + gv.mouse + "/y_days.pkl")
 
     if IF_PREP:
         X_days = preprocess_X(
@@ -202,13 +207,13 @@ def get_X_y_days(IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
     return X_days, y_days
 
 
-def get_X_y_mice():
+def get_X_y_mice(IF_RELOAD=0):
 
-    try:
-        print("loading files from", gv.filedir)
-        X_days = pickle.load(open(gv.filedir + "/X_mice.pkl", "rb"))
-        y_days = pd.read_pickle(gv.filedir + "/y_mice.pkl")
-    except:
+    if IF_RELOAD == 0:
+        print("loading files from", gv.filedir + "mice")
+        X_mice = pickle.load(open(gv.filedir + "mice" + "/X_mice.pkl", "rb"))
+        y_mice = pd.read_pickle(gv.filedir + "mice" + "/y_mice.pkl")
+    else:
         X_mice = []
         y_mice = []
         for gv.mouse in gv.mice:
@@ -221,15 +226,17 @@ def get_X_y_mice():
         X_mice = np.vstack(np.array(X_days))
         y_mice = pd.concat(y_mice, axis=0, ignore_index=True)
 
-        pickle.dump(X_mice, open(gv.filedir + "/X_mice.pkl", "wb"))
-        y_mice.to_pickle(gv.filedir + "/y_mice.pkl")
+        pickle.dump(X_mice, open(gv.filedir + "mice" + "/X_mice.pkl", "wb"))
+        y_mice.to_pickle(gv.filedir + "mice" + "/y_mice.pkl")
 
     return X_mice, y_mice
 
 
 def get_X_y_S1_S2(X, y, **kwargs):
 
+    print("##########################################")
     print(
+        "DATA:",
         "FEATURES",
         kwargs["features"],
         "TASK",
@@ -241,6 +248,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
         "LASER",
         kwargs["laser"],
     )
+    print("##########################################")
 
     idx_trials = True
     if kwargs["trials"] == "correct":
@@ -269,10 +277,41 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S4 = y.sample_odor == 3
 
     elif kwargs["features"] == "paired_unpaired":
+        # pair
         idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_miss")
+        # unpair
         idx_S2 = (y.response == "incorrect_fa") | (y.response == "correct_rej")
         idx_S3 = False
         idx_S4 = False
+
+        idx_trials = True
+
+    elif kwargs["features"] == "choice":
+        # lick
+        idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_fa")
+        # no lick
+        idx_S2 = (y.response == "incorrect_miss") | (y.response == "correct_rej")
+        idx_S3 = False
+        idx_S4 = False
+
+        idx_trials = True
+
+    elif kwargs["features"] == "decision":
+        if kwargs["trials"] == "correct":
+            # lick
+            idx_S1 = y.response == "correct_hit"
+            # no lick
+            idx_S2 = y.response == "correct_rej"
+        else:
+            # lick
+            idx_S1 = y.response == "incorrect_fa"
+            # no lick
+            idx_S2 = y.response == "incorrect_miss"
+
+        idx_S3 = False
+        idx_S4 = False
+
+        idx_trials = True
 
     elif kwargs["features"] == "reward":
         idx_S1 = ~y.response.str.contains("incorrect")
@@ -281,6 +320,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_S4 = False
 
         idx_trials = True
+
     elif kwargs["features"] == "test":
         idx_S1 = y.test_odor == 0
         idx_S2 = y.test_odor == 1
@@ -336,7 +376,8 @@ def get_X_y_S1_S2(X, y, **kwargs):
     X_S4 = X[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
 
     print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
-    print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
+    if X_S3.shape[0] > 0:
+        print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
 
     X_S1_S2 = np.vstack((X_S1, X_S2, X_S3, X_S4))
 

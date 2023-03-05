@@ -21,11 +21,15 @@ from statistics.bootstrap import my_boots_ci
 # from statistics.shuffle import my_shuffle
 
 
-def add_vlines():
+def add_vlines(ax=None):
     time_periods = [gv.t_STIM, gv.t_DIST, gv.t_TEST, gv.t_CUE]
     colors = ["b", "b", "b", "g"]
-    for period, color in zip(time_periods, colors):
-        plt.axvspan(period[0], period[1], alpha=0.1, color=color)
+    if ax is None:
+        for period, color in zip(time_periods, colors):
+            plt.axvspan(period[0], period[1], alpha=0.1, color=color)
+    else:
+        for period, color in zip(time_periods, colors):
+            ax.axvspan(period[0], period[1], alpha=0.1, color=color)
 
 
 def get_overlap(X, y, coefs, RETURN_SAMPLE=None):

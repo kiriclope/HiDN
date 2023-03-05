@@ -14,7 +14,7 @@ from preprocess.augmentation import spawner
 from decode.classifiers import get_clf
 from decode.coefficients import get_coefs
 
-from statistics.bootstrap import my_boots_ci
+from stats.bootstrap import my_boots_ci
 
 
 def get_overlap(X, y, coefs):
@@ -59,13 +59,17 @@ def get_overlap_trials(
 
     model = get_clf(**options)
 
-    options["task"] = "Dual"
+    options["task"] = " "
 
     if options["overlap"].lower() == "sample":
         options["features"] = "sample"
-        options["task"] = " "
-    else:
+    elif options["overlap"].lower() == "distractor":
         options["features"] = "distractor"
+        options["task"] = "Dual"
+    elif options["overlap"].lower() == "reward":
+        options["features"] = "reward"
+    elif options["overlap"].lower() == "choice":
+        options["features"] = "choice"
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     print(X_S1_S2.shape, y_S1_S2.shape)
@@ -81,9 +85,13 @@ def get_overlap_trials(
         print("X", X_S1_S2.shape, "y", y_S1_S2.shape)
 
     if options["overlap"].lower() == "sample":
-        X_avg = avg_epochs(X_S1_S2, epochs=options["epoch"])
-    else:  # distractor
-        X_avg = avg_epochs(X_S1_S2, epochs=["MD"])
+        X_avg = avg_epochs(X_S1_S2, epochs=options["epoch_sample"])
+    elif options["overlap"].lower() == "distractor":
+        X_avg = avg_epochs(X_S1_S2, epochs=options["epoch_dist"])
+    elif options["overlap"].lower() == "choice":
+        X_avg = avg_epochs(X_S1_S2, epochs=options["epoch_choice"])
+    elif options["overlap"].lower() == "reward":
+        X_avg = avg_epochs(X_S1_S2, epochs=options["epoch_rwd"])
 
     options["trials"] = "correct"
     coefs = get_coefs(model, X_avg, y_S1_S2, **options)
