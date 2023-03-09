@@ -4,11 +4,12 @@ import seaborn as sns
 
 global path, scriptdir, figdir, filedir
 
-data_path = "/home/leon/dual_task_data"
+# data_path = "/home/leon/dual_task_data"
+data_path = "/home/leon/bebopalula/python/dual/data"
 path = "/home/leon/bebopalula/python/dual"
 
 global mouse, mice
-mouse = 'ACCM04' 
+mouse = "JawsM15"
 mice = [
     # "C57_2_DualTask",
     "ChRM04",

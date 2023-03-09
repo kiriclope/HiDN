@@ -16,7 +16,7 @@ def set_options(**kwargs):
     opts["tasks"] = np.array(["DPA", "DualGo", "DualNoGo"])
 
     opts["trials"] = "correct"  # 'correct', 'incorrect'
-    opts["features"] = "choice"  # 'sample', 'distractor', 'task', 'reward', "choice"
+    opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
 
     opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
@@ -29,7 +29,7 @@ def set_options(**kwargs):
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
     opts["n_boots"] = 1000  # for bootstrap
-    opts["n_repeats"] = 10  # for repeated Kfold
+    opts["n_repeats"] = 100  # for repeated Kfold
 
     opts["bootstrap"] = 0
     opts["shuffle"] = 0
@@ -107,7 +107,7 @@ def set_options(**kwargs):
     opts["random_state"] = np.random.randint(1e4)
     opts["out_fold"] = "repeated"  # stratified, loo, repeated
     opts["n_out"] = 5
-    opts["outer_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["outer_score"] = "accuracy"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"  # stratified, loo, repeated

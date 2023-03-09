@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import time
-
 from datetime import timedelta
 import numpy as np
 import matplotlib.pyplot as plt
@@ -98,16 +97,17 @@ def get_boots_score(estimator, X, y, cv, n_jobs=-1):
 
 
 def get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1):
-    scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs)
+    scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs, verbose=False)
     # Mean scores across cross-validation splits
     scores = np.mean(scores, axis=0)
 
     return scores
 
 
-def plot_scores_time(figname, title, scores, ci_scores=None):
+def plot_scores_time(scores, ci_scores=None):
     x = np.linspace(0, 14, int(14 * 6))
 
+    figname = "score"
     fig = plt.figure(figname)
     ax = plt.gca()
     plt.plot(x, scores, label="score")
@@ -126,20 +126,20 @@ def plot_scores_time(figname, title, scores, ci_scores=None):
             alpha=0.2,
             color="k",
         )
-    plt.title(title)
+
     save_fig(fig, figname)
 
 
-def plot_scores_mat(scores_mat):
+def plot_scores_mat(scores_mat, figname, title):
 
     fig, ax = plt.subplots(1, 1)
     im = ax.imshow(
         scores_mat,
         interpolation="lanczos",
         origin="lower",
-        cmap="RdBu_r",
+        cmap="jet",
         extent=[0, 14, 0, 14],
-        vmin=0.0,
+        vmin=0.4,
         vmax=1.0,
     )
 
@@ -191,6 +191,12 @@ def plot_scores_mat(scores_mat):
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("Score")
 
+    plt.title(title)
+    plt.xticks([0, 4, 8, 12])
+    plt.yticks([0, 4, 8, 12])
+
+    save_fig(fig, figname)
+
 
 if __name__ == "__main__":
     options = set_options()
@@ -215,6 +221,7 @@ if __name__ == "__main__":
     print("X", X.shape, "y", y.shape)
 
     cv = options["n_out"]
+
     if options["in_fold"] == "loo":
         cv = LeaveOneOut()
 
@@ -227,35 +234,18 @@ if __name__ == "__main__":
 
     scoring = options["outer_score"]
 
-    estimator = SlidingEstimator(model, n_jobs=None, scoring=scoring, verbose=False)
+    # cv = 5
+    ci_scores = None
+
+    # cross temporal score
+    # define the Temporal generalization object
+    estimator = GeneralizingEstimator(
+        model, n_jobs=None, scoring=scoring, verbose=False
+    )
 
     start_time = time.time()
-    scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
+    scores_mat = get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1)
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
-
-    # with pgb.tqdm_joblib(pgb.tqdm(desc="shuffle")):
-
-    #     shuffle_scores = Parallel(n_jobs=-1)(
-    #         delayed(get_shuffle_score)(estimator, X, y, cv, n_jobs=None)
-    #         for _ in range(10)
-    #     )
-
-    # shuffle_scores = np.array(shuffle_scores)
-
-    cv = 5
-    ci_scores = None
-    if options["bootstrap"]:
-        n_boots = 100
-        with pgb.tqdm_joblib(pgb.tqdm(desc="bootstrap", total=84 * n_boots)):
-
-            boots_scores = Parallel(n_jobs=-1)(
-                delayed(get_boots_score)(estimator, X, y, cv, n_jobs=None)
-                for _ in range(n_boots)
-            )
-
-        boots_scores = np.array(boots_scores)
-        pvalue = (np.sum(boots_scores >= scores, axis=0) + 1.0) / (n_boots + 1)
-        ci_scores = get_ci(boots_scores)
 
     figname = (
         options["features"]
@@ -266,20 +256,4 @@ if __name__ == "__main__":
     )
 
     title = options["day"] + " " + options["task"]
-
-    plot_scores_time(figname, title, scores, ci_scores)
-
-    # other bootstrap implementation using bagging
-    # options["method"] = "bootstrap"
-    # options["n_jobs"] = None
-    # model = get_clf(**options)
-    # scores_boots = get_cv_score(model, X, y, cv, scoring, n_jobs=-1)
-    # print(scores_boots.shape)
-
-    # check
-    # cross temporal score
-    # define the Temporal generalization object
-    # estimator = GeneralizingEstimator(model, n_jobs=None,
-    # scoring=scoring, verbose=False)
-    # scores_mat = get_temporal_cv_score(estimator, X, y, cv, scoring, n_jobs=-1)
-    # plot_scores_mat(scores_mat)
+    plot_scores_mat(scores_mat, figname, title)

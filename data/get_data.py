@@ -13,7 +13,9 @@ reload(gv)
 
 def get_X_y_days_multi():
 
-    data = mat73.loadmat("/home/leon/data/%s/dataProcessed.mat" % gv.mouse)
+    data = mat73.loadmat(
+        "/home/leon/bebobalula/python/dual/data/%s/dataProcessed.mat" % gv.mouse
+    )
 
     X_days = np.swapaxes(data["Cdf_Mice"], 0, 1)
     y_ = np.zeros((X_days.shape[0], 6))
@@ -174,6 +176,7 @@ def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
         X_days = pickle.load(open(gv.filedir + gv.mouse + "/X_days.pkl", "rb"))
         y_days = pd.read_pickle(gv.filedir + gv.mouse + "/y_days.pkl")
     else:
+        # if 0 == 0:
         print("reading raw data")
 
         if ("AP" in gv.mouse) or ("PP" in gv.mouse):
