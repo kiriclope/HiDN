@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import warnings
 import sys
 import time
 from datetime import timedelta
@@ -31,6 +32,8 @@ from mne.decoding import (
 from joblib import Parallel, delayed
 from tqdm import tqdm
 import stats.progressbar as pgb
+
+warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
 
 def get_ci(res, conf=0.95):
@@ -240,13 +243,13 @@ if __name__ == "__main__":
     # cross temporal score
     # define the Temporal generalization object
     estimator = GeneralizingEstimator(
-        model, n_jobs=None, scoring=scoring, verbose=False
+        model, n_jobs=1, scoring=scoring, verbose=False
     )
-
+    
     start_time = time.time()
     scores_mat = get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1)
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
-
+    
     figname = (
         options["features"]
         + "cross_temp_scores_"

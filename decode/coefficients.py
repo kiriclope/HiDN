@@ -51,8 +51,10 @@ def bagged_coefs(model, X, **options):
         if options["standardize"] is not None:
             coefs[i_boot] = rescale_coefs(model_boot, coefs[i_boot])
 
-    return np.nanmean(coefs, axis=0)
-
+    if options["avg_coefs"]:
+        return np.nanmean(coefs, axis=0)
+    else:
+        return coefs
 
 def get_coefs(model, X, y, **options):
 

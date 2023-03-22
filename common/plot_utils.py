@@ -1,11 +1,20 @@
 import os
 
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 import pickle as pkl
 import copy
-
+import seaborn as sns 
 import common.constants as gv
+
+sns.set_context("poster")
+sns.set_style("ticks")
+plt.rc("axes.spines", top=False, right=False)
+
+golden_ratio = (5**.5 - 1) / 2
+width = 6
+matplotlib.rcParams['figure.figsize'] = [width, width * golden_ratio ]
 
 
 def add_vlines(ax=None):

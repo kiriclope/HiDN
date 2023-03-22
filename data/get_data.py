@@ -172,10 +172,14 @@ def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
     # print(gv.mouse)
 
     if IF_RELOAD == 0:
-        print("loading files from", gv.filedir + gv.mouse)
-        X_days = pickle.load(open(gv.filedir + gv.mouse + "/X_days.pkl", "rb"))
-        y_days = pd.read_pickle(gv.filedir + gv.mouse + "/y_days.pkl")
-    else:
+        try:
+            print("loading files from", gv.filedir + gv.mouse)
+            X_days = pickle.load(open(gv.filedir + gv.mouse + "/X_days.pkl", "rb"))
+            y_days = pd.read_pickle(gv.filedir + gv.mouse + "/y_days.pkl")
+        except:
+            IF_RELOAD = 1
+            
+    if IF_RELOAD == 1 :
         # if 0 == 0:
         print("reading raw data")
 

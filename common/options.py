@@ -22,15 +22,16 @@ def set_options(**kwargs):
     opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
     opts["day"] = "first"  # int or 'first', 'middle', 'last'
     opts["laser"] = 0
-
+    
     ################################
     # perm/boots param
     ################################
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
-    opts["n_boots"] = 1000  # for bootstrap
+    opts["n_boots"] = 100  # for bootstrap
     opts["n_repeats"] = 100  # for repeated Kfold
 
+    opts["avg_coefs"] = True
     opts["bootstrap"] = 0
     opts["shuffle"] = 0
 
@@ -70,7 +71,7 @@ def set_options(**kwargs):
     ################################
     opts["clf"] = "log_loss"  # "log_loss" or "LinearSVC" or "LDA" or "SGD"
     opts["method"] = None  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
-
+    
     # precision
     opts["tol"] = 1e-3
     opts["max_iter"] = int(1e4)
@@ -82,7 +83,7 @@ def set_options(**kwargs):
     # penalty
     opts["penalty"] = "l1"  # "l1", "l2" or elasticnet
     opts["solver"] = "liblinear"  # liblinear or saga
-    opts["class_weight"] = "balanced"  # 'balanced' or None
+    opts["class_weight"] = None # "balanced"  # 'balanced' or None
     opts["refit"] = True  # default true
 
     opts["n_lambda"] = 50
