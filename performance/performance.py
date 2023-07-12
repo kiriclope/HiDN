@@ -1,4 +1,4 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -6,8 +6,8 @@ from common import constants as gv
 from common.options import set_options
 from data.get_data import get_X_y_days
 
-from statistics.bootstrap import my_boots_ci
-from statistics.shuffle import my_shuffle
+from stats.bootstrap import my_boots_ci
+from stats.shuffle import my_shuffle
 
 
 def perf_tasks_days(y_days, perf_type='correct_hit', IF_TASKS=1, IF_LASER=0):
@@ -62,9 +62,9 @@ def perf_tasks_days(y_days, perf_type='correct_hit', IF_TASKS=1, IF_LASER=0):
 
 if __name__ == '__main__':
     options = set_options()
-    _, y_days = get_X_y_days()
+    _, y_days = get_X_y_days(IF_RELOAD=1)
 
- perf_mice, ci_mice   perf_type = 'correct'
+    perf_type = 'correct'
 
     perf_off, ci_off = perf_tasks_days(y_days, perf_type=perf_type, IF_TASKS=1, IF_LASER=0)
     perf_on, ci_on = perf_tasks_days(y_days, perf_type=perf_type, IF_TASKS=1, IF_LASER=1)

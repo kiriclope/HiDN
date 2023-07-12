@@ -5,16 +5,16 @@ import seaborn as sns
 global path, scriptdir, figdir, filedir
 
 # in bcn
-# data_path = "/home/leon/dual_task_data"
-# path = "/home/leon/bebopalula/python/dual"
+data_path = "/home/leon/dual_task/dual_data/data"
+path = "/home/leon/dual_task/dual_data/"
 
 # on achlys
 # data_path = "/home/leon/bebopalula/python/dual/data"
 # path = "/home/leon/bebopalula/python/dual"
 
 # in paris 
-data_path = "/homecentral/alexandre.mahrach/bebopalula/dual_data/data"
-path = "/homecentral/alexandre.mahrach/bebopalula/dual_data/"
+# data_path = "/homecentral/alexandre.mahrach/bebopalula/dual_data/data"
+# path = "/homecentral/alexandre.mahrach/bebopalula/dual_data/"
 
 global mouse, mice
 mouse = "JawsM15"

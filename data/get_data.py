@@ -14,7 +14,7 @@ reload(gv)
 def get_X_y_days_multi():
 
     data = mat73.loadmat(
-        "/home/leon/bebobalula/python/dual/data/%s/dataProcessed.mat" % gv.mouse
+        "/home/leon/dual_task/dual_data/data/%s/dataProcessed.mat" % gv.mouse
     )
 
     X_days = np.swapaxes(data["Cdf_Mice"], 0, 1)
@@ -167,7 +167,7 @@ def get_fluo_data():
     return X_raw, y_raw
 
 
-def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
+def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=1):
 
     # print(gv.mouse)
 
@@ -214,7 +214,7 @@ def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
     return X_days, y_days
 
 
-def get_X_y_mice(IF_RELOAD=0):
+def get_X_y_mice(IF_RELOAD=1):
 
     if IF_RELOAD == 0:
         print("loading files from", gv.filedir + "mice")

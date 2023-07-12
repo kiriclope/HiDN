@@ -8,8 +8,7 @@ from common.plot_utils import save_fig, pkl_save
 
 from data.get_data import get_X_y_days
 
-from statistics.bootstrap import my_boots_ci
-
+from stats.bootstrap import my_boots_ci
 # from statistics.shuffle import my_shuffle
 
 
