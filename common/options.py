@@ -29,7 +29,7 @@ def set_options(**kwargs):
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
     opts["n_boots"] = 100  # for bootstrap
-    opts["n_repeats"] = 100  # for repeated Kfold
+    opts["n_repeats"] = 10  # for repeated Kfold
 
     opts["avg_coefs"] = True
     opts["bootstrap"] = 0
@@ -47,7 +47,7 @@ def set_options(**kwargs):
     opts["epoch_rwd"] = ["MD"]
 
     # scaling fluo
-    opts["scaler_BL"] = "robust"  # standard, robust, center
+    opts["scaler_BL"] = None  # standard, robust, center
     opts["center_BL"] = None
     opts["scale_BL"] = None
     opts["avg_mean_BL"] = 0
@@ -83,7 +83,7 @@ def set_options(**kwargs):
     # penalty
     opts["penalty"] = "l1"  # "l1", "l2" or elasticnet
     opts["solver"] = "liblinear"  # liblinear or saga
-    opts["class_weight"] = None # "balanced"  # 'balanced' or None
+    opts["class_weight"] = 'balanced' # "balanced"  # 'balanced' or None
     opts["refit"] = True  # default true
 
     opts["n_lambda"] = 50
@@ -94,7 +94,7 @@ def set_options(**kwargs):
     opts["shrinkage"] = "auto"
 
     # standardization
-    opts["standardize"] = None  # 'standard', 'robust', 'center', None
+    opts["standardize"] = 'center'  # 'standard', 'robust', 'center', None
 
     # params for SGD
     opts["learning_rate"] = "optimal"  # optimal, adaptative
@@ -106,9 +106,9 @@ def set_options(**kwargs):
 
     # outer cv for score estimates
     opts["random_state"] = np.random.randint(1e4)
-    opts["out_fold"] = "repeated"  # stratified, loo, repeated
+    opts["out_fold"] = "loo"  # stratified, loo, repeated
     opts["n_out"] = 5
-    opts["outer_score"] = "accuracy"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["outer_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"  # stratified, loo, repeated

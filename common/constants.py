@@ -156,7 +156,7 @@ bins_RWD2 = bins[int((t_RWD2[0] + T_WINDOW) * frame_rate) : int(t_RWD2[1] * fram
 # print("bins LD", bins_LD)
 
 global data_type
-data_type = "raw"  # 'raw' or 'dF'
+data_type = "dF"  # 'raw' or 'dF'
 
 global pal
 pal = [
@@ -165,3 +165,10 @@ pal = [
     sns.color_palette("bright")[2],
     sns.color_palette("bright")[3],
 ]
+
+paldict = {"DPA":sns.color_palette("bright")[1],
+           "DualGo":sns.color_palette("bright")[0],
+           "DualNoGo":sns.color_palette("bright")[2],
+           "Dual":sns.color_palette("bright")[3],
+           "all":sns.color_palette("bright")[4],
+}

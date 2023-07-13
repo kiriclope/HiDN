@@ -118,12 +118,12 @@ def get_fluo_data():
             + ".mat"
         )
 
-    # if 'raw' in gv.data_type:
-    #     # print('raw')
-    X_raw = np.rollaxis(data["Cdf_Mice"], 1, 0)
-    # else:
-    #     # print('dF')
-    # X_raw = np.rollaxis(data['dff_Mice'], 1, 0)
+    if 'raw' in gv.data_type:
+        print('raw')
+        X_raw = np.rollaxis(data["Cdf_Mice"], 1, 0)
+    else:
+        print('dF')
+        X_raw = np.rollaxis(data['dff_Mice'], 1, 0)
 
     y_raw = data["Events"].transpose()
 
@@ -167,7 +167,7 @@ def get_fluo_data():
     return X_raw, y_raw
 
 
-def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=1):
+def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
 
     # print(gv.mouse)
 
@@ -214,7 +214,7 @@ def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=1):
     return X_days, y_days
 
 
-def get_X_y_mice(IF_RELOAD=1):
+def get_X_y_mice(IF_RELOAD=0):
 
     if IF_RELOAD == 0:
         print("loading files from", gv.filedir + "mice")
@@ -349,7 +349,10 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_tasks = True
     elif kwargs["features"] == "task":
         idx_S1 = y.tasks == "DPA"
-        idx_S2 = y.tasks == kwargs["task"]
+        if kwargs["task"] == "Dual":
+            idx_S2 = (y.tasks == "DualGo") | (y.tasks == "DualNoGo")
+        else:
+            idx_S2 = y.tasks == kwargs["task"]
         idx_S3 = False
         idx_S4 = False
         idx_tasks = True

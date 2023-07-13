@@ -142,7 +142,7 @@ def plot_scores_mat(scores_mat, figname, title):
         origin="lower",
         cmap="jet",
         extent=[0, 14, 0, 14],
-        vmin=0.4,
+        vmin=0.5,
         vmax=1.0,
     )
 
@@ -157,29 +157,12 @@ def plot_scores_mat(scores_mat, figname, title):
     ax.axvline(3, color="k", ls="-", lw=0.5)
     ax.axhline(3, color="k", ls="-", lw=0.5)
 
-    # ax.axvline(4.5, color="k", ls="--", lw=0.5)
-    # ax.axhline(4.5, color="k", ls="--", lw=0.5)
-
     # Dist
     ax.axvline(4.5, color="k", ls="-", lw=0.5)
     ax.axhline(4.5, color="k", ls="-", lw=0.5)
 
     ax.axvline(5.5, color="k", ls="-", lw=0.5)
     ax.axhline(5.5, color="k", ls="-", lw=0.5)
-
-    # MD
-    # ax.axvline(5.5, color="k", ls="--", lw=0.5)
-    # ax.axhline(5.5, color="k", ls="--", lw=0.5)
-
-    # ax.axvline(6.5, color="k", ls="--", lw=0.5)
-    # ax.axhline(6.5, color="k", ls="--", lw=0.5)
-
-    # LD
-    # ax.axvline(7.5, color="k", ls="--", lw=0.5)
-    # ax.axhline(7.5, color="k", ls="--", lw=0.5)
-
-    # ax.axvline(9, color="k", ls="--", lw=0.5)
-    # ax.axhline(9, color="k", ls="--", lw=0.5)
 
     # Test
     ax.axvline(9, color="k", ls="-", lw=0.5)
@@ -188,15 +171,16 @@ def plot_scores_mat(scores_mat, figname, title):
     ax.axvline(10, color="k", ls="-", lw=0.5)
     ax.axhline(10, color="k", ls="-", lw=0.5)
 
-    plt.xlim([0, 12])
-    plt.ylim([0, 12])
+    plt.xlim([2, 12])
+    plt.ylim([2, 12])
 
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("Score")
+    cbar.set_ticks([0.5, 0.75, 1])
 
     plt.title(title)
-    plt.xticks([0, 4, 8, 12])
-    plt.yticks([0, 4, 8, 12])
+    plt.xticks([2, 4, 8, 12])
+    plt.yticks([2, 4, 8, 12])
 
     save_fig(fig, figname)
 

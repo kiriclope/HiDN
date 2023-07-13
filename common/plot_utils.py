@@ -13,7 +13,7 @@ sns.set_style("ticks")
 plt.rc("axes.spines", top=False, right=False)
 
 golden_ratio = (5**.5 - 1) / 2
-width = 6
+width = 7
 matplotlib.rcParams['figure.figsize'] = [width, width * golden_ratio ]
 
 
