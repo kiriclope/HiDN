@@ -28,7 +28,7 @@ def add_vlines(ax=None):
             ax.axvspan(period[0], period[1], alpha=0.1, color=color)
 
 
-def save_fig(fig, figname, path=".", format="svg", dpi="figure"):
+def save_fig(fig, figname, path=gv.figdir, format="svg", dpi="figure"):
 
     fig = plt.figure(fig.number)
     if not os.path.isdir(path):

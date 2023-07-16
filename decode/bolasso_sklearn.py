@@ -26,12 +26,12 @@ def boots_coefs_parloop(clf, X, y, confidence=0.05):
     clf_copy.fit(X_sample, y_sample)
     coefs = np.zeros(X.shape[-1])
 
-    try:
+    if 'filter' in clf_copy.named_steps.keys():
         pval = clf_copy.named_steps["filter"].pvalues_
         coef = clf_copy.named_steps["clf"].coef_[0]
         idx = pval <= confidence
         coefs[idx] = coef
-    except:
+    else:
         coefs = clf_copy.named_steps["clf"].coef_[0]
 
     # print('coef', coefs.shape, 'non zero', np.sum(coef!=0) )
@@ -109,7 +109,7 @@ class bolasso(BaseEstimator, ClassifierMixin):
 
         self.model_.fit(X_fs, y)
 
-        try:
+        if 'filter' in self.model_.named_steps.keys():
             pval = self.model_.named_steps["filter"].pvalues_
             coef = self.model_.named_steps["clf"].coef_[0]
             # print('coefs', self.model_.named_steps['clf'].coef_.shape)
@@ -127,9 +127,7 @@ class bolasso(BaseEstimator, ClassifierMixin):
                 "non zero",
                 np.sum(idx),
             )
-
-        except:
-
+        else:
             coef = self.model_.named_steps["clf"].coef_[0]
             self.coef_[self.fs_idx_] = coef
 
@@ -144,25 +142,23 @@ class bolasso(BaseEstimator, ClassifierMixin):
 
         self.intercept_ = self.model_.named_steps["clf"].intercept_
 
-        try:
+        if 'scaler' in self.model_.named_steps.keys():
+
+            # try:
+            #     mean = self.model_.named_steps["scaler"].mean_
+            # except:
+            #     try:
+            #         mean = self.model_.named_steps["scaler"].center_
+            #     except:
+            #         pass
             scale = self.model_.named_steps["scaler"].scale_
-            mean = self.model_.named_steps["scaler"].mean_
 
-            print(
-                "coefs",
-                self.coef_.shape,
-                "non zero",
-                np.sum(self.fs_idx_),
-                "scale",
-                scale.shape,
-                "mean",
-                mean.shape,
-            )
+            if scale is None:
+                scale = np.ones(self.coef_[self.fs_idx_].shape[0])
 
-            # self.coef_ /= self.model_.named_steps['scaler'].var_
-            self.coef_[self.fs_idx_] = np.true_divide(self.coef_[self.fs_idx_], scale)
-            self.intercept_ -= np.dot(self.coef_[self.fs_idx_], mean)
-        except:
-            pass
+            # print(mean.shape, scale.shape, self.coef_.shape)
+
+            # self.coef_[self.fs_idx_] = np.true_divide(self.coef_[self.fs_idx_], scale)
+            # self.intercept_ -= np.dot(self.coef_[self.fs_idx_], mean)
 
         return self

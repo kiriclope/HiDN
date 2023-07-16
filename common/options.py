@@ -16,6 +16,7 @@ def set_options(**kwargs):
     opts["tasks"] = np.array(["DPA", "DualGo", "DualNoGo"])
 
     opts["trials"] = "correct"  # 'correct', 'incorrect'
+
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
 
@@ -28,7 +29,7 @@ def set_options(**kwargs):
     ################################
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
-    opts["n_boots"] = 100  # for bootstrap
+    opts["n_boots"] = 1000  # for bootstrap
     opts["n_repeats"] = 10  # for repeated Kfold
 
     opts["avg_coefs"] = True
@@ -47,7 +48,7 @@ def set_options(**kwargs):
     opts["epoch_rwd"] = ["MD"]
 
     # scaling fluo
-    opts["scaler_BL"] = None  # standard, robust, center
+    opts["scaler_BL"] = None # standard, robust, center
     opts["center_BL"] = None
     opts["scale_BL"] = None
     opts["avg_mean_BL"] = 0
@@ -70,10 +71,10 @@ def set_options(**kwargs):
     # classification parameters
     ################################
     opts["clf"] = "log_loss"  # "log_loss" or "LinearSVC" or "LDA" or "SGD"
-    opts["method"] = None  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
+    opts["method"] = 'bolasso'  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
     
     # precision
-    opts["tol"] = 1e-3
+    opts["tol"] = 1e-4
     opts["max_iter"] = int(1e4)
 
     # intercept
@@ -85,6 +86,7 @@ def set_options(**kwargs):
     opts["solver"] = "liblinear"  # liblinear or saga
     opts["class_weight"] = 'balanced' # "balanced"  # 'balanced' or None
     opts["refit"] = True  # default true
+    opts["multi_class"] = "auto" # 'auto' or 'multinomial'
 
     opts["n_lambda"] = 50
     opts["alpha"] = 0.5  # between 0 and 1
@@ -94,7 +96,7 @@ def set_options(**kwargs):
     opts["shrinkage"] = "auto"
 
     # standardization
-    opts["standardize"] = 'center'  # 'standard', 'robust', 'center', None
+    opts["standardize"] = None # 'standard', 'robust', 'center', None
 
     # params for SGD
     opts["learning_rate"] = "optimal"  # optimal, adaptative
@@ -102,11 +104,15 @@ def set_options(**kwargs):
 
     # prescreening
     opts["prescreen"] = False
-    opts["pval"] = 0.05
+    opts["pval"] = 0.001
+
+    # PCA
+    opts["pca"] = False
+    opts["n_comp"] = None # None or mle or int
 
     # outer cv for score estimates
     opts["random_state"] = np.random.randint(1e4)
-    opts["out_fold"] = "loo"  # stratified, loo, repeated
+    opts["out_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_out"] = 5
     opts["outer_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
 

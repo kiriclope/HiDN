@@ -1,7 +1,7 @@
 import numpy as np
 
 from sklearn.feature_selection import f_classif, SelectFpr
-from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
 
 # from sklearn.pipeline import Pipeline
 
@@ -15,6 +15,8 @@ from sklearn.model_selection import (
     RepeatedStratifiedKFold,
     GridSearchCV,
 )
+
+from sklearn.decomposition import PCA
 
 from sklearn.ensemble import BaggingClassifier
 from imblearn.pipeline import Pipeline
@@ -61,6 +63,7 @@ def get_clf(**kwargs):
             cv=cv,
             class_weight=kwargs["class_weight"],
             refit=kwargs["refit"],
+            multi_class=kwargs["multi_class"],
             n_jobs=None,
             verbose=0,
         )
@@ -141,16 +144,21 @@ def get_clf(**kwargs):
         )
 
     pipe = []
+    if kwargs["standardize"] == "minmax":
+        pipe.append(("scaler", MinMaxScaler()))
     if kwargs["standardize"] == "standard":
         pipe.append(("scaler", StandardScaler()))
     if kwargs["standardize"] == "center":
         pipe.append(("scaler", StandardScaler(with_std=False)))
     if kwargs["standardize"] == "robust":
-        pipe.append(("scaler", RobustScaler(unit_variance=1)))
+        pipe.append(("scaler", RobustScaler(unit_variance=False)))
     if kwargs["prescreen"]:
         pipe.append(("filter", SelectFpr(f_classif, alpha=kwargs["pval"])))
     if kwargs["imbalance"]:
         pipe.append(("bal", SVMSMOTE(random_state=kwargs["random_state"])))
+
+    if kwargs["pca"]:
+        pipe.append(("pca", PCA(n_components=kwargs['n_comp'])))
 
     pipe.append(("clf", clf))
     pipe = Pipeline(pipe)
@@ -191,6 +199,8 @@ def get_clf(**kwargs):
         kwargs["imbalance"],
         "PRESCREEN",
         kwargs["prescreen"],
+        "PCA",
+        kwargs["pca"],
         "METHOD",
         kwargs["method"],
         "FOLDS",

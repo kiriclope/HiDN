@@ -79,7 +79,7 @@ if __name__ == "__main__":
     _, y_days = get_X_y_days()
 
     perf_type = "correct"
-    sample = "B"
+    sample = "all"
 
     perf_off, ci_off = perf_tasks_days(
         y_days, perf_type=perf_type, IF_TASKS=1, IF_LASER=0, IF_SAMPLE=sample

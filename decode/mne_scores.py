@@ -107,7 +107,7 @@ def get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1):
 
 
 def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
-    x = np.linspace(0, 14, int(14 * 6))
+    x = np.linspace(0, 14, scores.shape)
 
     fig = plt.figure(figname)
     ax = plt.gca()

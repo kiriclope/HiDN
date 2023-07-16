@@ -91,7 +91,7 @@ def get_coefs(model, X, y, **options):
     else:
         coefs = model.named_steps["clf"].coef_[0]
 
-    return coefs
+    return coefs, model
 
 
 if __name__ == "__main__":

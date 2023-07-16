@@ -150,37 +150,43 @@ def plot_scores_mat(scores_mat, figname, title):
     ax.set_ylabel("Training Time (s)")
 
     # STIM
-    ax.axvline(2, color="k", ls="-", lw=0.5)
-    ax.axhline(2, color="k", ls="-", lw=0.5)
+    ax.axvline(2, color="w", ls="-", lw=0.5)
+    ax.axhline(2, color="w", ls="-", lw=0.5)
 
-    # ED
-    ax.axvline(3, color="k", ls="-", lw=0.5)
-    ax.axhline(3, color="k", ls="-", lw=0.5)
+    ax.axvline(3, color="w", ls="-", lw=0.5)
+    ax.axhline(3, color="w", ls="-", lw=0.5)
 
     # Dist
-    ax.axvline(4.5, color="k", ls="-", lw=0.5)
-    ax.axhline(4.5, color="k", ls="-", lw=0.5)
+    ax.axvline(4.5, color="w", ls="-", lw=0.5)
+    ax.axhline(4.5, color="w", ls="-", lw=0.5)
 
-    ax.axvline(5.5, color="k", ls="-", lw=0.5)
-    ax.axhline(5.5, color="k", ls="-", lw=0.5)
+    ax.axvline(5.5, color="w", ls="-", lw=0.5)
+    ax.axhline(5.5, color="w", ls="-", lw=0.5)
+
+    # Cue
+    ax.axvline(6.5, color="w", ls="-", lw=0.5)
+    ax.axhline(6.5, color="w", ls="-", lw=0.5)
+
+    ax.axvline(7, color="w", ls="-", lw=0.5)
+    ax.axhline(7, color="w", ls="-", lw=0.5)
 
     # Test
-    ax.axvline(9, color="k", ls="-", lw=0.5)
-    ax.axhline(9, color="k", ls="-", lw=0.5)
+    ax.axvline(9, color="w", ls="-", lw=0.5)
+    ax.axhline(9, color="w", ls="-", lw=0.5)
 
-    ax.axvline(10, color="k", ls="-", lw=0.5)
-    ax.axhline(10, color="k", ls="-", lw=0.5)
+    ax.axvline(10, color="w", ls="-", lw=0.5)
+    ax.axhline(10, color="w", ls="-", lw=0.5)
 
-    plt.xlim([2, 12])
-    plt.ylim([2, 12])
+    plt.xlim([2, 10])
+    plt.ylim([2, 10])
 
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("Score")
     cbar.set_ticks([0.5, 0.75, 1])
 
     plt.title(title)
-    plt.xticks([2, 4, 8, 12])
-    plt.yticks([2, 4, 8, 12])
+    plt.xticks([2.5, 5., 6.75, 9.5], ["Sample", "Dist.", "Cue", "Test"])
+    plt.yticks([2.5, 5., 6.75 ,9.5], ["Sample", "Dist.", "Cue", "Test"])
 
     save_fig(fig, figname)
 

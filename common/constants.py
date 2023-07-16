@@ -55,8 +55,8 @@ n_discard = 0
 n_first = 3  # 3 or 2
 n_middle = 0  # 0 or 2
 if "P" in mouse:
-    n_discard = 4
-    n_first = 3  # 3 or 4
+    n_discard = 3
+    n_first = 4  # 3 or 4
     n_middle = 0  # 0 or 3
 
 global task, tasks
@@ -131,15 +131,23 @@ global bins, bins_BL, bins_STIM, bins_ED, bins_DIST, bins_MD, bins_LD, bins_CUE,
 bins = np.arange(0, len(time))
 
 global T_WINDOW
-T_WINDOW = 0.5
+T_WINDOW = 0.25
 
 bins_BL = bins[int(t_BL[0] * frame_rate) : int(t_BL[1] * frame_rate)]
 bins_STIM = bins[int((t_STIM[0] + T_WINDOW) * frame_rate) : int(t_STIM[1] * frame_rate)]
+
 bins_ED = bins[int((t_ED[0] + T_WINDOW) * frame_rate) : int(t_ED[1] * frame_rate)]
+
 bins_DIST = bins[int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * frame_rate)]
+
 bins_MD = bins[int((t_MD[0] + T_WINDOW) * frame_rate) : int(t_MD[1] * frame_rate)]
+
+bins_MD = bins[int((t_MD[0] - T_WINDOW) * frame_rate) : int((t_MD[0] + T_WINDOW)  * frame_rate)]
+
 bins_CUE = bins[int((t_CUE[0] + T_WINDOW) * frame_rate) : int(t_CUE[1] * frame_rate)]
+
 bins_RWD = bins[int((t_RWD[0] + T_WINDOW) * frame_rate) : int(t_RWD[1] * frame_rate)]
+
 bins_LD = bins[int((t_LD[0] + T_WINDOW) * frame_rate) : int(t_LD[1] * frame_rate)]
 bins_TEST = bins[
     int((t_TEST[0] + T_WINDOW) * frame_rate) : int((t_TEST[1]) * frame_rate)

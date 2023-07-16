@@ -142,9 +142,9 @@ def get_fluo_data():
         )
 
         X_raw = X_raw.reshape(
-            (5, int(X_raw.shape[0] / 5), X_raw.shape[1], X_raw.shape[2])
+            (6, int(X_raw.shape[0] / 6), X_raw.shape[1], X_raw.shape[2])
         )
-        y_raw = y_raw.T.reshape((5, int(y_raw.T.shape[0] / 5), y_raw.T.shape[1]))
+        y_raw = y_raw.T.reshape((6, int(y_raw.T.shape[0] / 6), y_raw.T.shape[1]))
 
         X_raw = X_raw[gv.day - 1]
         y_raw = y_raw[gv.day - 1].T
@@ -204,10 +204,10 @@ def get_X_y_days(mouse=gv.mouse, IF_PREP=0, IF_AVG=0, IF_RELOAD=0):
         pickle.dump(X_days, open(gv.filedir + gv.mouse + "/X_days.pkl", "wb"))
         y_days.to_pickle(gv.filedir + gv.mouse + "/y_days.pkl")
 
-    if IF_PREP:
-        X_days = preprocess_X(
-            X_days, scaler="robust", avg_mean=0, avg_noise=1, unit_var=1
-        )
+    # if IF_PREP:
+    #     X_days = preprocess_X(
+    #         X_days, scaler="robust", avg_mean=0, avg_noise=1, unit_var=1
+    #     )
     if IF_AVG:
         X_days = avg_epochs(X_days, epochs=None)
 
