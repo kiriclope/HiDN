@@ -34,6 +34,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 import stats.progressbar as pgb
 
+from my_mne import my_cross_val_multiscore
 
 def get_ci(res, conf=0.95):
     ostats = np.sort(res, axis=0)
@@ -55,6 +56,14 @@ def get_ci(res, conf=0.95):
 def get_cv_score(estimator, X, y, cv, n_jobs=-1):
     # calling mne.cross_val_multiscore to compute diagonal score at each time point
     scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs, verbose=False)
+    # Mean scores across cross-validation splits
+    scores = np.nanmean(scores, axis=0)
+
+    return scores
+
+def get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1):
+    # calling mne.cross_val_multiscore to compute diagonal score at each time point
+    scores = my_cross_val_multiscore(estimator, X, X2, y, y2, cv=cv, n_jobs=n_jobs, verbose=False)
     # Mean scores across cross-validation splits
     scores = np.nanmean(scores, axis=0)
 
@@ -107,7 +116,7 @@ def get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1):
 
 
 def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
-    x = np.linspace(0, 14, scores.shape)
+    x = np.linspace(0, 14, scores.shape[0])
 
     fig = plt.figure(figname)
     ax = plt.gca()
@@ -151,8 +160,12 @@ if __name__ == "__main__":
 
     model = get_clf(**options)
 
+    options['task'] = 'DPA'
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)
+
+    options['task'] = 'DualGo'
+    X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
 
     cv = options["n_out"]
     if options["in_fold"] == "loo":
@@ -170,7 +183,10 @@ if __name__ == "__main__":
     estimator = SlidingEstimator(model, n_jobs=None, scoring=scoring, verbose=False)
 
     start_time = time.time()
-    scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
+    # scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
+
+    scores = get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
+
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
     # with pgb.tqdm_joblib(pgb.tqdm(desc="shuffle")):

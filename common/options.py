@@ -15,7 +15,7 @@ def set_options(**kwargs):
     ################################
     opts["tasks"] = np.array(["DPA", "DualGo", "DualNoGo"])
 
-    opts["trials"] = "correct"  # 'correct', 'incorrect'
+    opts["trials"] = ""  # 'correct', 'incorrect'
 
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
@@ -71,10 +71,10 @@ def set_options(**kwargs):
     # classification parameters
     ################################
     opts["clf"] = "log_loss"  # "log_loss" or "LinearSVC" or "LDA" or "SGD"
-    opts["method"] = 'bolasso'  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
+    opts["method"] = None  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
     
     # precision
-    opts["tol"] = 1e-4
+    opts["tol"] = 1e-3
     opts["max_iter"] = int(1e4)
 
     # intercept
