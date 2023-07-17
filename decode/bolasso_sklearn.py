@@ -1,10 +1,9 @@
 import numpy as np
-from scipy.stats import ttest_ind
+from scipy.stats import ttest_ind, ttest_1samp
 from sklearn.base import BaseEstimator, ClassifierMixin
 
 from copy import deepcopy
 from joblib import Parallel, delayed
-
 # import .progressbar as pg
 
 
@@ -81,11 +80,19 @@ class bolasso(BaseEstimator, ClassifierMixin):
         if self.verbose:
             print("boots_coefs", self.boots_coef_.shape, mean_coefs[:10])
 
-        _, self.p_val_ = ttest_ind(
+
+        # _, self.p_val_ = ttest_ind(
+        #     self.boots_coef_,
+        #     np.zeros(self.boots_coef_.shape),
+        #     axis=0,
+        #     equal_var=False,
+        #     nan_policy="omit",
+        # )
+
+        _, self.p_val_ = ttest_1samp(
             self.boots_coef_,
-            np.zeros(self.boots_coef_.shape),
+            0,
             axis=0,
-            equal_var=False,
             nan_policy="omit",
         )
 

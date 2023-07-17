@@ -283,7 +283,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S3 = y.sample_odor == 2
             idx_S4 = y.sample_odor == 3
 
-    elif kwargs["features"] == "paired_unpaired":
+    elif kwargs["features"] == "paired":
         # pair
         idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_miss")
         # unpair
@@ -303,6 +303,15 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
         idx_trials = True
 
+    elif kwargs["features"] == "fa":
+        # lick
+        idx_S1 = (y.response == "correct_rej")
+        # no lick
+        idx_S2 = (y.response == "incorrect_fa")
+        idx_S3 = False
+        idx_S4 = False
+
+        idx_trials = True
     elif kwargs["features"] == "decision":
         if kwargs["trials"] == "correct":
             # lick
@@ -359,6 +368,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
     idx_days = True
     if isinstance(kwargs["day"], str):
+        print("multiple days")
         if kwargs["day"] == "first":
             idx_days = (y.day > gv.n_discard) & (y.day <= gv.n_first + gv.n_discard)
 
@@ -370,6 +380,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_days = y.day > (gv.n_first + gv.n_middle + gv.n_discard)
             # idx_days = (y.day == 4) | (y.day == 6)
     else:
+        print("single day")
         idx_days = y.day == kwargs["day"]
 
     idx_laser = True

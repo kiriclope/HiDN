@@ -1,5 +1,6 @@
 import numpy as np
 
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import f_classif, SelectFpr
 from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
 
@@ -24,7 +25,32 @@ from imblearn.over_sampling import SVMSMOTE
 
 from .bolasso_sklearn import bolasso
 from .SGDClassifierCV import SGDClassifierCV
-    
+
+class CustomScaler(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        self.scaler_1 = MinMaxScaler()
+        self.scaler_0 = MinMaxScaler()
+
+    def fit(self, X, y=None):
+        X_1 = X[y == 1]
+        X_0 = X[y == 0]
+
+        print('X1', X_1.shape)
+
+        self.scaler_1.fit(X_1)
+        self.scaler_0.fit(X_0)
+        return self
+
+    def transform(self, X, y=None):
+        X_1 = X[y == 1]
+        X_0 = X[y == 0]
+
+        print('X', X.shape, 'X1', X_1.shape)
+
+        scaled_1 = self.scaler_1.transform(X_1)
+        scaled_0 = self.scaler_0.transform(X_0) * -1
+        return np.concatenate((scaled_1, scaled_0), axis=0)
+
 
 def get_clf(**kwargs):
 
@@ -144,6 +170,9 @@ def get_clf(**kwargs):
         )
 
     pipe = []
+
+    if kwargs["standardize"] == "custom":
+        pipe.append(("scaler", CustomScaler()))
     if kwargs["standardize"] == "minmax":
         pipe.append(("scaler", MinMaxScaler()))
     if kwargs["standardize"] == "standard":
@@ -156,7 +185,6 @@ def get_clf(**kwargs):
         pipe.append(("filter", SelectFpr(f_classif, alpha=kwargs["pval"])))
     if kwargs["imbalance"]:
         pipe.append(("bal", SVMSMOTE(random_state=kwargs["random_state"])))
-
     if kwargs["pca"]:
         pipe.append(("pca", PCA(n_components=kwargs['n_comp'])))
 

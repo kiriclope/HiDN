@@ -1,10 +1,22 @@
 import numpy as np
 from scipy.stats import norm, circmean
+from sklearn.preprocessing import MinMaxScaler
 
 # from scipy.signal import savgol_filter, detrend
 
 from common import constants as gv
 
+def minmax_X_y(X, y):
+
+    print('X', X.shape, 'y', y.shape)
+    X1 = X[y == 1]
+    X0 = X[y == 0]
+
+    for i in range(X.shape[2]):
+        X1[...,i] = MinMaxScaler().fit_transform(X1[...,i])
+        X0[...,i] = MinMaxScaler().fit_transform(X0[...,i]) * -1
+
+    return np.vstack((X0, X1))
 
 def center_BL(X, center=None, avg_mean=0):
 
@@ -132,6 +144,7 @@ def df_f_scaler_BL(X, center=None, avg_mean=0):
 def preprocess_X_S1_X_S2(
     X_S1,
     X_S2,
+    y=None,
     scaler="standard",
     center=None,
     scale=None,
@@ -155,6 +168,8 @@ def preprocess_X_S1_X_S2(
         X_scale = center_BL(X, center, avg_mean)
     elif scaler == "dff":
         X_scale, center = df_f_scaler_BL(X, center, avg_mean)
+    elif scaler =='minmax':
+        X_scale = minmax_X_y(X, y)
     else:
         X_scale = X
 
@@ -170,6 +185,7 @@ def preprocess_X_S1_X_S2(
 
 def preprocess_X(
     X,
+    y = None,
     scaler="standard",
     center=None,
     scale=None,
@@ -191,6 +207,8 @@ def preprocess_X(
         X_scale = center_BL(X, center, avg_mean)
     elif scaler == "dff":
         X_scale, center = df_f_scaler_BL(X, center, avg_mean)
+    elif scaler =='minmax':
+        X_scale = minmax_X_y(X, y)
     else:
         X_scale = X
 

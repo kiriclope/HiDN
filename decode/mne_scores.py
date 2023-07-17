@@ -146,7 +146,12 @@ if __name__ == "__main__":
 
     options["features"] = sys.argv[1]
     options["day"] = sys.argv[2]
-    options["task"] = sys.argv[3]
+    task = sys.argv[3]
+
+    try:
+        options["day"] = int(options["day"])
+    except:
+        pass
 
     X_days, y_days = get_X_y_days(IF_RELOAD=0)
 
@@ -160,12 +165,13 @@ if __name__ == "__main__":
 
     model = get_clf(**options)
 
-    options['task'] = 'DPA'
+    options['task'] = task
+    # options['task'] = 'DPA'
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)
 
-    options['task'] = 'DualGo'
-    X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
+    # options['task'] = task
+    # X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
 
     cv = options["n_out"]
     if options["in_fold"] == "loo":
@@ -183,9 +189,9 @@ if __name__ == "__main__":
     estimator = SlidingEstimator(model, n_jobs=None, scoring=scoring, verbose=False)
 
     start_time = time.time()
-    # scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
+    scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
 
-    scores = get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
+    # scores = get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
 
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
@@ -216,10 +222,10 @@ if __name__ == "__main__":
     figname = (
         options["features"]
         + "cross_temp_scores_"
-        + options["day"]
+        + str(options["day"])
     )
 
-    title = options["day"] + " " + options["task"]
+    title = str(options["day"]) + " " + options["task"]
 
     plot_scores_time(figname, title, scores, ci_scores, options['task'])
 

@@ -57,7 +57,7 @@ n_middle = 0  # 0 or 2
 if "P" in mouse:
     n_discard = 3 # 0 or 3
     n_first = 3  # 3 or 4
-    n_middle = 4  # 0 or 3
+    n_middle = 3  # 0 or 3
 
 global task, tasks
 task = "DPA"

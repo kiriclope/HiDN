@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-import warnings
 import sys
 import time
+
 from datetime import timedelta
 import numpy as np
 import matplotlib.pyplot as plt
 
+from common.constants import paldict
 from common.options import set_options
 from data.get_data import get_X_y_days, get_X_y_S1_S2
 from decode.classifiers import get_clf
@@ -35,9 +36,6 @@ import stats.progressbar as pgb
 
 from my_mne import my_cross_val_multiscore
 
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
-
-
 def get_ci(res, conf=0.95):
     ostats = np.sort(res, axis=0)
     mean = np.mean(ostats, axis=0)
@@ -59,7 +57,15 @@ def get_cv_score(estimator, X, y, cv, n_jobs=-1):
     # calling mne.cross_val_multiscore to compute diagonal score at each time point
     scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs, verbose=False)
     # Mean scores across cross-validation splits
-    scores = np.mean(scores, axis=0)
+    scores = np.nanmean(scores, axis=0)
+
+    return scores
+
+def get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1):
+    # calling mne.cross_val_multiscore to compute diagonal score at each time point
+    scores = my_cross_val_multiscore(estimator, X, X2, y, y2, cv=cv, n_jobs=n_jobs, verbose=False)
+    # Mean scores across cross-validation splits
+    scores = np.nanmean(scores, axis=0)
 
     return scores
 
@@ -74,7 +80,7 @@ def get_shuffle_score(estimator, X, y, cv, n_jobs=-1):
         estimator, X, y_copy, cv=cv, n_jobs=n_jobs, verbose=False
     )
     # Mean scores across cross-validation splits
-    scores = np.mean(scores, axis=0)
+    scores = np.nanmean(scores, axis=0)
 
     return scores
 
@@ -96,37 +102,28 @@ def get_boots_score(estimator, X, y, cv, n_jobs=-1):
     )
 
     # Mean scores across cross-validation splits
-    scores = np.mean(scores, axis=0)
+    scores = np.nanmean(scores, axis=0)
 
     return scores
 
 
 def get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1):
-    scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs, verbose=False)
-    # Mean scores across cross-validation splits
-    scores = np.mean(scores, axis=0)
-
-    return scores
-
-def get_temporal_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1):
-    scores = my_cross_val_multiscore(estimator, X, X2, y, y2, cv=cv, n_jobs=n_jobs, verbose=False)
+    scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs)
     # Mean scores across cross-validation splits
     scores = np.mean(scores, axis=0)
 
     return scores
 
 
-def plot_scores_time(scores, ci_scores=None):
-    x = np.linspace(0, 14, int(14 * 6))
+def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
+    x = np.arange(1, 7)
 
-    figname = "score"
     fig = plt.figure(figname)
     ax = plt.gca()
-    plt.plot(x, scores, label="score")
+    plt.plot(x, scores, label="score", color=paldict[task])
     ax.axhline(0.5, color="k", linestyle="--", label="chance")
-    plt.xlabel("Time (s)")
+    plt.xlabel("Day")
     plt.ylabel("Score")
-    add_vlines()
     plt.ylim([0.25, 1])
     plt.yticks([0.25, 0.5, 0.75, 1])
 
@@ -138,66 +135,9 @@ def plot_scores_time(scores, ci_scores=None):
             alpha=0.2,
             color="k",
         )
-
-    save_fig(fig, figname)
-
-
-def plot_scores_mat(scores_mat, figname, title):
-
-    fig, ax = plt.subplots(1, 1)
-    im = ax.imshow(
-        scores_mat,
-        interpolation="lanczos",
-        origin="lower",
-        cmap="jet",
-        extent=[0, 14, 0, 14],
-        vmin=0.5,
-        vmax=1.0,
-    )
-
-    ax.set_xlabel("Testing Time (s)")
-    ax.set_ylabel("Training Time (s)")
-
-    # STIM
-    ax.axvline(2, color="w", ls="-", lw=0.5)
-    ax.axhline(2, color="w", ls="-", lw=0.5)
-
-    ax.axvline(3, color="w", ls="-", lw=0.5)
-    ax.axhline(3, color="w", ls="-", lw=0.5)
-
-    # Dist
-    ax.axvline(4.5, color="w", ls="-", lw=0.5)
-    ax.axhline(4.5, color="w", ls="-", lw=0.5)
-
-    ax.axvline(5.5, color="w", ls="-", lw=0.5)
-    ax.axhline(5.5, color="w", ls="-", lw=0.5)
-
-    # Cue
-    ax.axvline(6.5, color="w", ls="-", lw=0.5)
-    ax.axhline(6.5, color="w", ls="-", lw=0.5)
-
-    ax.axvline(7, color="w", ls="-", lw=0.5)
-    ax.axhline(7, color="w", ls="-", lw=0.5)
-
-    # Test
-    ax.axvline(9, color="w", ls="-", lw=0.5)
-    ax.axhline(9, color="w", ls="-", lw=0.5)
-
-    ax.axvline(10, color="w", ls="-", lw=0.5)
-    ax.axhline(10, color="w", ls="-", lw=0.5)
-
-    plt.xlim([2, 10])
-    plt.ylim([2, 10])
-
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Score")
-    cbar.set_ticks([0.5, 0.75, 1])
-
     plt.title(title)
-    plt.xticks([2.5, 5., 6.75, 9.5], ["Sample", "Dist.", "Cue", "Test"])
-    plt.yticks([2.5, 5., 6.75 ,9.5], ["Sample", "Dist.", "Cue", "Test"])
-
     save_fig(fig, figname)
+
 
 
 if __name__ == "__main__":
@@ -205,9 +145,9 @@ if __name__ == "__main__":
 
     options["features"] = sys.argv[1]
     options["day"] = sys.argv[2]
-    task = sys.argv[3]
+    options['task'] = sys.argv[3]
 
-    X_days, y_days = get_X_y_days()
+    X_days, y_days = get_X_y_days(IF_RELOAD=0)
 
     X_days = preprocess_X(
         X_days,
@@ -219,15 +159,7 @@ if __name__ == "__main__":
 
     model = get_clf(**options)
 
-    options['task'] = 'DPA'
-    X, y = get_X_y_S1_S2(X_days, y_days, **options)
-    print("X", X.shape, "y", y.shape)
-
-    options['task'] = task
-    X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
-
     cv = options["n_out"]
-
     if options["in_fold"] == "loo":
         cv = LeaveOneOut()
 
@@ -240,29 +172,34 @@ if __name__ == "__main__":
 
     scoring = options["outer_score"]
 
-    # cv = 5
-    ci_scores = None
-
-    # cross temporal score
-    # define the Temporal generalization object
-    estimator = GeneralizingEstimator(
-        model, n_jobs=1, scoring=scoring, verbose=False
-    )
-    
+    # estimator = SlidingEstimator(model, n_jobs=None, scoring=scoring, verbose=False)
+    estimator = model
     start_time = time.time()
-    # scores_mat = get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1)
 
-    scores_mat = get_temporal_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
+    # if options['features'] == 'paired':
+    epoch = 'RWD2'
+    # if options['features'] == 'paired':
+
+    scores_day = []
+    for i_day in range(1,7):
+        options['day'] = i_day
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        X_avg = avg_epochs(X, epochs=[epoch])
+
+        print("day", i_day, "X", X_avg.shape, "y", y.shape)
+
+        scores = get_cv_score(estimator, X_avg, y, cv, n_jobs=-1)
+
+        print(scores)
+        scores_day.append(scores)
 
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
-    
+
     figname = (
         options["features"]
-        + "cross_temp_scores_"
-        + options["task"]
-        + "_"
-        + options["day"]
+        + "cross_temp_scores_day_"
     )
 
-    title = options["day"] + " " + options["task"]
-    plot_scores_mat(scores_mat, figname, title)
+    title = options["task"]
+    ci_scores = None
+    plot_scores_time(figname, title, scores_day, ci_scores, options['task'])

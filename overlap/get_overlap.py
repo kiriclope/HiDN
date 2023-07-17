@@ -8,7 +8,7 @@ import common.constants as gv
 from common.options import set_options
 
 from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs
+from preprocess.helpers import avg_epochs, minmax_X_y
 
 from decode.classifiers import get_clf
 from decode.coefficients import get_coefs
@@ -63,10 +63,15 @@ if __name__ == '__main__':
     options["day"] = sys.argv[2]
     task = sys.argv[3]
 
+    try:
+        options["day"] = int(options["day"])
+    except:
+        pass
+
     if len(sys.argv) == 5:
         options['laser'] = 1
 
-    X_days, y_days = get_X_y_days(IF_PREP=0, IF_RELOAD=0)
+    X_days, y_days = get_X_y_days(IF_RELOAD=0)
 
     model = get_clf(**options)
 
@@ -82,6 +87,7 @@ if __name__ == '__main__':
         epoch = 'MD'
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
+    # X_S1_S2 = minmax_X_y(X_S1_S2, y_S1_S2)
     print(X_S1_S2.shape, y_S1_S2.shape)
 
     X_avg = avg_epochs(X_S1_S2, epochs=[epoch])
@@ -95,6 +101,7 @@ if __name__ == '__main__':
     options['features'] = 'sample'
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
+    # X_S1_S2 = minmax_X_y(X_S1_S2, y_S1_S2)
     print(X_S1_S2.shape, y_S1_S2.shape)
 
     overlap = get_overlap(X_S1_S2, coefs, model)

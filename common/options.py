@@ -1,7 +1,6 @@
 import multiprocessing
 import numpy as np
 
-
 def set_options(**kwargs):
 
     opts = dict()
@@ -15,7 +14,7 @@ def set_options(**kwargs):
     ################################
     opts["tasks"] = np.array(["DPA", "DualGo", "DualNoGo"])
 
-    opts["trials"] = ""  # 'correct', 'incorrect'
+    opts["trials"] = "correct"  # 'correct', 'incorrect'
 
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
@@ -71,7 +70,7 @@ def set_options(**kwargs):
     # classification parameters
     ################################
     opts["clf"] = "log_loss"  # "log_loss" or "LinearSVC" or "LDA" or "SGD"
-    opts["method"] = None  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
+    opts["method"] = 'bolasso'  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
     
     # precision
     opts["tol"] = 1e-3
@@ -104,7 +103,7 @@ def set_options(**kwargs):
 
     # prescreening
     opts["prescreen"] = False
-    opts["pval"] = 0.001
+    opts["pval"] = 0.1
 
     # PCA
     opts["pca"] = False
@@ -112,14 +111,14 @@ def set_options(**kwargs):
 
     # outer cv for score estimates
     opts["random_state"] = np.random.randint(1e4)
-    opts["out_fold"] = "stratified"  # stratified, loo, repeated
+    opts["out_fold"] = "repeated"  # stratified, loo, repeated
     opts["n_out"] = 5
-    opts["outer_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["outer_score"] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_in"] = 5
-    opts["inner_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["inner_score"] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # multiclass/label
     opts["multilabel"] = False
