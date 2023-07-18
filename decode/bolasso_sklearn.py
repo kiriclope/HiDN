@@ -111,7 +111,7 @@ class bolasso(BaseEstimator, ClassifierMixin):
         if self.verbose:
             print("X_fs", X_fs.shape)
 
-        self.model_.named_steps["clf"].penalty = "l2"
+        self.model_.named_steps["clf"].penalty = "l1"
         self.model_.named_steps["clf"].n_jobs = -1
 
         self.model_.fit(X_fs, y)
@@ -169,3 +169,6 @@ class bolasso(BaseEstimator, ClassifierMixin):
             # self.intercept_ -= np.dot(self.coef_[self.fs_idx_], mean)
 
         return self
+
+    def predict_proba(self, X):
+        return self.model.predict_proba(X)

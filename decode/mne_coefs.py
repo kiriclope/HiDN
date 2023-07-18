@@ -54,9 +54,12 @@ if __name__ == "__main__":
 
     options = set_options()
 
-    options["features"] = sys.argv[1]
-    options["day"] = sys.argv[2]
-    options["task"] = sys.argv[3]
+    options["day"] = sys.argv[1]
+
+    try:
+        options["day"] = int(options["day"])
+    except:
+        pass
 
     X_days, y_days = get_X_y_days()
 
@@ -68,7 +71,7 @@ if __name__ == "__main__":
         unit_var=options["unit_var_BL"],
     )
 
-    options['method'] = 'bootstrap'
+    options['method'] = 'bolasso'
     
     model = get_clf(**options)
 
@@ -83,10 +86,12 @@ if __name__ == "__main__":
     
     start_time = time.time()
     estimator.fit(X, y)
-    coefs = get_coef(estimator, attr='coef_', inverse_transform=False)
+    coefs_sample = get_coef(estimator, attr='coef_', inverse_transform=False)
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
-    coefs_sample = coefs[:,0].T
+    if coefs_sample.shape[1] == 1:
+        coefs_sample = coefs_sample[:,0].T
+    print('coef sample', coefs_sample.shape)
 
     options['features'] = 'distractor'
     options['task'] = 'Dual'
@@ -96,12 +101,17 @@ if __name__ == "__main__":
         
     start_time = time.time()
     estimator.fit(X, y)
-    coefs = get_coef(estimator, attr='coef_', inverse_transform=False)
+    coefs_dist = get_coef(estimator, attr='coef_', inverse_transform=False)
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
-    coefs_dist = coefs[:,0].T
- 
-    print(coefs.shape)
+    if coefs_dist.shape[1] == 1:
+        coefs_dist = coefs_dist[:,0].T
+    print('coef dist', coefs_dist.shape)
+
+    # coefs_sample = np.mean(coefs_sample, -1)
+    # coefs_dist = np.mean(coefs_dist, -1)
     cos_mat = cosine_similarity(coefs_sample, coefs_dist)
 
     plot_cos_mat(cos_mat, 'cosine')
+
+    theta = np.arctan2(coefs_dist, coefs_sample)

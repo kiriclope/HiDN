@@ -28,7 +28,7 @@ def set_options(**kwargs):
     ################################
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
-    opts["n_boots"] = 1000  # for bootstrap
+    opts["n_boots"] = 100  # for bootstrap
     opts["n_repeats"] = 10  # for repeated Kfold
 
     opts["avg_coefs"] = True
@@ -103,7 +103,7 @@ def set_options(**kwargs):
 
     # prescreening
     opts["prescreen"] = False
-    opts["pval"] = 0.1
+    opts["pval"] = 0.05
 
     # PCA
     opts["pca"] = False
