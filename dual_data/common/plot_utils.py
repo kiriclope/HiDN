@@ -5,16 +5,16 @@ import matplotlib
 import matplotlib.pyplot as plt
 import pickle as pkl
 import copy
-import seaborn as sns 
-import common.constants as gv
+import seaborn as sns
+import dual_data.common.constants as gv
 
 sns.set_context("poster")
 sns.set_style("ticks")
 plt.rc("axes.spines", top=False, right=False)
 
-golden_ratio = (5**.5 - 1) / 2
+golden_ratio = (5**0.5 - 1) / 2
 width = 7
-matplotlib.rcParams['figure.figsize'] = [width, width * golden_ratio ]
+matplotlib.rcParams["figure.figsize"] = [width, width * golden_ratio]
 
 
 def add_vlines(ax=None):
@@ -29,7 +29,6 @@ def add_vlines(ax=None):
 
 
 def save_fig(fig, figname, path=gv.figdir, format="svg", dpi="figure"):
-
     fig = plt.figure(fig.number)
     if not os.path.isdir(path):
         os.makedirs(path)
@@ -46,7 +45,6 @@ def pkl_load(name, path="."):
 
 
 def copy_fig(fig, ax):
-
     ax0 = fig.axes[0]
 
     # labels
@@ -93,7 +91,6 @@ def copy_fig(fig, ax):
 
 
 def concat_fig(figname, fig_list, dim=[1, 2]):
-
     fig, ax = plt.subplots(
         dim[0], dim[1], figsize=(2.427 * dim[1], 1.5 * dim[0]), num=figname
     )
@@ -110,7 +107,6 @@ def concat_fig(figname, fig_list, dim=[1, 2]):
 
 
 if __name__ == "__main__":
-
     fig = plt.figure()
     x = np.linspace(0, 2 * np.pi)
 

@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from common.options import set_options
-from data.get_data import get_X_y_days, get_X_y_S1_S2
+from common.get_data import get_X_y_days, get_X_y_S1_S2
 from decode.classifiers import get_clf
 
 from preprocess.helpers import avg_epochs, preprocess_X
@@ -24,8 +24,8 @@ from mne.decoding import (
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-def plot_cos_mat(cos_mat, figname, title=None):
 
+def plot_cos_mat(cos_mat, figname, title=None):
     angle = np.arccos(np.clip(cos_mat, -1.0, 1.0)) * 180 / np.pi
 
     fig, ax = plt.subplots(1, 1)
@@ -49,9 +49,7 @@ def plot_cos_mat(cos_mat, figname, title=None):
     plt.yticks([2, 4, 8, 12])
 
 
-
 if __name__ == "__main__":
-
     options = set_options()
 
     options["day"] = sys.argv[1]
@@ -71,47 +69,47 @@ if __name__ == "__main__":
         unit_var=options["unit_var_BL"],
     )
 
-    options['method'] = 'bolasso'
+    options["method"] = "bolasso"
 
     model = get_clf(**options)
 
     scoring = options["inner_score"]
     estimator = SlidingEstimator(model, n_jobs=-1, scoring=scoring, verbose=False)
 
-    options['features'] = 'sample'
-    options['task'] = 'Dual'
+    options["features"] = "sample"
+    options["task"] = "Dual"
 
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)
 
     start_time = time.time()
     estimator.fit(X, y)
-    coefs_sample = get_coef(estimator, attr='coef_', inverse_transform=False)
+    coefs_sample = get_coef(estimator, attr="coef_", inverse_transform=False)
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
     if coefs_sample.shape[1] == 1:
-        coefs_sample = coefs_sample[:,0].T
-    print('coef sample', coefs_sample.shape)
+        coefs_sample = coefs_sample[:, 0].T
+    print("coef sample", coefs_sample.shape)
 
-    options['features'] = 'distractor'
-    options['task'] = 'Dual'
+    options["features"] = "distractor"
+    options["task"] = "Dual"
 
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)
 
     start_time = time.time()
     estimator.fit(X, y)
-    coefs_dist = get_coef(estimator, attr='coef_', inverse_transform=False)
+    coefs_dist = get_coef(estimator, attr="coef_", inverse_transform=False)
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
     if coefs_dist.shape[1] == 1:
-        coefs_dist = coefs_dist[:,0].T
-    print('coef dist', coefs_dist.shape)
+        coefs_dist = coefs_dist[:, 0].T
+    print("coef dist", coefs_dist.shape)
 
     # coefs_sample = np.mean(coefs_sample, -1)
     # coefs_dist = np.mean(coefs_dist, -1)
     cos_mat = cosine_similarity(coefs_sample, coefs_dist)
 
-    plot_cos_mat(cos_mat, 'cosine')
+    plot_cos_mat(cos_mat, "cosine")
 
     theta = np.arctan2(coefs_dist, coefs_sample)

@@ -4,22 +4,22 @@ from sklearn.preprocessing import MinMaxScaler
 
 # from scipy.signal import savgol_filter, detrend
 
-from common import constants as gv
+from dual_data.common import constants as gv
+
 
 def minmax_X_y(X, y):
-
-    print('X', X.shape, 'y', y.shape)
+    print("X", X.shape, "y", y.shape)
     X1 = X[y == 1]
     X0 = X[y == 0]
 
     for i in range(X.shape[2]):
-        X1[...,i] = MinMaxScaler().fit_transform(X1[...,i])
-        X0[...,i] = MinMaxScaler().fit_transform(X0[...,i]) * -1
+        X1[..., i] = MinMaxScaler().fit_transform(X1[..., i])
+        X0[..., i] = MinMaxScaler().fit_transform(X0[..., i]) * -1
 
     return np.vstack((X0, X1))
 
-def center_BL(X, center=None, avg_mean=0):
 
+def center_BL(X, center=None, avg_mean=0):
     if center is None:
         X_BL = X[..., gv.bins_BL]
 
@@ -37,7 +37,6 @@ def center_BL(X, center=None, avg_mean=0):
 
 
 def standard_scaler_BL(X, center=None, scale=None, avg_mean=0, avg_noise=0):
-
     X_BL = X[..., gv.bins_BL]
     if center is None:
         if avg_mean:
@@ -68,7 +67,6 @@ def standard_scaler_BL(X, center=None, scale=None, avg_mean=0, avg_noise=0):
 
 
 def robust_scaler_BL(X, center=None, scale=None, avg_mean=0, avg_noise=0, unit_var=0):
-
     X_BL = X[..., gv.bins_BL]
 
     if center is None:
@@ -154,7 +152,6 @@ def preprocess_X_S1_X_S2(
     return_center_scale=0,
     same=1,
 ):
-
     X = np.vstack((X_S1, X_S2))
     # X = savgol_filter(X, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
 
@@ -168,7 +165,7 @@ def preprocess_X_S1_X_S2(
         X_scale = center_BL(X, center, avg_mean)
     elif scaler == "dff":
         X_scale, center = df_f_scaler_BL(X, center, avg_mean)
-    elif scaler =='minmax':
+    elif scaler == "minmax":
         X_scale = minmax_X_y(X, y)
     else:
         X_scale = X
@@ -185,7 +182,7 @@ def preprocess_X_S1_X_S2(
 
 def preprocess_X(
     X,
-    y = None,
+    y=None,
     scaler="standard",
     center=None,
     scale=None,
@@ -194,7 +191,6 @@ def preprocess_X(
     unit_var=0,
     return_center_scale=0,
 ):
-
     # X = savgol_filter(X, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
 
     if scaler == "standard":
@@ -207,7 +203,7 @@ def preprocess_X(
         X_scale = center_BL(X, center, avg_mean)
     elif scaler == "dff":
         X_scale, center = df_f_scaler_BL(X, center, avg_mean)
-    elif scaler =='minmax':
+    elif scaler == "minmax":
         X_scale = minmax_X_y(X, y)
     else:
         X_scale = X
@@ -236,7 +232,6 @@ def preprocess_X(
 
 
 def avg_epochs(X, epochs=None):
-
     X_avg = np.nanmean(X, axis=-1)
 
     if epochs is None:
@@ -295,7 +290,6 @@ def avg_epochs(X, epochs=None):
 
 
 def avg_phase_epochs(X, epochs=None):
-
     X_avg = np.nanmean(X, axis=-1)
 
     if epochs is None:
@@ -307,7 +301,6 @@ def avg_phase_epochs(X, epochs=None):
     # print('average over epochs', epochs)
 
     for i_epoch, epoch in enumerate(epochs):
-
         if epoch == "BL":
             X_BL = circmean(X[..., gv.bins_BL], axis=-1, high=360, low=0)
             X_epochs[i_epoch] = X_BL

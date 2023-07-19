@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import mat73
 from scipy.io import loadmat
-from preprocess.helpers import preprocess_X, avg_epochs
 
-from common import constants as gv
+from dual_data.preprocess.helpers import preprocess_X, avg_epochs
+from dual_data.common import constants as gv
 
 reload(gv)
 
