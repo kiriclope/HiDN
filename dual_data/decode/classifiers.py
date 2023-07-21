@@ -1,30 +1,21 @@
 import numpy as np
-
+from dual_data.decode.bolasso_sklearn import bolasso
+from dual_data.decode.SGDClassifierCV import SGDClassifierCV
+from imblearn.over_sampling import SVMSMOTE
+from imblearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.feature_selection import f_classif, SelectFpr
-from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.ensemble import BaggingClassifier
+from sklearn.feature_selection import SelectFpr, f_classif
+from sklearn.linear_model import LogisticRegressionCV, SGDClassifier
+from sklearn.model_selection import (GridSearchCV, LeaveOneOut,
+                                     RepeatedStratifiedKFold, StratifiedKFold)
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
+from sklearn.svm import LinearSVC
 
 # from sklearn.pipeline import Pipeline
 
-from sklearn.svm import LinearSVC
-from sklearn.linear_model import LogisticRegressionCV, SGDClassifier
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-
-from sklearn.model_selection import (
-    StratifiedKFold,
-    LeaveOneOut,
-    RepeatedStratifiedKFold,
-    GridSearchCV,
-)
-
-from sklearn.decomposition import PCA
-
-from sklearn.ensemble import BaggingClassifier
-from imblearn.pipeline import Pipeline
-from imblearn.over_sampling import SVMSMOTE
-
-from .bolasso_sklearn import bolasso
-from .SGDClassifierCV import SGDClassifierCV
 
 class CustomScaler(BaseEstimator, TransformerMixin):
     def __init__(self):
@@ -35,7 +26,7 @@ class CustomScaler(BaseEstimator, TransformerMixin):
         X_1 = X[y == 1]
         X_0 = X[y == 0]
 
-        print('X1', X_1.shape)
+        print("X1", X_1.shape)
 
         self.scaler_1.fit(X_1)
         self.scaler_0.fit(X_0)
@@ -45,7 +36,7 @@ class CustomScaler(BaseEstimator, TransformerMixin):
         X_1 = X[y == 1]
         X_0 = X[y == 0]
 
-        print('X', X.shape, 'X1', X_1.shape)
+        print("X", X.shape, "X1", X_1.shape)
 
         scaled_1 = self.scaler_1.transform(X_1)
         scaled_0 = self.scaler_0.transform(X_0) * -1
@@ -53,7 +44,6 @@ class CustomScaler(BaseEstimator, TransformerMixin):
 
 
 def get_clf(**kwargs):
-
     if kwargs["in_fold"] == "stratified":
         cv = StratifiedKFold(
             n_splits=kwargs["n_in"], shuffle=True, random_state=kwargs["random_state"]
@@ -116,7 +106,6 @@ def get_clf(**kwargs):
         )
 
     if kwargs["clf"] == "SGD":
-
         clf = SGDClassifier(
             loss="log_loss",
             penalty=kwargs["penalty"],
@@ -142,7 +131,6 @@ def get_clf(**kwargs):
         )
 
     if kwargs["clf"] == "SGDCV":
-
         clf = SGDClassifierCV(
             cv=cv,
             loss="log_loss",
@@ -186,7 +174,7 @@ def get_clf(**kwargs):
     if kwargs["imbalance"]:
         pipe.append(("bal", SVMSMOTE(random_state=kwargs["random_state"])))
     if kwargs["pca"]:
-        pipe.append(("pca", PCA(n_components=kwargs['n_comp'])))
+        pipe.append(("pca", PCA(n_components=kwargs["n_comp"])))
 
     pipe.append(("clf", clf))
     pipe = Pipeline(pipe)

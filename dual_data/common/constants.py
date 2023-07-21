@@ -1,4 +1,5 @@
 import os
+
 import numpy as np
 import seaborn as sns
 
@@ -12,7 +13,7 @@ path = "/home/leon/dual_task/dual_data/"
 # data_path = "/home/leon/bebopalula/python/dual/data"
 # path = "/home/leon/bebopalula/python/dual"
 
-# in paris 
+# in paris
 # data_path = "/homecentral/alexandre.mahrach/bebopalula/dual_data/data"
 # path = "/homecentral/alexandre.mahrach/bebopalula/dual_data/"
 
@@ -55,7 +56,7 @@ n_discard = 0
 n_first = 3  # 3 or 2
 n_middle = 0  # 0 or 2
 if "P" in mouse:
-    n_discard = 3 # 0 or 3
+    n_discard = 3  # 0 or 3
     n_first = 3  # 3 or 4
     n_middle = 3  # 0 or 3
 
@@ -142,7 +143,9 @@ bins_DIST = bins[int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * fram
 
 bins_MD = bins[int((t_MD[0] + T_WINDOW) * frame_rate) : int(t_MD[1] * frame_rate)]
 
-bins_MD = bins[int((t_MD[0] - T_WINDOW) * frame_rate) : int((t_MD[0] + T_WINDOW)  * frame_rate)]
+bins_MD = bins[
+    int((t_MD[0] - T_WINDOW) * frame_rate) : int((t_MD[0] + T_WINDOW) * frame_rate)
+]
 
 bins_CUE = bins[int((t_CUE[0] + T_WINDOW) * frame_rate) : int(t_CUE[1] * frame_rate)]
 
@@ -174,9 +177,10 @@ pal = [
     sns.color_palette("bright")[3],
 ]
 
-paldict = {"DPA":sns.color_palette("bright")[1],
-           "DualGo":sns.color_palette("bright")[0],
-           "DualNoGo":sns.color_palette("bright")[2],
-           "Dual":sns.color_palette("bright")[3],
-           "all":sns.color_palette("bright")[4],
+paldict = {
+    "DPA": sns.color_palette("bright")[1],
+    "DualGo": sns.color_palette("bright")[0],
+    "DualNoGo": sns.color_palette("bright")[2],
+    "Dual": sns.color_palette("bright")[3],
+    "all": sns.color_palette("bright")[4],
 }

@@ -1,17 +1,11 @@
 import numpy as np
-from sklearn.model_selection import (
-    cross_val_score,
-    StratifiedKFold,
-    LeaveOneOut,
-    RepeatedStratifiedKFold,
-)
-
-from sklearn.base import clone
-
+from dual_data.cross_temp_utils import (permutation_test_temp_score,
+                                        temp_cross_val_score)
 from joblib import Parallel, delayed, parallel_backend
+from sklearn.base import clone
+from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
+                                     StratifiedKFold, cross_val_score)
 from tqdm import tqdm
-
-from .cross_temp_utils import temp_cross_val_score, permutation_test_temp_score
 
 
 def outer_cv(
@@ -27,7 +21,6 @@ def outer_cv(
     n_jobs=-1,
     return_clf=0,
 ):
-
     # pipe = set_scaler(clf, scaling)
     if folds == "stratified":
         cv_outer = StratifiedKFold(
@@ -50,7 +43,6 @@ def outer_cv(
 
 
 def score_parloop(model, method, X_t_train, X_t_test, y, cv, scoring):
-
     score, perm_score, pval = method(
         model,
         X_t_train,
@@ -79,7 +71,6 @@ def outer_temp_cv(
     n_jobs=None,
     IF_SHUFFLE=0,
 ):
-
     if folds == "stratified":
         cv = StratifiedKFold(n_splits=n_out, shuffle=True, random_state=random_state)
     elif folds == "loo":
@@ -95,7 +86,6 @@ def outer_temp_cv(
         method = temp_cross_val_score
 
     if X_t_train.ndim > 2:
-
         with parallel_backend("dask"):
             scores, perm_scores, pvals = zip(
                 *Parallel(n_jobs=n_jobs)(

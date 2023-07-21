@@ -1,38 +1,25 @@
 #!/usr/bin/env python3
 import sys
 import time
-
 from datetime import timedelta
-import numpy as np
+
 import matplotlib.pyplot as plt
-
-from common.constants import paldict
-from common.options import set_options
-from common.get_data import get_X_y_days, get_X_y_S1_S2
-from decode.classifiers import get_clf
-
-from preprocess.helpers import avg_epochs, preprocess_X
-from common.plot_utils import add_vlines, save_fig
-
-from sklearn.base import clone
-from sklearn.utils import resample
-from sklearn.model_selection import (
-    StratifiedKFold,
-    LeaveOneOut,
-    RepeatedStratifiedKFold,
-)
-
-
-from mne.decoding import (
-    SlidingEstimator,
-    GeneralizingEstimator,
-    cross_val_multiscore,
-    get_coef,
-)
-
-from joblib import Parallel, delayed
-from tqdm import tqdm
+import numpy as np
 import stats.progressbar as pgb
+from dual_data.common.constants import paldict
+from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+from dual_data.common.options import set_options
+from dual_data.common.plot_utils import add_vlines, save_fig
+from dual_data.decode.classifiers import get_clf
+from dual_data.preprocess.helpers import avg_epochs, preprocess_X
+from joblib import Parallel, delayed
+from mne.decoding import (GeneralizingEstimator, SlidingEstimator,
+                          cross_val_multiscore, get_coef)
+from sklearn.base import clone
+from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
+                                     StratifiedKFold)
+from sklearn.utils import resample
+from tqdm import tqdm
 
 from my_mne import my_cross_val_multiscore
 

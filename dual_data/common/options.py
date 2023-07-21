@@ -1,8 +1,9 @@
 import multiprocessing
+
 import numpy as np
 
-def set_options(**kwargs):
 
+def set_options(**kwargs):
     opts = dict()
 
     opts["reload"] = False
@@ -22,7 +23,7 @@ def set_options(**kwargs):
     opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
     opts["day"] = "first"  # int or 'first', 'middle', 'last'
     opts["laser"] = 0
-    
+
     ################################
     # perm/boots param
     ################################
@@ -47,7 +48,7 @@ def set_options(**kwargs):
     opts["epoch_rwd"] = ["MD"]
 
     # scaling fluo
-    opts["scaler_BL"] = None # standard, robust, center
+    opts["scaler_BL"] = None  # standard, robust, center
     opts["center_BL"] = None
     opts["scale_BL"] = None
     opts["avg_mean_BL"] = 0
@@ -64,14 +65,15 @@ def set_options(**kwargs):
     opts["n_aug"] = 1
 
     # adjust imbalance in trial types
+    opts["balance"] = True
     opts["imbalance"] = False
 
     ################################
     # classification parameters
     ################################
     opts["clf"] = "log_loss"  # "log_loss" or "LinearSVC" or "LDA" or "SGD"
-    opts["method"] = 'bolasso'  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
-    
+    opts["method"] = None  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
+
     # precision
     opts["tol"] = 1e-3
     opts["max_iter"] = int(1e4)
@@ -83,9 +85,9 @@ def set_options(**kwargs):
     # penalty
     opts["penalty"] = "l1"  # "l1", "l2" or elasticnet
     opts["solver"] = "liblinear"  # liblinear or saga
-    opts["class_weight"] = 'balanced' # "balanced"  # 'balanced' or None
+    opts["class_weight"] = "balanced"  # "balanced"  # 'balanced' or None
     opts["refit"] = True  # default true
-    opts["multi_class"] = "auto" # 'auto' or 'multinomial'
+    opts["multi_class"] = "auto"  # 'auto' or 'multinomial'
 
     opts["n_lambda"] = 50
     opts["alpha"] = 0.5  # between 0 and 1
@@ -95,7 +97,7 @@ def set_options(**kwargs):
     opts["shrinkage"] = "auto"
 
     # standardization
-    opts["standardize"] = None # 'standard', 'robust', 'center', None
+    opts["standardize"] = None  # 'standard', 'robust', 'center', None
 
     # params for SGD
     opts["learning_rate"] = "optimal"  # optimal, adaptative
@@ -107,7 +109,7 @@ def set_options(**kwargs):
 
     # PCA
     opts["pca"] = False
-    opts["n_comp"] = None # None or mle or int
+    opts["n_comp"] = None  # None or mle or int
 
     # outer cv for score estimates
     opts["random_state"] = np.random.randint(1e4)

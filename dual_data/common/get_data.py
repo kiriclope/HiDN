@@ -1,12 +1,12 @@
-from importlib import reload
 import pickle
+from importlib import reload
+
+import mat73
 import numpy as np
 import pandas as pd
-import mat73
-from scipy.io import loadmat
-
-from dual_data.preprocess.helpers import preprocess_X, avg_epochs
 from dual_data.common import constants as gv
+from dual_data.preprocess.helpers import avg_epochs, preprocess_X
+from scipy.io import loadmat
 
 reload(gv)
 
@@ -394,6 +394,17 @@ def get_X_y_S1_S2(X, y, **kwargs):
     print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
     if X_S3.shape[0] > 0:
         print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
+
+    if kwargs["balance"]:
+        n_max = np.min((X_S1.shape[0], X_S2.shape[0]))
+        print("n_max", n_max)
+
+        if X_S1.shape[0] > X_S2.shape[0]:
+            n_x = np.random.choice(X_S1.shape[0], n_max, replace=False)
+            X_S1 = X_S1[n_x]
+        else:
+            n_x = np.random.choice(X_S2.shape[0], n_max, replace=False)
+            X_S2 = X_S2[n_x]
 
     X_S1_S2 = np.vstack((X_S1, X_S2, X_S3, X_S4))
 

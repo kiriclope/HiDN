@@ -1,35 +1,21 @@
 #!/usr/bin/env python3
-import numpy as np
 import matplotlib.pyplot as plt
-
+import numpy as np
+from common.get_data import get_X_y_days, get_X_y_S1_S2
 from common.options import set_options
-from data.get_data import get_X_y_days, get_X_y_S1_S2
+from common.plot_utils import add_vlines
+from mne.decoding import (GeneralizingEstimator, LinearModel, Scaler,
+                          SlidingEstimator, Vectorizer, cross_val_multiscore,
+                          get_coef)
+from preprocess.helpers import avg_epochs, preprocess_X
+from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
+                                     StratifiedKFold)
+
 from decode.classifiers import get_clf
 from decode.methods import outer_temp_cv
 
-from preprocess.helpers import avg_epochs, preprocess_X
-from common.plot_utils import add_vlines
-
-from sklearn.model_selection import (
-    StratifiedKFold,
-    LeaveOneOut,
-    RepeatedStratifiedKFold,
-    GridSearchCV,
-)
-
-from mne.decoding import (
-    SlidingEstimator,
-    GeneralizingEstimator,
-    Scaler,
-    cross_val_multiscore,
-    LinearModel,
-    get_coef,
-    Vectorizer,
-)
-
 
 def get_score(model, X_train, X_test, y, **options):
-
     if X_train.ndim > 2:
         cv_score = []
         for i in range(X_train.shape[-1]):

@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 import sys
-import numpy as np
+
+import dual_data.common.constants as gv
 import matplotlib.pyplot as plt
-import seaborn as sns
+import numpy as np
 import pandas as pd
+import seaborn as sns
+from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+from dual_data.common.options import set_options
+from dual_data.common.plot_utils import pkl_save, save_fig
+from dual_data.decode.classifiers import get_clf
+from dual_data.decode.coefficients import get_coefs
+from dual_data.preprocess.augmentation import spawner
+from dual_data.preprocess.helpers import avg_epochs, preprocess_X
+from dual_data.stats.bootstrap import my_boots_ci
 from imblearn.over_sampling import SVMSMOTE
-
-import common.constants as gv
-from common.options import set_options
-from common.plot_utils import save_fig, pkl_save
-
-from common.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs, preprocess_X
-from preprocess.augmentation import spawner
-
-from decode.classifiers import get_clf
-from decode.coefficients import get_coefs
-
-from stats.bootstrap import my_boots_ci
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 

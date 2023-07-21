@@ -1,39 +1,25 @@
 #!/usr/bin/env python3
-import warnings
 import sys
 import time
+import warnings
 from datetime import timedelta
-import numpy as np
+
 import matplotlib.pyplot as plt
-
-from common.options import set_options
-from common.get_data import get_X_y_days, get_X_y_S1_S2
-from decode.classifiers import get_clf
-
-from preprocess.helpers import avg_epochs, preprocess_X
-from common.plot_utils import add_vlines, save_fig
-
-from sklearn.base import clone
-from sklearn.utils import resample
-from sklearn.model_selection import (
-    StratifiedKFold,
-    LeaveOneOut,
-    RepeatedStratifiedKFold,
-)
-
-
-from mne.decoding import (
-    SlidingEstimator,
-    GeneralizingEstimator,
-    cross_val_multiscore,
-    get_coef,
-)
-
+import numpy as np
+from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+from dual_data.common.options import set_options
+from dual_data.common.plot_utils import add_vlines, save_fig
+from dual_data.decode.classifiers import get_clf
+from dual_data.decode.my_mne import my_cross_val_multiscore
+from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from joblib import Parallel, delayed
+from mne.decoding import (GeneralizingEstimator, SlidingEstimator,
+                          cross_val_multiscore, get_coef)
+from sklearn.base import clone
+from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
+                                     StratifiedKFold)
+from sklearn.utils import resample
 from tqdm import tqdm
-import stats.progressbar as pgb
-
-from my_mne import my_cross_val_multiscore
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -200,14 +186,20 @@ def plot_scores_mat(scores_mat, figname, title):
     plt.yticks([2.5, 5.0, 6.75, 9.5], ["Sample", "Dist.", "Cue", "Test"])
 
     save_fig(fig, figname)
+    plt.show()
 
 
 if __name__ == "__main__":
-    options = set_options()
+    args = sys.argv[1:]  # Exclude the script name from arguments
+    options = {k: v for k, v in (arg.split("=") for arg in args)}
+    options = set_options(**options)
 
-    options["features"] = sys.argv[1]
-    options["day"] = sys.argv[2]
-    task = sys.argv[3]
+    task = options["task"]
+    # options = set_options()
+
+    # options["features"] = sys.argv[1]
+    # options["day"] = sys.argv[2]
+    # task = sys.argv[3]
 
     X_days, y_days = get_X_y_days()
 

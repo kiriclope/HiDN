@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-import numpy as np
 import matplotlib.pyplot as plt
-
-from common import constants as gv
-from common.options import set_options
-from common.plot_utils import save_fig, pkl_save
-
-from common.get_data import get_X_y_days
-
-from stats.bootstrap import my_boots_ci
+import numpy as np
+from dual_data.common import constants as gv
+from dual_data.common.get_data import get_X_y_days
+from dual_data.common.options import set_options
+from dual_data.common.plot_utils import pkl_save, save_fig
+from dual_data.stats.bootstrap import my_boots_ci
 
 # from statistics.shuffle import my_shuffle
 

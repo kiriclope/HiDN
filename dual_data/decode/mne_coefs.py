@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
-import warnings
 import sys
 import time
-
+import warnings
 from datetime import timedelta
-import numpy as np
+
+import dual_data.common.plot_utils
 import matplotlib.pyplot as plt
-
-from common.options import set_options
-from common.get_data import get_X_y_days, get_X_y_S1_S2
-from decode.classifiers import get_clf
-
-from preprocess.helpers import avg_epochs, preprocess_X
-import common.plot_utils
-from common.plot_utils import add_vlines, save_fig
-
+import numpy as np
+from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+from dual_data.common.options import set_options
+from dual_data.common.plot_utils import add_vlines, save_fig
+from dual_data.decode.classifiers import get_clf
+from dual_data.preprocess.helpers import avg_epochs, preprocess_X
+from mne.decoding import SlidingEstimator, get_coef
 from sklearn.metrics.pairwise import cosine_similarity
-
-from mne.decoding import (
-    SlidingEstimator,
-    get_coef,
-)
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
