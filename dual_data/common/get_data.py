@@ -318,6 +318,23 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
         idx_trials = True
 
+    elif kwargs["features"] == "lick":
+        if kwargs["trials"] == "correct":
+            # lick
+            idx_S1 = y.response == "correct_hit"
+            # no lick
+            idx_S2 = y.response == "incorrect_fa"
+        else:
+            # lick
+            idx_S1 = y.response == "correct_rej"
+            # no lick
+            idx_S2 = y.response == "incorrect_miss"
+
+        idx_S3 = False
+        idx_S4 = False
+
+        idx_trials = True
+
     elif kwargs["features"] == "reward":
         idx_S1 = ~y.response.str.contains("incorrect")
         idx_S2 = y.response.str.contains("incorrect")

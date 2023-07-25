@@ -33,7 +33,7 @@ mice = [
     # "PP09",
 ]
 
-figdir = path + "/figs/" + mouse
+figdir = path + "/figs/"
 filedir = path + "/data/"
 
 if not os.path.isdir(figdir):

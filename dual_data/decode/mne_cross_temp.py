@@ -243,8 +243,10 @@ def run_mne_cross_temp(**kwargs):
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
     figname = (
-        options["features"]
-        + "cross_temp_scores_"
+        options["mouse"]
+        + "_"
+        + options["features"]
+        + "_cross_temp_score_"
         + options["task"]
         + "_"
         + options["day"]

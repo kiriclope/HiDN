@@ -66,17 +66,22 @@ def run_get_overlap(**kwargs):
 
     if options["features"] == "sample":
         options["task"] = "Dual"
-        # options["features"] = "sample"
+        options["overlap"] = "sample"
         eps = -1
         epoch = "ED"
     elif options["features"] == "distractor":
         options["task"] = "Dual"
-        # options["features"] = "distractor"
+        options["overlap"] = "distractor"
         eps = 1
         epoch = "MD"
     elif options["features"] == "choice":
         options["task"] = "Dual"
-        # options["features"] = "distractor"
+        options["overlap"] = "choice"
+        eps = 1
+        epoch = "RWD2"
+    elif options["features"] == "decision":
+        options["task"] = "Dual"
+        options["overlap"] = "decision"
         eps = 1
         epoch = "RWD2"
 
@@ -116,7 +121,10 @@ def run_get_overlap(**kwargs):
     overlap_C = overlap[:, idx_C]
     overlap_D = overlap[:, idx_D]
 
-    figname = "overlap"
+    figname = (
+        options["mouse"] + "_" + options["task"] + "_" + options["overlap"] + "_overlap"
+    )
+
     fig = plt.figure(figname)
 
     if options["day"] == "first":
@@ -132,10 +140,10 @@ def run_get_overlap(**kwargs):
         "all": pal[4],
     }
 
-    plt.plot(gv.time, np.mean(overlap_A, 1), "--")
-    plt.plot(gv.time, np.mean(overlap_B, 1), "--")
-    plt.plot(gv.time, np.mean(overlap_C, 1), "--")
-    plt.plot(gv.time, np.mean(overlap_D, 1), "--")
+    # plt.plot(gv.time, np.mean(overlap_A, 1), "--")
+    # plt.plot(gv.time, np.mean(overlap_B, 1), "--")
+    # plt.plot(gv.time, np.mean(overlap_C, 1), "--")
+    # plt.plot(gv.time, np.mean(overlap_D, 1), "--")
 
     mean_overlap = (np.mean(overlap_A, 1) + eps * np.mean(overlap_B, 1)) / 2
     plt.plot(gv.time, mean_overlap, color=paldict[task])

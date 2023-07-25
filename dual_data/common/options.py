@@ -13,8 +13,8 @@ def set_options(**kwargs):
     ################################
     # behavior param
     ################################
-    opts['perf_type'] = 'hit'
-    opts['sample'] = 'all'
+    opts["perf_type"] = "hit"
+    opts["sample"] = "all"
 
     ################################
     # task param
