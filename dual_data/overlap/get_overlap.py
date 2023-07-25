@@ -51,35 +51,34 @@ def get_mean_overlap(X, y, coefs, model=None):
     return A + B
 
 
-if __name__ == "__main__":
-    options = set_options()
-
-    options["features"] = sys.argv[1]
-    options["day"] = sys.argv[2]
-    task = sys.argv[3]
+def run_get_overlap(**kwargs):
+    options = set_options(**kwargs)
+    task = options["task"]
 
     try:
         options["day"] = int(options["day"])
     except:
         pass
 
-    if len(sys.argv) == 5:
-        options["laser"] = 1
-
-    X_days, y_days = get_X_y_days(IF_RELOAD=0)
+    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
 
     model = get_clf(**options)
 
-    if sys.argv[1] == "sample":
-        options["task"] = "DPA"
-        options["features"] = "sample"
+    if options["features"] == "sample":
+        options["task"] = "Dual"
+        # options["features"] = "sample"
         eps = -1
         epoch = "ED"
-    else:
+    elif options["features"] == "distractor":
         options["task"] = "Dual"
-        options["features"] = "distractor"
+        # options["features"] = "distractor"
         eps = 1
         epoch = "MD"
+    elif options["features"] == "choice":
+        options["task"] = "Dual"
+        # options["features"] = "distractor"
+        eps = 1
+        epoch = "RWD2"
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     # X_S1_S2 = minmax_X_y(X_S1_S2, y_S1_S2)
@@ -125,13 +124,21 @@ if __name__ == "__main__":
     else:
         pal = sns.color_palette("bright")
 
+    paldict = {
+        "DPA": pal[3],
+        "DualGo": pal[0],
+        "DualNoGo": pal[2],
+        "Dual": pal[1],
+        "all": pal[4],
+    }
+
     plt.plot(gv.time, np.mean(overlap_A, 1), "--")
     plt.plot(gv.time, np.mean(overlap_B, 1), "--")
     plt.plot(gv.time, np.mean(overlap_C, 1), "--")
     plt.plot(gv.time, np.mean(overlap_D, 1), "--")
 
     mean_overlap = (np.mean(overlap_A, 1) + eps * np.mean(overlap_B, 1)) / 2
-    plt.plot(gv.time, mean_overlap, color=gv.paldict[task])
+    plt.plot(gv.time, mean_overlap, color=paldict[task])
     # plt.plot(time, np.mean(overlap_shuffle, axis=0), '--k')
 
     plt.plot([0, gv.duration], [0, 0], "--k")
@@ -140,7 +147,7 @@ if __name__ == "__main__":
         mean_overlap - overlap_ci[:, 0],
         mean_overlap + overlap_ci[:, 1],
         alpha=0.25,
-        color=gv.paldict[task],
+        color=paldict[task],
     )
 
     add_vlines()
@@ -150,3 +157,11 @@ if __name__ == "__main__":
     plt.ylabel("Overlap")
 
     plt.savefig(gv.figdir + figname + ".svg", dpi=300, format="svg")
+
+
+if __name__ == "__main__":
+    options["features"] = sys.argv[1]
+    options["day"] = sys.argv[2]
+    options["task"] = sys.argv[3]
+
+    run_get_overlap(**options)

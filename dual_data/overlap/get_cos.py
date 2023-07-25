@@ -47,13 +47,10 @@ def cos_between(v1, v2):
     return np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
 
 
-if __name__ == "__main__":
-    options = set_options()
+def run_get_cos(**kwargs)
 
-    options["features"] = sys.argv[1]
-    options["day"] = sys.argv[2]
-    task = sys.argv[3]
-
+    options = set_options(**kwargs)
+    task = options['task']
     try:
         options["day"] = int(options["day"])
     except:
@@ -131,3 +128,10 @@ if __name__ == "__main__":
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label("dF")
     # cbar.set_ticks([-1, 0.25, 0.5, 0.75, 1])
+
+if __name__ == "__main__":
+    options["features"] = sys.argv[1]
+    options["day"] = sys.argv[2]
+    options['task'] = sys.argv[3]
+
+    run_get_cos(**options)

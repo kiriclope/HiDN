@@ -42,17 +42,15 @@ def plot_cos_mat(cos_mat, figname, title=None):
     plt.yticks([2, 4, 8, 12])
 
 
-if __name__ == "__main__":
-    options = set_options()
-
-    options["day"] = sys.argv[1]
+def run_mne_coefs(**kwargs):
+    options = set_options(**kwargs)
 
     try:
         options["day"] = int(options["day"])
     except:
         pass
 
-    X_days, y_days = get_X_y_days()
+    X_days, y_days = get_X_y_days(mouse=options["mouse"])
 
     X_days = preprocess_X(
         X_days,
@@ -106,3 +104,9 @@ if __name__ == "__main__":
     plot_cos_mat(cos_mat, "cosine")
 
     theta = np.arctan2(coefs_dist, coefs_sample)
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]  # Exclude the script name from arguments
+    options = {k: v for k, v in (arg.split("=") for arg in args)}
+    run_mne_coefs(**options)

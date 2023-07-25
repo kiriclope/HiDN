@@ -18,23 +18,16 @@ def plot_lick_rate(licks_counts, bin_edges, n_mice=1):
     add_vlines()
     plt.xlabel("Time (s)")
     plt.ylabel("Lick Rate (Hz)")
-    plt.ylim([0, 5])
-    plt.xlim([0, 5])
-    plt.show()
-
-
-def plot_licks_hist(licks_all, n_bins="auto"):
-    licks_density, bins, _ = plt.hist(
-        licks_all, bins=n_bins, density=False, histtype="step", color=["r", "b", "g"]
-    )
+    # plt.ylim([0, 5])
     plt.xlim([0, 20])
-    add_vlines()
-    plt.xlabel("Time (s)")
-    plt.ylabel("Licks Density")
-    # plt.ylim([0, .75])
     plt.show()
 
-    return licks_density, bins
+
+def plot_licks_hist(licks_all, n_bins="auto", n_mice=1):
+    licks_counts, bin_edges, _ = plt.hist(licks_all, bins=n_bins, density=False)
+    plt.clf()
+    plot_lick_rate(licks_counts, bin_edges, n_mice)
+    return licks_counts, bin_edges
 
 
 def hstack_nan(X, Y):

@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 import sys
-import numpy as np
+
 import matplotlib.pyplot as plt
-
+import numpy as np
 from dual_data.common import constants as gv
-from dual_data.common.plot_utils import save_fig, pkl_save
-from dual_data.common.get_data import get_X_y_mice, get_X_y_days
-
+from dual_data.common.get_data import get_X_y_days, get_X_y_mice
+from dual_data.common.plot_utils import pkl_save, save_fig
 from dual_data.stats.bootstrap import my_boots_ci
 
 
-def get_labels(y_days, perf_type, task, IF_SAMPLE="all", IF_LASER=0):
+def get_labels(y_days, perf_type, task, SAMPLE="all", IF_LASER=0):
     idx = (y_days.tasks == task) & (y_days.laser == IF_LASER)
 
-    # if IF_SAMPLE == "A":
-    #     idx &= y_days.sample_odor == 0
-    # elif IF_SAMPLE == "B":
-    #     idx &= y_days.sample_odor == 1
+    if SAMPLE == "A":
+        idx &= y_days.sample_odor == 0
+    elif SAMPLE == "B":
+        idx &= y_days.sample_odor == 1
 
     if ("hit" in perf_type) or ("miss" in perf_type):
         idx_paired = ((y_days.sample_odor == 0) & (y_days.test_odor == 0)) | (
@@ -34,7 +33,7 @@ def get_labels(y_days, perf_type, task, IF_SAMPLE="all", IF_LASER=0):
     return y_task
 
 
-def get_perf_tasks_days(y_days, perf_type="correct_hit", IF_LASER=0, IF_SAMPLE="all"):
+def get_perf_tasks_days(y_days, perf_type="correct_hit", IF_LASER=0, SAMPLE="all"):
     perf_task = []
     ci_task = []
 
@@ -42,7 +41,7 @@ def get_perf_tasks_days(y_days, perf_type="correct_hit", IF_LASER=0, IF_SAMPLE="
         perf_day = []
         ci_day = []
 
-        y_task = get_labels(y_days, perf_type, i_task, IF_SAMPLE, IF_LASER)
+        y_task = get_labels(y_days, perf_type, i_task, SAMPLE, IF_LASER)
 
         for i_day in range(1, gv.n_days + 1):
             y_day = y_task[y_task.day == i_day]
@@ -120,38 +119,20 @@ def plot_perf_days(perf_mice, ci_mice, perf_type):
     save_fig(fig, figname, path=gv.figdir)
 
 
-# def get_perf_laser():
+def run_perf_mice(**kwargs):
+    _, y_days = get_X_y_mice(IF_RELOAD=1)
+
+    options = set_options(**kwargs)
+
+    perf_type = options["perf_type"]
+    SAMPLE = options["sample"]
+    IF_LASER = options["laser"]
+
+    perf_mice, ci_mice = get_perf_tasks_days(y_days, perf_type, IF_LASER, SAMPLE)
+
+    plot_perf_days(perf_mice, ci_mice, perf_type)
 
 
 if __name__ == "__main__":
-    options["features"] = sys.argv[1]
-    options["day"] = sys.argv[2]
-    options["task"] = sys.argv[3]
-
     print(gv.mice)
-    _, y_days = get_X_y_mice()
-
-    # _, y_days = get_X_y_days()
-
-    perf_type = "correct"
-    IF_SAMPLE = "all"
-
-    perf_type = "hit"
-
-    perf_mice, ci_mice = get_perf_tasks_days(
-        y_days, perf_type=perf_type, IF_LASER=0, IF_SAMPLE=IF_SAMPLE
-    )
-
-    perf_type = "hit_fa"
-
-    plot_perf_days(perf_mice, ci_mice, perf_type)
-
-    perf_type = "fa"
-
-    perf_mice, ci_mice = get_perf_tasks_days(
-        y_days, perf_type=perf_type, IF_LASER=0, IF_SAMPLE=IF_SAMPLE
-    )
-
-    perf_type = "hit_fa"
-
-    plot_perf_days(perf_mice, ci_mice, perf_type)
+    run_perf_mice()

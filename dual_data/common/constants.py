@@ -109,7 +109,7 @@ if "P" in mouse:
     t_RWD = [7 + inv_frame, 8]
     t_LD = [8 + inv_frame, 9]
     t_TEST = [9 + inv_frame, 10]
-    t_RWD2 = [11 + inv_frame, 12]
+    t_RWD2 = [10 + inv_frame, 11]
 
     # t_BL = [0 + inv_frame, 2 + inv_frame]
     # t_STIM = [2 + inv_frame, 3 + inv_frame]
@@ -171,16 +171,16 @@ data_type = "dF"  # 'raw' or 'dF'
 
 global pal
 pal = [
-    sns.color_palette("bright")[1],
+    sns.color_palette("bright")[3],
     sns.color_palette("bright")[0],
     sns.color_palette("bright")[2],
-    sns.color_palette("bright")[3],
+    sns.color_palette("bright")[1],
 ]
 
 paldict = {
-    "DPA": sns.color_palette("bright")[1],
+    "DPA": sns.color_palette("bright")[3],
     "DualGo": sns.color_palette("bright")[0],
     "DualNoGo": sns.color_palette("bright")[2],
-    "Dual": sns.color_palette("bright")[3],
+    "Dual": sns.color_palette("bright")[1],
     "all": sns.color_palette("bright")[4],
 }

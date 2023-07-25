@@ -1,0 +1,293 @@
+#+PROPERTY: header-args:ipython :async t :session dual_data :kernel dual_data
+* Dual Task Data Analysis
+** A few imports
+#+begin_src ipython :results output
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+
+#+begin_src ipython :results output
+  import os
+  import sys
+
+  sys.path.insert(0, '../dual_task')
+  current_dir = os.path.dirname(os.path.abspath('__file__'))
+  # Get parent directory (= the project root)
+  project_root = os.path.join(current_dir, '..')
+  # Append to system path
+  sys.path.append(project_root)
+
+  print("Python exe")
+  print(sys.executable)
+
+#+end_src
+
+#+RESULTS:
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+#+begin_src ipython :results output
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+
+sns.set_context("poster")
+sns.set_style("ticks")
+plt.rc("axes.spines", top=False, right=False)
+fig_path = '../figs/perf'
+golden_ratio = (5**.5 - 1) / 2
+width = 6
+
+matplotlib.rcParams['figure.figsize'] = [width, width * golden_ratio ]
+# matplotlib.rcParams['lines.markersize'] = 3
+%matplotlib inline
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :results drawer
+  plt.figure()
+  plt.xlabel('x')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[7]:
+[[file:./obipy-resources/uhTP9R.png]]
+:end:
+
+** Behavioral performance
+*** imports
+#+begin_src ipython :results drawer
+  from dual_data.performance.perf_mice import run_perf_mice
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[4]:
+:end:
+
+*** performance all animals
+#+begin_src ipython :results drawer
+run_perf_mice(perf_type='correct')
+#+end_src
+
+#+RESULTS:
+:results:
+0 - dd692702-4bf2-46f9-a840-5c564b68123b
+:end:
+
+** Licktime analysis
+*** imports
+#+begin_src ipython :results drawer
+  from scipy.io import loadmat
+  from dual_data.licks.licks import *
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[20]:
+:end:
+
+*** data
+#+begin_src ipython :results output
+  # path = '../data/behavior/DualTask_DPA_vs_Single_DPA/'
+  path = '../data/behavior/DualTask-Silencing-ACC-Prl/'
+  # path = '../data/behavior/DualTask-Silencing-Prl-ACC/'
+  # path = '../data/behavior/DualTask-Silencing-ACC/'
+#+end_src
+
+#+RESULTS:
+
+*** single mouse
+#+begin_src ipython :results drawer
+  i_mouse = 2
+  i_session = 1
+
+  if 'DPA' in path:
+      session = 'Dual' # control opto DPA or Dual
+  else:
+      session = 'control' # control opto DPA or Dual
+
+  data = loadmat(path + session + '_mouse_%d/session_%d' % (i_mouse, i_session))
+#+end_src
+
+#+begin_src ipython :results drawer
+  licks_dpa, licks_go, licks_nogo = get_licks_mouse(data, path, response='correct', trial_length=20, verbose=1)
+  licks_all = [np.hstack(licks_dpa), np.hstack(licks_go), np.hstack(licks_nogo)]
+  licks_density, bins = plot_licks_hist(licks_all, n_bins='auto')
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[31]:
+[[file:./obipy-resources/Hutbpp.png]]
+:end:
+
+*** all mice
+#+begin_src ipython :results drawer
+mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="incorrect")
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[40]:
+:end:
+
+**** control
+#+begin_src ipython :results drawer
+  n_mice = 9
+  dpa_all = hstack_with_padding(mice_dpa[:n_mice])
+  go_all = hstack_with_padding(mice_go[:n_mice])
+  nogo_all = hstack_with_padding(mice_nogo[:n_mice])
+
+  licks_all = [ np.hstack(dpa_all), np.hstack(go_all), np.hstack(nogo_all)]
+  licks_density, bins = plot_licks_hist(licks_all, n_bins='auto', n_mice=n_mice)
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[41]:
+[[file:./obipy-resources/9UfRSc.png]]
+:end:
+
+**** opto
+#+begin_src ipython :results drawer
+  dpa_all = hstack_with_padding(mice_dpa[n_mice:])
+  go_all = hstack_with_padding(mice_go[n_mice:])
+  nogo_all = hstack_with_padding(mice_nogo[n_mice:])
+
+  licks_all = [ np.hstack(dpa_all), np.hstack(go_all), np.hstack(nogo_all)]
+  licks_density, bins = plot_licks_hist(licks_all, n_bins='auto', n_mice=n_mice)
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[42]:
+[[file:./obipy-resources/xbd4s3.png]]
+:end:
+
+** Temporal decoding
+*** imports
+#+begin_src ipython :results drawer :async t :session dual_data
+  from dual_data.decode.mne_scores import run_mne_scores
+  from dual_data.decode.mne_cross_temp import run_mne_cross_temp
+#+end_src
+
+#+RESULTS:
+:results:
+0 - 4ee06148-02b1-410a-b62d-52ce9b21b5d9
+:end:
+
+*** Sample classification
+#+begin_src ipython :results drawer :async t :session dual_data
+  run_mne_scores(features='sample', task='DPA', day='first')
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[48]:
+[[file:./obipy-resources/3BCHOb.png]]
+:end:
+
+#+begin_src ipython :results drawer :async t :session dual_data
+  run_mne_cross_temp(features='sample', task='DPA', day='first')
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[34]:
+[[file:./obipy-resources/RNBphi.png]]
+:end:
+*** Distractor classification
+#+begin_src ipython :results drawer :async t :session dual_data
+  run_mne_scores(features='distractor', task='Dual', day='first')
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[49]:
+[[file:./obipy-resources/xUlUEK.png]]
+:end:
+
+#+begin_src ipython :results drawer :async t :session dual_data
+  run_mne_cross_temp(features='distractor', task='Dual', day='first')
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[37]:
+[[file:./obipy-resources/JZg9RA.png]]
+:end:
+*** Choice decoding
+
+#+begin_src ipython :results drawer :async t :session dual_data
+  mouse='ACCM04'
+  run_mne_scores(mouse=mouse, features='choice', task='all', day='first', bootstrap=0)
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[68]:
+[[file:./obipy-resources/N7uBd0.png]]
+:end:
+
+#+begin_src ipython :results drawer :async t :session dual_data
+  run_mne_scores(mouse=mouse, features='choice', task='all', day='last')
+#+end_src
+
+#+RESULTS:
+:results:
+3 - 1ac6a5b9-fe25-4a3a-9e1a-810a344e93d6
+:end:
+
+** Overlaps
+*** imports
+#+begin_src ipython :results drawer
+  from dual_data.overlap.get_overlap import run_get_overlap
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[5]:
+:end:
+
+*** Sample Overlap
+#+begin_src ipython :results drawer
+  mouse = 'JawsM15'
+  run_get_overlap(mouse=mouse, features='sample', task='all', day='first', method='bolasso')
+  run_get_overlap(mouse=mouse, features='sample', task='all', day='last', method='bolasso')
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[12]:
+[[file:./obipy-resources/inQSk0.png]]
+:end:
+
+*** Distractor overlap
+#+begin_src ipython :results drawer
+  mouse = 'JawsM15'
+  run_get_overlap(mouse=mouse, features='distractor', task='Dual', day='first', method='bolasso')
+  run_get_overlap(mouse=mouse, features='distractor', task='Dual', day='last', method='bolasso')
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[7]:
+[[file:./obipy-resources/4RSK8c.png]]
+:end:
+
+** Representations' Dynamics
+*** imports
+#+begin_src ipython :results drawer :async t :session dual_data
+  from dual_data.overlap.get_cos import run_get_cos
+#+end_src

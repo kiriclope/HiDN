@@ -11,6 +11,7 @@ from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.common.plot_utils import add_vlines, save_fig
 from dual_data.decode.classifiers import get_clf
+from dual_data.decode.my_mne import my_cross_val_multiscore
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from joblib import Parallel, delayed
 from mne.decoding import (GeneralizingEstimator, SlidingEstimator,
@@ -20,8 +21,6 @@ from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
                                      StratifiedKFold)
 from sklearn.utils import resample
 from tqdm import tqdm
-
-from my_mne import my_cross_val_multiscore
 
 
 def get_ci(res, conf=0.95):
@@ -128,14 +127,14 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
             color="k",
         )
     plt.title(title)
-    save_fig(fig, figname)
     plt.show()
+    save_fig(fig, figname)
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]  # Exclude the script name from arguments
-    options = {k: v for k, v in (arg.split("=") for arg in args)}
-    options = set_options(**options)
+def run_mne_scores(**kwargs):
+    options = set_options(**kwargs)
+
+    print(options["bootstrap"])
 
     # options = set_options()
     # options["features"] = sys.argv[1]
@@ -149,7 +148,7 @@ if __name__ == "__main__":
     except:
         pass
 
-    X_days, y_days = get_X_y_days(IF_RELOAD=0)
+    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
 
     X_days = preprocess_X(
         X_days,
@@ -202,8 +201,8 @@ if __name__ == "__main__":
 
     cv = 5
     ci_scores = None
-    if options["bootstrap"]:
-        n_boots = 100
+    if options["bootstrap"] == 1:
+        n_boots = options["n_boots"]
         with pgb.tqdm_joblib(pgb.tqdm(desc="bootstrap", total=84 * n_boots)):
             boots_scores = Parallel(n_jobs=-1)(
                 delayed(get_boots_score)(estimator, X, y, cv, n_jobs=None)
@@ -234,3 +233,9 @@ if __name__ == "__main__":
     # scoring=scoring, verbose=False)
     # scores_mat = get_temporal_cv_score(estimator, X, y, cv, scoring, n_jobs=-1)
     # plot_scores_mat(scores_mat)
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]  # Exclude the script name from arguments
+    options = {k: v for k, v in (arg.split("=") for arg in args)}
+    run_mne_scores(**options)

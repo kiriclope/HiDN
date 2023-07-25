@@ -11,17 +11,24 @@ def set_options(**kwargs):
     opts["verbose"] = 0
 
     ################################
+    # behavior param
+    ################################
+    opts['perf_type'] = 'hit'
+    opts['sample'] = 'all'
+
+    ################################
     # task param
     ################################
+    opts["mouse"] = "JawsM18"
     opts["tasks"] = np.array(["DPA", "DualGo", "DualNoGo"])
+    opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
+    opts["day"] = "first"  # int or 'first', 'middle', 'last'
 
     opts["trials"] = "correct"  # 'correct', 'incorrect'
 
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
 
-    opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
-    opts["day"] = "first"  # int or 'first', 'middle', 'last'
     opts["laser"] = 0
 
     ################################
@@ -89,7 +96,7 @@ def set_options(**kwargs):
     opts["refit"] = True  # default true
     opts["multi_class"] = "auto"  # 'auto' or 'multinomial'
 
-    opts["n_lambda"] = 50
+    opts["n_lambda"] = 10
     opts["alpha"] = 0.5  # between 0 and 1
     opts["n_alpha"] = 50
 

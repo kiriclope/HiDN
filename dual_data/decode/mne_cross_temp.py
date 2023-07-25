@@ -10,6 +10,7 @@ from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.common.plot_utils import add_vlines, save_fig
 from dual_data.decode.classifiers import get_clf
+from dual_data.decode.mne_scores import run_mne_scores
 from dual_data.decode.my_mne import my_cross_val_multiscore
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from joblib import Parallel, delayed
@@ -189,19 +190,12 @@ def plot_scores_mat(scores_mat, figname, title):
     plt.show()
 
 
-if __name__ == "__main__":
-    args = sys.argv[1:]  # Exclude the script name from arguments
-    options = {k: v for k, v in (arg.split("=") for arg in args)}
-    options = set_options(**options)
+def run_mne_cross_temp(**kwargs):
+    options = set_options(**kwargs)
 
     task = options["task"]
-    # options = set_options()
 
-    # options["features"] = sys.argv[1]
-    # options["day"] = sys.argv[2]
-    # task = sys.argv[3]
-
-    X_days, y_days = get_X_y_days()
+    X_days, y_days = get_X_y_days(mouse=options["mouse"])
 
     X_days = preprocess_X(
         X_days,
@@ -213,12 +207,12 @@ if __name__ == "__main__":
 
     model = get_clf(**options)
 
-    options["task"] = "DPA"
+    # options["task"] = "DPA"
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)
 
-    options["task"] = task
-    X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
+    # options["task"] = task
+    # X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
 
     cv = options["n_out"]
 
@@ -242,9 +236,9 @@ if __name__ == "__main__":
     estimator = GeneralizingEstimator(model, n_jobs=1, scoring=scoring, verbose=False)
 
     start_time = time.time()
-    # scores_mat = get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1)
+    scores_mat = get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1)
 
-    scores_mat = get_temporal_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
+    # scores_mat = get_temporal_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
 
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
@@ -258,3 +252,10 @@ if __name__ == "__main__":
 
     title = options["day"] + " " + options["task"]
     plot_scores_mat(scores_mat, figname, title)
+
+
+if __name__ == "__main__":
+    args = sys.argv[1:]  # Exclude the script name from arguments
+    options = {k: v for k, v in (arg.split("=") for arg in args)}
+
+    run_mne_cross_temp(**options)
