@@ -1,9 +1,9 @@
-import numpy as np
-from scipy.stats import ttest_ind, ttest_1samp
-from sklearn.base import BaseEstimator, ClassifierMixin
-
 from copy import deepcopy
+
+import numpy as np
 from joblib import Parallel, delayed
+from scipy.stats import ttest_1samp, ttest_ind
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 # import .progressbar as pg
 

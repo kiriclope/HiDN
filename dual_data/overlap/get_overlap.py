@@ -7,6 +7,7 @@ import numpy as np
 import seaborn as sns
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
+from dual_data.common.plot_utils import save_fig
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.coefficients import get_coefs
 from dual_data.preprocess.helpers import avg_epochs, minmax_X_y
@@ -164,7 +165,7 @@ def run_get_overlap(**kwargs):
     plt.xlabel("Time (s)")
     plt.ylabel("Overlap")
 
-    plt.savefig(gv.figdir + figname + ".svg", dpi=300, format="svg")
+    save_fig(fig, figname)
 
 
 if __name__ == "__main__":

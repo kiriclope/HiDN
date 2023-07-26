@@ -1,12 +1,12 @@
+import copy
 import os
+import pickle as pkl
 
-import numpy as np
+import dual_data.common.constants as gv
 import matplotlib
 import matplotlib.pyplot as plt
-import pickle as pkl
-import copy
+import numpy as np
 import seaborn as sns
-import dual_data.common.constants as gv
 
 sns.set_context("poster")
 sns.set_style("ticks")
@@ -29,10 +29,10 @@ def add_vlines(ax=None):
 
 
 def save_fig(fig, figname, path=gv.figdir, format="svg", dpi="figure"):
-    fig = plt.figure(fig.number)
     if not os.path.isdir(path):
         os.makedirs(path)
 
+    pkl.dump(fig, open(path + "/" + figname + ".pkl", "wb"))
     plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
 
 
@@ -44,7 +44,7 @@ def pkl_load(name, path="."):
     return pkl.load(open(path + "/" + name, "rb"))
 
 
-def copy_fig(fig, ax):
+def copy_fig(fig, ax, vline=0):
     ax0 = fig.axes[0]
 
     # labels
@@ -87,23 +87,41 @@ def copy_fig(fig, ax):
     ax.set_xlim(x_lim)
     ax.set_ylim(y_lim)
 
+    if vline:
+        add_vlines(ax)
     # ax.autoscale()
 
 
-def concat_fig(figname, fig_list, dim=[1, 2]):
+def concat_fig(figname, figlist, dim=[1, 2], size=[2.427, 1.5], VLINE=1):
     fig, ax = plt.subplots(
-        dim[0], dim[1], figsize=(2.427 * dim[1], 1.5 * dim[0]), num=figname
+        dim[0], dim[1], figsize=(size[0] * dim[1], size[1] * dim[0]), num=figname
     )
 
-    fig_iter = iter(fig_list)
+    fig_iter = iter(figlist)
     for col in range(ax.shape[0]):
         try:
             for row in range(ax.shape[1]):
-                copy_fig(next(fig_iter), ax[col][row])
+                copy_fig(next(fig_iter), ax[col][row], VLINE)
         except:
-            copy_fig(next(fig_iter), ax[col])
+            copy_fig(next(fig_iter), ax[col], VLINE)
 
-    return fig
+    plt.tight_layout()
+    plt.show()
+    # return fig
+
+
+def plot_summary(pickle_files, H, W, figsize):
+    fig, axs = plt.subplots(H, W, figsize=figsize)
+
+    for i, ax in enumerate(axs.flatten()):
+        with open(pickle_files[i], "rb") as f:
+            fig = pkl.load(f)
+            ax.axis("off")  # do not show axis value
+            # Display the figure
+            ax.imshow(fig)
+
+    plt.tight_layout(True)
+    plt.show()
 
 
 if __name__ == "__main__":

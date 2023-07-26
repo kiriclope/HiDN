@@ -214,7 +214,7 @@ def get_X_y_mice(IF_RELOAD=0):
         X_mice = []
         y_mice = []
         for mouse in gv.mice:
-            X_days, y_days = get_X_y_days(mouse)
+            X_days, y_days = get_X_y_days(mouse, IF_RELOAD=1)
 
             X_mice.append(X_days)
             y_days["mouse"] = mouse

@@ -18,8 +18,8 @@ def plot_lick_rate(licks_counts, bin_edges, n_mice=1):
     add_vlines()
     plt.xlabel("Time (s)")
     plt.ylabel("Lick Rate (Hz)")
-    # plt.ylim([0, 5])
-    plt.xlim([0, 20])
+    plt.ylim([0, 5])
+    plt.xlim([0, 10])
     plt.show()
 
 

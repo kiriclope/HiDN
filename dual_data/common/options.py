@@ -72,7 +72,7 @@ def set_options(**kwargs):
     opts["n_aug"] = 1
 
     # adjust imbalance in trial types
-    opts["balance"] = True
+    opts["balance"] = False
     opts["imbalance"] = False
 
     ################################
@@ -127,7 +127,7 @@ def set_options(**kwargs):
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_in"] = 5
-    opts["inner_score"] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["inner_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # multiclass/label
     opts["multilabel"] = False
