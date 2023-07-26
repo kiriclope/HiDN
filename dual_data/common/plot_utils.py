@@ -98,12 +98,18 @@ def concat_fig(figname, figlist, dim=[1, 2], size=[2.427, 1.5], VLINE=1):
     )
 
     fig_iter = iter(figlist)
+    count = 0
     for col in range(ax.shape[0]):
         try:
             for row in range(ax.shape[1]):
-                copy_fig(next(fig_iter), ax[col][row], VLINE)
-        except:
-            copy_fig(next(fig_iter), ax[col], VLINE)
+                if count < len(figlist):
+                    copy_fig(next(fig_iter), ax[col][row], VLINE)
+                count += 1
+
+        except ValueError:
+            if count < len(figlist):
+                copy_fig(next(fig_iter), ax[col], VLINE)
+            count += 1
 
     plt.tight_layout()
     plt.show()

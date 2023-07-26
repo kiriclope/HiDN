@@ -55,6 +55,7 @@ def get_mean_overlap(X, y, coefs, model=None):
 def run_get_overlap(**kwargs):
     options = set_options(**kwargs)
     task = options["task"]
+    trials = options["trials"]
 
     try:
         options["day"] = int(options["day"])
@@ -64,6 +65,8 @@ def run_get_overlap(**kwargs):
     X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
 
     model = get_clf(**options)
+
+    options["trials"] = "correct"
 
     if options["features"] == "sample":
         options["task"] = "Dual"
@@ -100,6 +103,7 @@ def run_get_overlap(**kwargs):
 
     options["task"] = task
     options["features"] = "sample"
+    options["trials"] = trials
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     # X_S1_S2 = minmax_X_y(X_S1_S2, y_S1_S2)

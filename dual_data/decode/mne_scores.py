@@ -147,22 +147,14 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
 
 def run_mne_scores(**kwargs):
     options = set_options(**kwargs)
-
-    print(options["bootstrap"])
-
-    # options = set_options()
-    # options["features"] = sys.argv[1]
-    # options["day"] = sys.argv[2]
-    # task = sys.argv[3]
-
     task = options["task"]
 
     try:
         options["day"] = int(options["day"])
-    except:
+    except ValueError:
         pass
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
+    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
 
     X_days = preprocess_X(
         X_days,

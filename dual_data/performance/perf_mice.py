@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 from dual_data.common import constants as gv
-from dual_data.common.get_data import get_X_y_days, get_X_y_mice
+from dual_data.common.get_data import get_X_y_mice
+from dual_data.common.options import set_options
 from dual_data.common.plot_utils import pkl_save, save_fig
 from dual_data.stats.bootstrap import my_boots_ci
 
@@ -120,7 +120,7 @@ def plot_perf_days(perf_mice, ci_mice, perf_type):
 
 
 def run_perf_mice(**kwargs):
-    _, y_days = get_X_y_mice(IF_RELOAD=1)
+    _, y_days = get_X_y_mice(IF_RELOAD=0)
 
     options = set_options(**kwargs)
 
