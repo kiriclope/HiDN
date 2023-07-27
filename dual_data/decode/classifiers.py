@@ -9,8 +9,12 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import BaggingClassifier
 from sklearn.feature_selection import SelectFpr, f_classif
 from sklearn.linear_model import LogisticRegressionCV, SGDClassifier
-from sklearn.model_selection import (GridSearchCV, LeaveOneOut,
-                                     RepeatedStratifiedKFold, StratifiedKFold)
+from sklearn.model_selection import (
+    GridSearchCV,
+    LeaveOneOut,
+    RepeatedStratifiedKFold,
+    StratifiedKFold,
+)
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 from sklearn.svm import LinearSVC
 
@@ -183,10 +187,11 @@ def get_clf(**kwargs):
         if "bolasso" in kwargs["method"]:
             pipe = bolasso(
                 pipe,
+                penalty=kwargs["bolasso_penalty"],
                 n_boots=kwargs["n_boots"],
                 confidence=kwargs["pval"],
                 n_jobs=kwargs["n_jobs"],
-                verbose=0,
+                verbose=1,
             )
 
         if "bootstrap" in kwargs["method"]:

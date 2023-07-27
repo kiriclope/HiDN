@@ -36,7 +36,7 @@ def set_options(**kwargs):
     ################################
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
-    opts["n_boots"] = 100  # for bootstrap
+    opts["n_boots"] = 1000  # for bootstrap
     opts["n_repeats"] = 10  # for repeated Kfold
 
     opts["avg_coefs"] = True
@@ -81,6 +81,8 @@ def set_options(**kwargs):
     opts["clf"] = "log_loss"  # "log_loss" or "LinearSVC" or "LDA" or "SGD"
     opts["method"] = None  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
 
+    opts["bolasso_penalty"] = "l2"
+
     # precision
     opts["tol"] = 1e-3
     opts["max_iter"] = int(1e4)
@@ -96,7 +98,7 @@ def set_options(**kwargs):
     opts["refit"] = True  # default true
     opts["multi_class"] = "auto"  # 'auto' or 'multinomial'
 
-    opts["n_lambda"] = 10
+    opts["n_lambda"] = 20
     opts["alpha"] = 0.5  # between 0 and 1
     opts["n_alpha"] = 50
 
@@ -122,12 +124,12 @@ def set_options(**kwargs):
     opts["random_state"] = np.random.randint(1e4)
     opts["out_fold"] = "repeated"  # stratified, loo, repeated
     opts["n_out"] = 5
-    opts["outer_score"] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["outer_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_in"] = 5
-    opts["inner_score"] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["inner_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # multiclass/label
     opts["multilabel"] = False

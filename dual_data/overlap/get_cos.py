@@ -129,6 +129,7 @@ def run_get_cos(**kwargs)
     cbar.set_label("dF")
     # cbar.set_ticks([-1, 0.25, 0.5, 0.75, 1])
 
+
 if __name__ == "__main__":
     options["features"] = sys.argv[1]
     options["day"] = sys.argv[2]

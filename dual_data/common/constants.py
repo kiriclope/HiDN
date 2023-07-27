@@ -143,9 +143,9 @@ bins_DIST = bins[int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * fram
 
 bins_MD = bins[int((t_MD[0] + T_WINDOW) * frame_rate) : int(t_MD[1] * frame_rate)]
 
-bins_MD = bins[
-    int((t_MD[0] - T_WINDOW) * frame_rate) : int((t_MD[0] + T_WINDOW) * frame_rate)
-]
+# bins_MD = bins[
+#     int((t_MD[0] - T_WINDOW) * frame_rate) : int((t_MD[0] + T_WINDOW) * frame_rate)
+# ]
 
 bins_CUE = bins[int((t_CUE[0] + T_WINDOW) * frame_rate) : int(t_CUE[1] * frame_rate)]
 
