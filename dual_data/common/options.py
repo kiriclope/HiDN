@@ -81,8 +81,6 @@ def set_options(**kwargs):
     opts["clf"] = "log_loss"  # "log_loss" or "LinearSVC" or "LDA" or "SGD"
     opts["method"] = None  # None or 'bolasso' or 'bootstrap' or 'gridsearch'
 
-    opts["bolasso_penalty"] = "l2"
-
     # precision
     opts["tol"] = 1e-3
     opts["max_iter"] = int(1e4)
@@ -93,6 +91,7 @@ def set_options(**kwargs):
 
     # penalty
     opts["penalty"] = "l1"  # "l1", "l2" or elasticnet
+    opts["bolasso_penalty"] = "l2"
     opts["solver"] = "liblinear"  # liblinear or saga
     opts["class_weight"] = "balanced"  # "balanced"  # 'balanced' or None
     opts["refit"] = True  # default true
@@ -114,7 +113,7 @@ def set_options(**kwargs):
 
     # prescreening
     opts["prescreen"] = False
-    opts["pval"] = 0.05
+    opts["pval"] = 0.001
 
     # PCA
     opts["pca"] = False
