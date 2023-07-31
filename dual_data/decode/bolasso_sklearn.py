@@ -6,10 +6,18 @@ from sklearn.ensemble import BaggingClassifier
 
 class bolasso(BaseEstimator, ClassifierMixin):
     def __init__(
-        self, clf, penalty="l2", n_boots=1000, confidence=0.05, n_jobs=None, verbose=0
+        self,
+        clf,
+        penalty="l2",
+        n_boots=1000,
+        pval=0.05,
+        confidence=0.05,
+        n_jobs=None,
+        verbose=0,
     ):
         self.model_ = clf
         self.penalty = penalty
+        self.pval = pval
         self.confidence = confidence
 
         self.n_boots = n_boots
@@ -24,7 +32,7 @@ class bolasso(BaseEstimator, ClassifierMixin):
 
             if "filter" in self.model_.named_steps.keys():
                 pval = model_boot.named_steps["filter"].pvalues_
-                idx = pval <= self.confidence
+                idx = pval <= self.pval
                 coef = model_boot.named_steps["clf"].coef_[0]
                 self.bag_coef_[i_boot, idx] = coef
             else:
@@ -59,15 +67,13 @@ class bolasso(BaseEstimator, ClassifierMixin):
 
         if "filter" in self.model_.named_steps.keys():
             pval = self.model_.named_steps["filter"].pvalues_
-            idx = pval <= self.confidence
+            idx = pval <= self.pval
 
             coefs = self.coef_[self.fs_idx_]
             coefs[idx] = self.model_.named_steps["clf"].coef_[0]
             self.coef_[self.fs_idx_] = coefs
         else:
             self.coef_[self.fs_idx_] = self.model_.named_steps["clf"].coef_[0]
-
-        print("coef", self.coef_.shape, "non zero", np.sum(self.fs_idx_))
 
         self.intercept_ = self.model_.named_steps["clf"].intercept_
 
@@ -105,6 +111,15 @@ class bolasso(BaseEstimator, ClassifierMixin):
         self.fit_model(X, y)
         # get coef
         self.get_coef()
+
+        print(
+            "samples",
+            y.shape,
+            "features",
+            self.coef_.shape,
+            "non zero",
+            np.sum(self.fs_idx_),
+        )
 
         return self
 

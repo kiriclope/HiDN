@@ -1,6 +1,7 @@
 import copy
 import os
 import pickle as pkl
+import string
 
 import dual_data.common.constants as gv
 import matplotlib
@@ -44,7 +45,7 @@ def pkl_load(name, path="."):
     return pkl.load(open(path + "/" + name, "rb"))
 
 
-def copy_fig(fig, ax, vline=0):
+def copy_fig(fig, ax, vline=0, label="A"):
     ax0 = fig.axes[0]
 
     # labels
@@ -91,25 +92,34 @@ def copy_fig(fig, ax, vline=0):
         add_vlines(ax)
     # ax.autoscale()
 
+    if label is not None:
+        print("label", label)
+        ax.text(
+            -0.1, 1.1, label, transform=ax.transAxes, fontsize=14, va="top", ha="right"
+        )
 
-def concat_fig(figname, figlist, dim=[1, 2], size=[2.427, 1.5], VLINE=1):
+
+def concat_fig(figname, figlist, dim=[1, 2], size=[2.427, 1.5], VLINE=1, LABEL=None):
     fig, ax = plt.subplots(
         dim[0], dim[1], figsize=(size[0] * dim[1], size[1] * dim[0]), num=figname
     )
 
     fig_iter = iter(figlist)
     count = 0
-    for col in range(ax.shape[0]):
-        try:
+
+    labels = list(string.ascii_uppercase[: (dim[0] + dim[1])])
+
+    if np.array(ax.shape).shape != (1,):
+        for col in range(ax.shape[0]):
             for row in range(ax.shape[1]):
                 if count < len(figlist):
-                    copy_fig(next(fig_iter), ax[col][row], VLINE)
-                count += 1
-
-        except ValueError:
+                    copy_fig(next(fig_iter), ax[col][row], VLINE, label=labels[count])
+                    count += 1
+    else:
+        for row in range(ax.shape[0]):
             if count < len(figlist):
-                copy_fig(next(fig_iter), ax[col], VLINE)
-            count += 1
+                copy_fig(next(fig_iter), ax[row], VLINE, label=labels[count])
+                count += 1
 
     plt.tight_layout()
     plt.show()

@@ -189,7 +189,8 @@ def get_clf(**kwargs):
                 pipe,
                 penalty=kwargs["bolasso_penalty"],
                 n_boots=kwargs["n_boots"],
-                confidence=kwargs["pval"],
+                pval=kwargs["pval"],
+                confidence=kwargs["bolasso_pval"],
                 n_jobs=kwargs["n_jobs"],
                 verbose=1,
             )

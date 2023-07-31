@@ -22,9 +22,11 @@ def get_coef_feat(X_days, y_days, **options):
     if options["features"] == "sample":
         options["task"] = "Dual"
         options["epoch"] = ["ED"]
+        options["overlap"] = "sample"
     elif options["features"] == "distractor":
         options["task"] = "Dual"
         options["epoch"] = ["MD"]
+        options["overlap"] = "distractor"
 
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X_S1_S2, epochs=options["epoch"])
@@ -63,8 +65,10 @@ def run_get_overlap(**kwargs):
     trials = options["trials"]
 
     eps = 1
+    options["overlap"] = "distractor"
     if options["features"] == "sample":
         eps = -1
+        options["overlap"] = "sample"
 
     try:
         options["day"] = int(options["day"])

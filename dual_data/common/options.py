@@ -24,7 +24,7 @@ def set_options(**kwargs):
     opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
     opts["day"] = "first"  # int or 'first', 'middle', 'last'
 
-    opts["trials"] = "correct"  # 'correct', 'incorrect'
+    opts["trials"] = ""  # 'correct', 'incorrect'
 
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
@@ -112,8 +112,9 @@ def set_options(**kwargs):
     opts["l1_ratio"] = 0.15
 
     # prescreening
-    opts["prescreen"] = False
-    opts["pval"] = 0.001
+    opts["prescreen"] = 1
+    opts["pval"] = 0.05
+    opts["bolasso_pval"] = 0.05
 
     # PCA
     opts["pca"] = False
