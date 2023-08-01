@@ -83,6 +83,21 @@ def get_coefs(model, X, y, **options):
 
         if options["standardize"] is not None:
             coefs = rescale_coefs(model, coefs)
+    elif options["corr"]:
+        idx = model.named_steps["corr"].to_drop
+        print(len(idx))
+        coefs = np.zeros(X.shape[1])
+        coef = model.named_steps["clf"].coef_[0]
+        coefs[idx] = 0
+
+        all_indices = set(range(len(coefs)))  # All indices
+        idx_set = set(idx)  # Indices in idx
+        remaining_indices = list(
+            all_indices - idx_set
+        )  # Remaining indices, equivalent to ~idx in your usage
+
+        # Then use remaining_indices, for example:
+        coefs[remaining_indices] = coef
 
         # print("trials", X.shape[0], "coefs", coefs.shape, "non_zero", coef.shape)
     else:

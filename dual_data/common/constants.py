@@ -137,11 +137,11 @@ T_WINDOW = 0.25
 bins_BL = bins[int(t_BL[0] * frame_rate) : int(t_BL[1] * frame_rate)]
 bins_STIM = bins[int((t_STIM[0] + T_WINDOW) * frame_rate) : int(t_STIM[1] * frame_rate)]
 
-bins_ED = bins[int((t_ED[0] + T_WINDOW) * frame_rate) : int(t_ED[1] * frame_rate)]
+bins_ED = bins[int((t_ED[0]) * frame_rate) : int((t_ED[1] + T_WINDOW) * frame_rate)]
 
 bins_DIST = bins[int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * frame_rate)]
 
-bins_MD = bins[int((t_MD[0] + T_WINDOW) * frame_rate) : int(t_MD[1] * frame_rate)]
+bins_MD = bins[int((t_MD[0]) * frame_rate) : int((t_MD[1] + T_WINDOW) * frame_rate)]
 
 # bins_MD = bins[
 #     int((t_MD[0] - T_WINDOW) * frame_rate) : int((t_MD[0] + T_WINDOW) * frame_rate)

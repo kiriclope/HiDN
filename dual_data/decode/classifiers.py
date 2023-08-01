@@ -1,8 +1,10 @@
 import numpy as np
+import pandas as pd
 from dual_data.decode.bolasso_sklearn import bolasso
 from dual_data.decode.SGDClassifierCV import SGDClassifierCV
 from imblearn.over_sampling import SVMSMOTE
 from imblearn.pipeline import Pipeline
+from scipy.spatial.distance import correlation
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -19,6 +21,24 @@ from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 from sklearn.svm import LinearSVC
 
 # from sklearn.pipeline import Pipeline
+
+
+class CorrelationThreshold(BaseEstimator, TransformerMixin):
+    def __init__(self, threshold=0.9):
+        self.threshold = threshold
+
+    def fit(self, X, y=None):
+        df = pd.DataFrame(X)
+        corr_mat = df.corr().abs()
+        upper = corr_mat.where(np.triu(np.ones(corr_mat.shape), k=1).astype(np.bool_))
+        self.to_drop = [
+            column for column in upper.columns if any(upper[column] > self.threshold)
+        ]
+        return self
+
+    def transform(self, X, y=None):
+        df = pd.DataFrame(X)
+        return df.drop(df.columns[self.to_drop], axis=1)
 
 
 class CustomScaler(BaseEstimator, TransformerMixin):
@@ -86,6 +106,7 @@ def get_clf(**kwargs):
             multi_class=kwargs["multi_class"],
             n_jobs=None,
             verbose=0,
+            random_state=kwargs["random_state"],
         )
 
     if kwargs["clf"] == "LinearSVC":
@@ -179,6 +200,8 @@ def get_clf(**kwargs):
         pipe.append(("bal", SVMSMOTE(random_state=kwargs["random_state"])))
     if kwargs["pca"]:
         pipe.append(("pca", PCA(n_components=kwargs["n_comp"])))
+    if kwargs["corr"]:
+        pipe.append(("corr", CorrelationThreshold(threshold=kwargs["threshold"])))
 
     pipe.append(("clf", clf))
     pipe = Pipeline(pipe)

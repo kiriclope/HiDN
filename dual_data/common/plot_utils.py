@@ -45,7 +45,7 @@ def pkl_load(name, path="."):
     return pkl.load(open(path + "/" + name, "rb"))
 
 
-def copy_fig(fig, ax, vline=0, label="A"):
+def copy_fig(fig, ax, vline=0):
     ax0 = fig.axes[0]
 
     # labels
@@ -92,33 +92,61 @@ def copy_fig(fig, ax, vline=0, label="A"):
         add_vlines(ax)
     # ax.autoscale()
 
-    if label is not None:
-        print("label", label)
-        ax.text(
-            -0.1, 1.1, label, transform=ax.transAxes, fontsize=14, va="top", ha="right"
-        )
 
-
-def concat_fig(figname, figlist, dim=[1, 2], size=[2.427, 1.5], VLINE=1, LABEL=None):
+def concat_fig(
+    figname,
+    figlist,
+    dim=[1, 2],
+    size=[2.427, 1.5],
+    VLINE=1,
+    LABEL=1,
+    LABEL_POS=[-0.2, 1.2],
+):
     fig, ax = plt.subplots(
-        dim[0], dim[1], figsize=(size[0] * dim[1], size[1] * dim[0]), num=figname
+        dim[0],
+        dim[1],
+        figsize=(size[0] * dim[1], size[1] * dim[0]),
+        num=figname,
     )
 
     fig_iter = iter(figlist)
     count = 0
 
-    labels = list(string.ascii_uppercase[: (dim[0] + dim[1])])
+    labels = list(string.ascii_uppercase[: len(figlist)])
 
     if np.array(ax.shape).shape != (1,):
         for col in range(ax.shape[0]):
             for row in range(ax.shape[1]):
                 if count < len(figlist):
-                    copy_fig(next(fig_iter), ax[col][row], VLINE, label=labels[count])
+                    copy_fig(next(fig_iter), ax[col][row], VLINE)
+
+                    if LABEL:
+                        ax[col][row].text(
+                            LABEL_POS[0],
+                            LABEL_POS[1],
+                            labels[count],
+                            transform=ax[col][row].transAxes,
+                            va="top",
+                            ha="right",
+                            weight="bold",
+                        )
+
                     count += 1
     else:
         for row in range(ax.shape[0]):
             if count < len(figlist):
-                copy_fig(next(fig_iter), ax[row], VLINE, label=labels[count])
+                copy_fig(next(fig_iter), ax[row], VLINE)
+                if LABEL:
+                    ax[count].text(
+                        LABEL_POS[0],
+                        LABEL_POS[1],
+                        labels[count],
+                        transform=ax[count].transAxes,
+                        va="top",
+                        ha="right",
+                        weight="bold",
+                    )
+
                 count += 1
 
     plt.tight_layout()

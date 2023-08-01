@@ -99,11 +99,18 @@ def run_mne_coefs(**kwargs):
 
     # coefs_sample = np.mean(coefs_sample, -1)
     # coefs_dist = np.mean(coefs_dist, -1)
-    cos_mat = cosine_similarity(coefs_sample, coefs_dist)
-
-    plot_cos_mat(cos_mat, "cosine")
+    # cos_mat = cosine_similarity(coefs_sample, coefs_dist)
+    # plot_cos_mat(cos_mat, "cosine")
 
     theta = np.arctan2(coefs_dist, coefs_sample)
+
+    options["features"] = "sample"
+    options["task"] = "DPA"
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
+    print("X", X.shape, "y", y.shape)
+
+    return X, y, theta
 
 
 if __name__ == "__main__":

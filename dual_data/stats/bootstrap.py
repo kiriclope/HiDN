@@ -1,6 +1,6 @@
 import numpy as np
-from sklearn.utils import resample
 from joblib import Parallel, delayed
+from sklearn.utils import resample
 
 from . import progressbar as pgb
 

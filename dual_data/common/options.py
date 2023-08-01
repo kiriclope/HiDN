@@ -55,7 +55,7 @@ def set_options(**kwargs):
     opts["epoch_rwd"] = ["MD"]
 
     # scaling fluo
-    opts["scaler_BL"] = None  # standard, robust, center
+    opts["scaler_BL"] = "standard"  # standard, robust, center
     opts["center_BL"] = None
     opts["scale_BL"] = None
     opts["avg_mean_BL"] = 0
@@ -105,20 +105,24 @@ def set_options(**kwargs):
     opts["shrinkage"] = "auto"
 
     # standardization
-    opts["standardize"] = None  # 'standard', 'robust', 'center', None
+    opts["standardize"] = "standard"  # 'standard', 'robust', 'center', None
 
     # params for SGD
     opts["learning_rate"] = "optimal"  # optimal, adaptative
     opts["l1_ratio"] = 0.15
 
     # prescreening
-    opts["prescreen"] = 1
+    opts["prescreen"] = 0
     opts["pval"] = 0.05
     opts["bolasso_pval"] = 0.05
 
     # PCA
-    opts["pca"] = False
+    opts["pca"] = 0
     opts["n_comp"] = None  # None or mle or int
+
+    # corr
+    opts["corr"] = 1
+    opts["threshold"] = 0.9
 
     # outer cv for score estimates
     opts["random_state"] = np.random.randint(1e4)
@@ -129,7 +133,7 @@ def set_options(**kwargs):
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_in"] = 5
-    opts["inner_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["inner_score"] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted
 
     # multiclass/label
     opts["multilabel"] = False

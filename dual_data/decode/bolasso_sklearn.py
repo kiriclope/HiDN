@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.stats import ttest_1samp
+from scipy.stats import bootstrap, ttest_1samp
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import BaggingClassifier
 
@@ -29,12 +29,18 @@ class bolasso(BaseEstimator, ClassifierMixin):
 
         for i_boot in range(self.n_boots):
             model_boot = self.bag_.estimators_[i_boot]
+            coef = model_boot.named_steps["clf"].coef_[0]
 
             if "filter" in self.model_.named_steps.keys():
                 pval = model_boot.named_steps["filter"].pvalues_
                 idx = pval <= self.pval
-                coef = model_boot.named_steps["clf"].coef_[0]
                 self.bag_coef_[i_boot, idx] = coef
+            elif "corr" in self.model_.named_steps.keys():
+                idx = model_boot.named_steps["corr"].to_drop
+                all_indices = set(range(self.n_feat))  # All indices
+                idx_set = set(idx)  # Indices in idx
+                remaining_indices = list(all_indices - idx_set)
+                self.bag_coef_[i_boot, remaining_indices] = coef
             else:
                 self.bag_coef_[i_boot] = model_boot.named_steps["clf"].coef_[0]
 
@@ -48,6 +54,23 @@ class bolasso(BaseEstimator, ClassifierMixin):
             print("p_val", self.p_val_.shape)
 
         self.fs_idx_ = self.p_val_ <= self.confidence
+
+        # non parametric
+        # conf_int = np.percentile(
+        #     self.bag_coef_,
+        #     [100 * self.confidence / 2, 100 * (1 - self.confidence / 2)],
+        #     axis=0,
+        # )
+
+        # print(conf_int.shape)
+        # self.fs_idx_ = (conf_int[0] > 0) | (conf_int[1] < 0)
+
+        # Calculate the consistency of non zero elements
+        # consistency = np.mean(np.abs(self.bag_coef_) >= 1e-5, 0)
+        # print("consistency", consistency.shape)
+
+        # Filter variables that are consistently non-zero
+        # self.fs_idx_ = consistency > (1 - self.confidence)
 
         if self.verbose:
             print("significant", np.sum(self.fs_idx_))
@@ -72,6 +95,16 @@ class bolasso(BaseEstimator, ClassifierMixin):
             coefs = self.coef_[self.fs_idx_]
             coefs[idx] = self.model_.named_steps["clf"].coef_[0]
             self.coef_[self.fs_idx_] = coefs
+
+        elif "corr" in self.model_.named_steps.keys():
+            idx_drop = self.model_.named_steps["corr"].to_drop
+            all_indices = set(range(np.sum(self.fs_idx_)))
+            idx_keep = list(all_indices - set(idx_drop))
+
+            coefs = self.coef_[self.fs_idx_]
+            coefs[idx_keep] = self.model_.named_steps["clf"].coef_[0]
+            self.coef_[self.fs_idx_] = coefs
+
         else:
             self.coef_[self.fs_idx_] = self.model_.named_steps["clf"].coef_[0]
 
