@@ -5,6 +5,7 @@ import mat73
 import numpy as np
 import pandas as pd
 from dual_data.common import constants as gv
+from dual_data.common import options
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from scipy.io import loadmat
 
@@ -238,6 +239,15 @@ def get_X_y_S1_S2(X, y, **kwargs):
     )
     print("##########################################")
 
+    if kwargs["preprocess"]:
+        X = preprocess_X(
+            X,
+            scaler=kwargs["scaler_BL"],
+            avg_mean=kwargs["avg_mean_BL"],
+            avg_noise=kwargs["avg_noise_BL"],
+            unit_var=kwargs["unit_var_BL"],
+        )
+
     idx_trials = True
     if kwargs["trials"] == "correct":
         idx_trials = ~y.response.str.contains("incorrect")
@@ -437,5 +447,14 @@ def get_X_y_S1_S2(X, y, **kwargs):
         )
     else:
         y_S1_S2 = np.hstack((np.zeros(X_S1.shape[0]), np.ones(X_S2.shape[0])))
+
+    # if kwargs["preprocess"]:
+    #     X_S1_S2 = preprocess_X(
+    #         X_S1_S2,
+    #         scaler=kwargs["scaler_BL"],
+    #         avg_mean=kwargs["avg_mean_BL"],
+    #         avg_noise=kwargs["avg_noise_BL"],
+    #         unit_var=kwargs["unit_var_BL"],
+    #     )
 
     return X_S1_S2, y_S1_S2

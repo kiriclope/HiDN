@@ -1,7 +1,8 @@
 import numpy as np
-from scipy.stats import bootstrap, ttest_1samp
+from scipy.stats import ttest_1samp
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.ensemble import BaggingClassifier
+from sklearn.feature_selection import SelectFromModel
 
 
 class bolasso(BaseEstimator, ClassifierMixin):
@@ -31,16 +32,29 @@ class bolasso(BaseEstimator, ClassifierMixin):
             model_boot = self.bag_.estimators_[i_boot]
             coef = model_boot.named_steps["clf"].coef_[0]
 
+            coef[np.abs(coef) <= 1e-5] = 0
+            # selector = SelectFromModel(model_boot.named_steps["clf"], prefit=True)
+
+            # idx = selector.get_support(indices=True)
+            # print("idx", idx.shape, "n_feat", self.n_feat, "coef", coef.shape)
+            # self.bag_coef_[i_boot, idx] = coef[idx]
+
             if "filter" in self.model_.named_steps.keys():
                 pval = model_boot.named_steps["filter"].pvalues_
                 idx = pval <= self.pval
                 self.bag_coef_[i_boot, idx] = coef
-            elif "corr" in self.model_.named_steps.keys():
+
+            elif "corr" in model_boot.named_steps.keys():
                 idx = model_boot.named_steps["corr"].to_drop
                 all_indices = set(range(self.n_feat))  # All indices
                 idx_set = set(idx)  # Indices in idx
                 remaining_indices = list(all_indices - idx_set)
                 self.bag_coef_[i_boot, remaining_indices] = coef
+
+            elif "pca" in model_boot.named_steps.keys():
+                n_idx = model_boot.named_steps["pca"].n_components_
+                self.bag_coef_[i_boot, :n_idx] = coef
+
             else:
                 self.bag_coef_[i_boot] = model_boot.named_steps["clf"].coef_[0]
 
@@ -94,6 +108,7 @@ class bolasso(BaseEstimator, ClassifierMixin):
 
             coefs = self.coef_[self.fs_idx_]
             coefs[idx] = self.model_.named_steps["clf"].coef_[0]
+
             self.coef_[self.fs_idx_] = coefs
 
         elif "corr" in self.model_.named_steps.keys():
@@ -105,8 +120,16 @@ class bolasso(BaseEstimator, ClassifierMixin):
             coefs[idx_keep] = self.model_.named_steps["clf"].coef_[0]
             self.coef_[self.fs_idx_] = coefs
 
+        elif "pca" in self.model_.named_steps.keys():
+            n_idx = self.model_.named_steps["pca"].n_components_
+            coefs = self.coef_[self.fs_idx_]
+            coefs[:n_idx] = self.model_.named_steps["clf"].coef_[0]
+            self.coef_[self.fs_idx_] = coefs
+
         else:
             self.coef_[self.fs_idx_] = self.model_.named_steps["clf"].coef_[0]
+
+        self.coef_[np.abs(self.coef_) <= 1e-5] = 0
 
         self.intercept_ = self.model_.named_steps["clf"].intercept_
 

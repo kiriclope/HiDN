@@ -1,10 +1,10 @@
 import numpy as np
-from scipy.stats import norm, circmean
+from dual_data.common import constants as gv
+from scipy import stats
+from scipy.stats import circmean, norm
 from sklearn.preprocessing import MinMaxScaler
 
 # from scipy.signal import savgol_filter, detrend
-
-from dual_data.common import constants as gv
 
 
 def minmax_X_y(X, y):
@@ -224,6 +224,7 @@ def preprocess_X(
         "UNIT VAR",
         bool(unit_var),
     )
+    print("##########################################")
 
     if return_center_scale:
         return X_scale, center, scale

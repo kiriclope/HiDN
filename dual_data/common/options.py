@@ -19,12 +19,12 @@ def set_options(**kwargs):
     ################################
     # task param
     ################################
-    opts["mouse"] = "JawsM18"
+    opts["mouse"] = "JawsM15"
     opts["tasks"] = np.array(["DPA", "DualGo", "DualNoGo"])
     opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
     opts["day"] = "first"  # int or 'first', 'middle', 'last'
 
-    opts["trials"] = ""  # 'correct', 'incorrect'
+    opts["trials"] = "correct"  # 'correct', 'incorrect'
 
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
@@ -55,11 +55,12 @@ def set_options(**kwargs):
     opts["epoch_rwd"] = ["MD"]
 
     # scaling fluo
-    opts["scaler_BL"] = "standard"  # standard, robust, center
+    opts["preprocess"] = 0
+    opts["scaler_BL"] = None  # standard, robust, center
     opts["center_BL"] = None
     opts["scale_BL"] = None
     opts["avg_mean_BL"] = 0
-    opts["avg_noise_BL"] = 1
+    opts["avg_noise_BL"] = 0
     opts["unit_var_BL"] = 1
     opts["return_center_scale"] = 0
 
@@ -72,7 +73,7 @@ def set_options(**kwargs):
     opts["n_aug"] = 1
 
     # adjust imbalance in trial types
-    opts["balance"] = True
+    opts["balance"] = False
     opts["imbalance"] = False
 
     ################################
@@ -91,28 +92,28 @@ def set_options(**kwargs):
 
     # penalty
     opts["penalty"] = "l1"  # "l1", "l2" or elasticnet
+    opts["alpha"] = 0.5  # between 0 and 1
     opts["bolasso_penalty"] = "l2"
     opts["solver"] = "liblinear"  # liblinear or saga
     opts["class_weight"] = "balanced"  # "balanced"  # 'balanced' or None
     opts["refit"] = True  # default true
     opts["multi_class"] = "auto"  # 'auto' or 'multinomial'
 
-    opts["n_lambda"] = 20
-    opts["alpha"] = 0.5  # between 0 and 1
-    opts["n_alpha"] = 50
-
     # shrinkage for LDA
     opts["shrinkage"] = "auto"
 
     # standardization
-    opts["standardize"] = "standard"  # 'standard', 'robust', 'center', None
+    opts["standardize"] = "robust"  # 'standard', 'robust', 'center', None
 
     # params for SGD
     opts["learning_rate"] = "optimal"  # optimal, adaptative
     opts["l1_ratio"] = 0.15
 
+    ################################
+    # Dimensionality reduction
+    ################################
     # prescreening
-    opts["prescreen"] = 0
+    opts["prescreen"] = 1
     opts["pval"] = 0.05
     opts["bolasso_pval"] = 0.05
 
@@ -121,9 +122,12 @@ def set_options(**kwargs):
     opts["n_comp"] = None  # None or mle or int
 
     # corr
-    opts["corr"] = 1
-    opts["threshold"] = 0.9
+    opts["corr"] = 0
+    opts["threshold"] = 0.25
 
+    ################################
+    # fit
+    ################################
     # outer cv for score estimates
     opts["random_state"] = np.random.randint(1e4)
     opts["out_fold"] = "repeated"  # stratified, loo, repeated
@@ -133,7 +137,9 @@ def set_options(**kwargs):
     # inner cv for hyperparam tuning
     opts["in_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_in"] = 5
-    opts["inner_score"] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts[
+        "inner_score"
+    ] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted, neg_log_loss
 
     # multiclass/label
     opts["multilabel"] = False
@@ -142,6 +148,9 @@ def set_options(**kwargs):
     opts.update(kwargs)
 
     # gridsearch params
+    opts["n_lambda"] = 20
+    opts["n_alpha"] = 50
+
     opts["Cs"] = np.logspace(-4, 4, opts["n_lambda"])
     opts["alphas"] = np.linspace(0, 1, opts["n_alpha"])
 

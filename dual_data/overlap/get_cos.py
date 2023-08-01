@@ -48,6 +48,10 @@ def circular_convolution(signal, windowSize=10, axis=-1):
     return smooth_signal
 
 
+def unit_vector(vector):
+    return vector / np.linalg.norm(vector)
+
+
 def cos_between(v1, v2):
     """Returns the angle in radians between vectors 'v1' and 'v2'"""
 
@@ -64,7 +68,7 @@ def run_get_cos(**kwargs):
     except:
         pass
 
-    X_days, y_days = get_X_y_days(IF_RELOAD=0)
+    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
 
     model = get_clf(**options)
 
@@ -95,20 +99,12 @@ def run_get_cos(**kwargs):
     idx = np.arange(X_avg.shape[1])
     print("non zeros", idx.shape)
 
-    theta = np.arctan2(dist_coefs[idx], sample_coefs[idx])
+    theta = np.arctan2(unit_vector(dist_coefs[idx]), unit_vector(sample_coefs[idx]))
     print(theta.shape)
 
     options["task"] = task
 
-    X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-
-    X_S1_S2 = preprocess_X(
-        X_S1_S2,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
 
     # X_avg = avg_epochs(X_S1_S2, epochs=["STIM"])
 
@@ -117,9 +113,9 @@ def run_get_cos(**kwargs):
 
     # X = X_S1_S2
     # X = X_S1_S2[:, idx]
-    X = X_S1_S2[:, index_order, :]
+    X = X[:, index_order, :]
     print(X.shape)
-    return X, y_S1_S2
+    return X, y
 
 
 def plot_bump(X, y, sample, trial, windowSize=10):
@@ -149,7 +145,7 @@ def plot_bump(X, y, sample, trial, windowSize=10):
 
     fig, ax = plt.subplots(1, 1)
     im = ax.imshow(
-        np.roll(X_scaled, 180, axis=0),
+        np.roll(X_scaled, 0, axis=0),
         interpolation="lanczos",
         origin="lower",
         cmap="jet",
