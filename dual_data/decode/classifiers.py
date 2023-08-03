@@ -9,7 +9,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import BaggingClassifier
-from sklearn.feature_selection import SelectFpr, f_classif
+from sklearn.feature_selection import SelectFdr, SelectFpr, SelectFwe, f_classif
 from sklearn.linear_model import LogisticRegressionCV, SGDClassifier
 from sklearn.model_selection import (
     GridSearchCV,
@@ -109,7 +109,7 @@ def get_clf(**kwargs):
             random_state=kwargs["random_state"],
         )
 
-    if kwargs["clf"] == "LinearSVC":
+    if kwargs["clf"] == "SVM":
         clf = LinearSVC(
             penalty=kwargs["penalty"],
             loss="squared_hinge",
@@ -184,6 +184,7 @@ def get_clf(**kwargs):
 
     pipe = []
 
+    # scaling
     if kwargs["standardize"] == "custom":
         pipe.append(("scaler", CustomScaler()))
     if kwargs["standardize"] == "minmax":
@@ -193,15 +194,25 @@ def get_clf(**kwargs):
     if kwargs["standardize"] == "center":
         pipe.append(("scaler", StandardScaler(with_std=False)))
     if kwargs["standardize"] == "robust":
-        pipe.append(("scaler", RobustScaler(unit_variance=False)))
-    if kwargs["prescreen"]:
+        pipe.append(("scaler", RobustScaler(unit_variance=kwargs["unit_var"])))
+
+    # prescreen
+    if kwargs["prescreen"] == "fpr":
         pipe.append(("filter", SelectFpr(f_classif, alpha=kwargs["pval"])))
-    if kwargs["imbalance"]:
-        pipe.append(("bal", SVMSMOTE(random_state=kwargs["random_state"])))
+    if kwargs["prescreen"] == "fdr":
+        pipe.append(("filter", SelectFdr(f_classif, alpha=kwargs["pval"])))
+    if kwargs["prescreen"] == "fwe":
+        pipe.append(("filter", SelectFwe(f_classif, alpha=kwargs["pval"])))
+
+    # dim red
     if kwargs["pca"]:
         pipe.append(("pca", PCA(n_components=kwargs["n_comp"])))
     if kwargs["corr"]:
         pipe.append(("corr", CorrelationThreshold(threshold=kwargs["threshold"])))
+
+    # data augmantation
+    if kwargs["imbalance"]:
+        pipe.append(("bal", SVMSMOTE(random_state=kwargs["random_state"])))
 
     pipe.append(("clf", clf))
     pipe = Pipeline(pipe)
@@ -254,4 +265,5 @@ def get_clf(**kwargs):
         kwargs["clf"],
     )
 
+    print(clf)
     return pipe

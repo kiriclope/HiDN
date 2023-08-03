@@ -1,13 +1,14 @@
-import copy
 import os
 import pickle as pkl
 import string
 
 import dual_data.common.constants as gv
 import matplotlib
+import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from PIL import Image
 
 sns.set_context("poster")
 sns.set_style("ticks")
@@ -16,6 +17,38 @@ plt.rc("axes.spines", top=False, right=False)
 golden_ratio = (5**0.5 - 1) / 2
 width = 7
 matplotlib.rcParams["figure.figsize"] = [width, width * golden_ratio]
+
+from string import ascii_uppercase
+
+import svgwrite
+from IPython.display import SVG, display
+from svgutils.transform import SVGFigure, fromfile
+
+
+def create_svg_grid(image_files, grid_dims):
+    # labeled_files = []
+    # for idx, image_file in enumerate(image_files):
+    #     fig = fromfile(image_file)
+    #     label_text = ascii_uppercase[idx]
+    #     text_fig = SVGFigure().text(
+    #         label_text, (10, 20)
+    #     )  # (10, 20): adjust this according to your svg size
+    #     fig.getroot().append(text_fig)  # append text
+    #     labeled_svg = f"labeled_{image_file}"
+    #     fig.save(labeled_svg)
+    #     labeled_files.append(labeled_svg)
+
+    grid_image = svgwrite.Drawing("grid_image.svg")
+    rows, cols = grid_dims
+
+    for idx, labeled_svg in enumerate(image_files):
+        x = idx % cols * 200  # 200: assuming each image width
+        y = idx // cols * 200  # 200: assuming each image height
+        image = svgwrite.image.Image(labeled_svg, insert=(x, y))
+        grid_image.add(image)
+
+    grid_image.save("grid_image.svg")
+    display(SVG(filename="grid_image.svg"))
 
 
 def add_vlines(ax=None):
@@ -36,6 +69,9 @@ def save_fig(fig, figname, path=gv.figdir, format="svg", dpi="figure"):
     pkl.dump(fig, open(path + "/" + figname + ".pkl", "wb"))
     plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
 
+    format = "png"
+    plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
+
 
 def pkl_save(obj, name, path="."):
     pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
@@ -52,6 +88,24 @@ def copy_fig(fig, ax, vline=0):
     x_label = ax0.xaxis.get_label().get_text()
     y_label = ax0.yaxis.get_label().get_text()
     # print(x_label, y_label)
+
+    # im = ax0.images[0]
+    # cbar = im.colorbar
+    # cax = ax.imshow(
+    #     im.get_array(),
+    #     cmap=im.get_cmap(),
+    #     vmin=im.get_clim()[0],
+    #     vmax=im.get_clim()[1],
+    #     extent=im.get_extent(),
+    #     origin="lower",
+    # )
+
+    # xlim = ax0.get_xlim()
+    # ylim = ax0.get_ylim()
+    # xticks = ax0.get_xticks()
+    # yticks = ax0.get_yticks()
+
+    # ax.figure.colorbar(cax, ax=ax, label=cbar.ax.get_ylabel(), ticks=cbar.get_ticks())
 
     # lines
     lines = ax0.get_lines()
@@ -75,18 +129,22 @@ def copy_fig(fig, ax, vline=0):
         ax.add_collection(collect_cpy)
 
     # ticks
-    x_ticks = ax0.get_xaxis().properties()["ticklocs"]
-    y_ticks = ax0.get_yaxis().properties()["ticklocs"]
+    xticks = ax0.get_xaxis().properties()["ticklocs"]
+    yticks = ax0.get_yaxis().properties()["ticklocs"]
 
-    ax.set_xticks(x_ticks)
-    ax.set_yticks(y_ticks)
+    ax.set_xticks(xticks)
+    ax.set_yticks(yticks)
 
     # limits
-    x_lim = ax0.get_xaxis().properties()["view_interval"]
-    y_lim = ax0.get_yaxis().properties()["view_interval"]
+    xlim = ax0.get_xaxis().properties()["view_interval"]
+    ylim = ax0.get_yaxis().properties()["view_interval"]
 
-    ax.set_xlim(x_lim)
-    ax.set_ylim(y_lim)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+
+    # Set the title to the new axes
+    title = ax0.get_title()
+    ax.set_title(title)
 
     if vline:
         add_vlines(ax)
@@ -154,17 +212,69 @@ def concat_fig(
     # return fig
 
 
-def plot_summary(pickle_files, H, W, figsize):
-    fig, axs = plt.subplots(H, W, figsize=figsize)
+def copy_to_png(figname, ax):
+    extent = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
 
-    for i, ax in enumerate(axs.flatten()):
-        with open(pickle_files[i], "rb") as f:
-            fig = pkl.load(f)
-            ax.axis("off")  # do not show axis value
-            # Display the figure
-            ax.imshow(fig)
+    # Get the size in inches
+    axs_width, axs_height = extent.width, extent.height
 
-    plt.tight_layout(True)
+    # Convert to pixels
+    axs_width *= fig.dpi
+    axs_height *= fig.dpi
+
+    img = mpimg.imread(figname)
+    ax.imshow(img)
+    ax.axis("off")
+
+
+def plot_grid(
+    figname,
+    figlist,
+    dim=[1, 2],
+    size=[2.427, 1.5],
+    LABEL=1,
+    LABEL_POS=[-0.2, 1.2],
+):
+    fig, axs = plt.subplots(
+        dim[0],
+        dim[1],
+        figsize=(size[0] * dim[1], size[1] * dim[0]),
+        num=figname,
+    )
+
+    images = [Image.open(img_path) for img_path in figlist]
+
+    # extent = axs[0][0].get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+    # axs_width, axs_height = extent.width, extent.height
+    # axs_width *= fig.dpi  # Convert to pixels
+    # axs_height *= fig.dpi  # Convert to pixels
+    # axs_size = (int(axs_width), int(axs_height))  # Round off to the nearest pixel
+
+    # # Resize images to fit the subplot axes
+    # resized_images = [img.resize(axs_size) for img in images]
+    # np_images = [np.array(img) for img in resized_images]
+
+    labels = list(string.ascii_uppercase[: len(figlist)])
+    count = 0
+    for i, ax in enumerate(axs.flat):
+        ax.imshow(
+            images[i],
+            extent=ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted()),
+        )
+        # ax.imshow(np_images[i])
+        ax.axis("off")
+        if LABEL:
+            ax.text(
+                LABEL_POS[0],
+                LABEL_POS[1],
+                labels[count],
+                transform=ax.transAxes,
+                va="top",
+                ha="right",
+                weight="bold",
+            )
+        count += 1
+    plt.tight_layout()
     plt.show()
 
 

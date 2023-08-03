@@ -10,10 +10,20 @@ from dual_data.common.options import set_options
 from dual_data.common.plot_utils import add_vlines, save_fig
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.coefficients import get_coefs
-from dual_data.preprocess.helpers import avg_epochs, minmax_X_y
+from dual_data.preprocess.helpers import avg_epochs
 from dual_data.stats.bootstrap import my_boots_ci
 
-# from stats.shuffle import my_shuffle
+
+def proba_to_decision(proba):
+    proba = np.hstack(proba)
+    return np.log(proba / (1 - proba))
+
+
+def find_equal_axes(a, b):
+    equal_axes = [
+        (i, j) for i in range(a.ndim) for j in range(b.ndim) if a.shape[i] == b.shape[j]
+    ]
+    return equal_axes
 
 
 def get_coef_feat(X_days, y_days, **options):
@@ -31,32 +41,44 @@ def get_coef_feat(X_days, y_days, **options):
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X_S1_S2, epochs=options["epoch"])
     print("X_avg", X_avg.shape)
-    coefs, _ = get_coefs(model, X_avg, y_S1_S2, **options)
+    coefs, model = get_coefs(model, X_avg, y_S1_S2, **options)
 
-    return coefs
+    coefs = coefs / np.linalg.norm(coefs)
+    return coefs, model
 
 
-def get_overlap(X, coefs):
-    overlap = np.zeros((X.shape[-1], X.shape[0]))
+def projection(x, n, b):
+    n_hat = n / np.linalg.norm(n)
 
+    # The projection of x onto the hyperplane
+    proj = []
+    for i in range(x.shape[0]):
+        proj.append(x[i] - (((np.dot(n_hat, x[i]) - b) / np.linalg.norm(n)) * n_hat))
+
+    return np.array(proj)
+
+
+def get_total_overlap(X, y, eps, coefs, intercept, model, RETURN_AB=0):
+    # X = X[:, model.fs_idx_]
+
+    overlap = []
     for i_epoch in range(X.shape[-1]):
-        overlap[i_epoch] = np.dot(coefs, X[..., i_epoch].T).T
+        # overlap.append(model.decision_function(X[..., i_epoch]))
+        overlap.append(np.dot(coefs, X[..., i_epoch].T))
+        # overlap.append(projection(X[..., i_epoch], coefs, intercept))
 
-    return -overlap / X.shape[1]
-
-
-def get_total_overlap(X, y, eps, coefs):
-    overlap = np.zeros((X.shape[-1], X.shape[0]))
+    overlap = np.array(overlap).T
 
     idx = np.where(y == 0)[0]
+    A = -np.nanmean(overlap[idx], axis=0) / X.shape[1]
+    B = -np.nanmean(overlap[~idx], axis=0) / X.shape[1]
 
-    for i_epoch in range(X.shape[-1]):
-        overlap[i_epoch] = np.dot(coefs, X[..., i_epoch].T).T
+    # print("overlap", overlap.shape, "A", A.shape, "B", B.shape)
 
-    A = -np.nanmean(overlap[:, idx], axis=1) / X.shape[1]
-    B = -np.nanmean(overlap[:, ~idx], axis=1) / X.shape[1]
-
-    return (A + eps * B) / 2
+    if RETURN_AB:
+        return A, B, (A + eps * B) / 2
+    else:
+        return (A + eps * B) / 2
 
 
 def run_get_overlap(**kwargs):
@@ -75,24 +97,31 @@ def run_get_overlap(**kwargs):
     except:
         pass
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
+    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
 
-    coefs = get_coef_feat(X_days, y_days, **options)
+    coefs, model = get_coef_feat(X_days, y_days, **options)
+
+    intercept = model.intercept_
 
     options["task"] = task
     options["features"] = "sample"
     options["trials"] = trials
 
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
-    # X = minmax_X_y(X, y)
-    print(X.shape, y.shape)
+    print("X", X.shape, "y", y.shape)
 
-    # overlap = get_overlap(X, coefs, model)
+    A, B, overlap = get_total_overlap(X, y, eps, coefs, intercept, model, RETURN_AB=1)
 
-    overlap = get_total_overlap(X, y, eps, coefs)
-    _, overlap_ci = my_boots_ci(X, lambda X: get_total_overlap(X, y, -1, coefs))
-    # overlap_shuffle = my_shuffle(X_S1_S2, lambda X: get_total_overlap(X, y, coefs))
+    overlap_ci = None
+    if options["bootstrap"]:
+        _, overlap_ci = my_boots_ci(
+            X,
+            lambda X: get_total_overlap(X, y, -1, coefs, intercept, None),
+            n_samples=1000,
+        )
 
+    # plot_overlap(data=A, ci=overlap_ci, **options)
+    # plot_overlap(data=B, ci=overlap_ci, **options)
     plot_overlap(data=overlap, ci=overlap_ci, **options)
 
 
@@ -116,25 +145,18 @@ def plot_overlap(data, ci=None, **options):
         "all": pal[4],
     }
 
-    # plt.plot(gv.time, np.mean(overlap_A, 1), "--")
-    # plt.plot(gv.time, np.mean(overlap_B, 1), "--")
-    # plt.plot(gv.time, np.mean(overlap_C, 1), "--")
-    # plt.plot(gv.time, np.mean(overlap_D, 1), "--")
-
-    # mean_overlap = (np.mean(overlap_A, 1) + eps * np.mean(overlap_B, 1)) / 2
-    # plt.plot(gv.time, mean_overlap, color=paldict[task])
-
     plt.plot(gv.time, data, color=paldict[options["task"]])
-    # plt.plot(time, np.mean(overlap_shuffle, axis=0), '--k')
 
     plt.plot([0, gv.duration], [0, 0], "--k")
-    plt.fill_between(
-        gv.time,
-        data - ci[:, 0],
-        data + ci[:, 1],
-        alpha=0.25,
-        color=paldict[options["task"]],
-    )
+
+    if ci is not None:
+        plt.fill_between(
+            gv.time,
+            data - ci[:, 0],
+            data + ci[:, 1],
+            alpha=0.25,
+            color=paldict[options["task"]],
+        )
 
     add_vlines()
     plt.xlim([0, 14])
@@ -143,6 +165,28 @@ def plot_overlap(data, ci=None, **options):
     plt.ylabel("Overlap")
 
     save_fig(fig, figname)
+
+
+def run_all():
+    mice = ["ChRM04", "JawsM15", "JawsM18", "ACCM03", "ACCM04"]
+    tasks = ["DPA", "DualGo", "DualNoGo"]
+    for mouse in mice:
+        for task in tasks:
+            run_get_overlap(
+                mouse=mouse,
+                features="distractor",
+                task=task,
+                day="first",
+                method="bolasso",
+            )
+            run_get_overlap(
+                mouse=mouse,
+                features="distractor",
+                task=task,
+                day="last",
+                method="bolasso",
+            )
+            plt.close("all")
 
 
 if __name__ == "__main__":

@@ -40,7 +40,6 @@
     import matplotlib.pyplot as plt
     import seaborn as sns
     import pandas as pd
-    from dual_data.common.plot_utils import plot_summary
 
     sns.set_context("poster")
     sns.set_style("ticks")
@@ -253,18 +252,17 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 
 #+RESULTS:
 :results:
-# Out[45]:
+# Out[13]:
 :end:
 
 *** Sample classification
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
-  run_mne_scores(features='sample', task='DPA', day='first')
+  run_mne_scores(mouse='JawsM15', features='sample', task='DPA', day='first')
 #+end_src
 
 #+RESULTS:
 :results:
-# Out[8]:
-[[file:./obipy-resources/rdJsvQ.png]]
+0 - c6322f82-67cc-4b8f-8880-16322e1cf07b
 :end:
 
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
@@ -339,7 +337,7 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 
 #+RESULTS:
 :results:
-# Out[18]:
+# Out[4]:
 :end:
 
 *** Sample Overlap
@@ -378,13 +376,13 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 
 **** summary
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
+  import pickle as pkl
   from dual_data.common.plot_utils import concat_fig
 #+end_src
 
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
   # mice = ['ChRM04', 'JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
 
-  import pickle as pkl
   files = ['../figs/' + i + '_' + j + '_sample_overlap.pkl' for i in mice for j in tasks]
   print(files)
 
@@ -411,14 +409,14 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 **** single mouse
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
   mouse = 'ACCM03'
-  run_get_overlap(mouse=mouse, features='distractor', task='DualGo', day='first', method=None, pval=0.05, balance=0, prescreen=0, clf='LDA')
-  run_get_overlap(mouse=mouse, features='distractor', task='DualGo', day='last', method=None, pval=0.05, balance=0, prescreen=0, clf='LDA')
+  run_get_overlap(mouse=mouse, features='distractor', task='DualGo', day='first', method='bolasso')
+  run_get_overlap(mouse=mouse, features='distractor', task='DualGo', day='last', method='bolasso')
 #+end_src
 
 #+RESULTS:
 :results:
 # Out[22]:
-[[file:./obipy-resources/2GxU4Q.png]]
+[[file:./obipy-resources/Qjhkrl.png]]
 :end:
 
 **** all mice
@@ -427,14 +425,14 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   for mouse in mice:
       for task in tasks:
-          run_get_overlap(mouse=mouse, features='distractor', task=task, day='first', method='bolasso', pval=0.05)
-          run_get_overlap(mouse=mouse, features='distractor', task=task, day='last', method='bolasso', pval=0.05)
+          run_get_overlap(mouse=mouse, features='distractor', task=task, day='first', method='bolasso')
+          run_get_overlap(mouse=mouse, features='distractor', task=task, day='last', method='bolasso')
           plt.close('all')
 #+end_src
 
 #+RESULTS:
 :results:
-# Out[25]:
+0 - 5b753b51-b6d1-4bfd-8b76-3911e0550c68
 :end:
 
 **** summary
@@ -445,7 +443,7 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 
 #+RESULTS:
 :results:
-# Out[10]:
+# Out[6]:
 :end:
 
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
@@ -470,8 +468,8 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 
 #+RESULTS:
 :results:
-# Out[26]:
-[[file:./obipy-resources/QhIydd.png]]
+# Out[7]:
+[[file:./obipy-resources/rPvCPY.png]]
 :end:
 
 * Representational Dynamics
@@ -482,21 +480,24 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 
 #+RESULTS:
 :results:
-# Out[43]:
+# Out[9]:
 :end:
 
 *** single mouse
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
-  run_get_cos_day(mouse='JawsM15', method='bolasso', balance=1, bolasso_pval=0.001)
+  run_get_cos_day(mouse='JawsM15', method='bolasso')
 #+end_src
 
 #+RESULTS:
 :results:
-# Out[58]:
-[[file:./obipy-resources/sleNt4.png]]
+# Out[12]:
+[[file:./obipy-resources/4jLAUr.png]]
 :end:
 
 * Bump attractor Dynamics
+*** Method
+Here, I get the unitary normal vectors of the sample and distractor subspaces, namely, s and d
+Then, I define theta[i] = arctan2(d[i], s[i]) and rearrange the neurons given their preferred location.
 *** Imports
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
   from dual_data.overlap.get_cos import run_get_cos, plot_bump
@@ -504,25 +505,44 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 
 #+RESULTS:
 :results:
-# Out[5]:
+# Out[18]:
 :end:
 
 *** Single mouse
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
-X, y = run_get_cos(mouse='JawsM15', method='bolasso', day='last', task='DPA', bolasso_pval=0.001)
+X, y = run_get_cos(mouse='JawsM15', method='bolasso', day='last', task='DPA', bolasso_pval=0.001, trials="correct")
 #+end_src
 
 #+RESULTS:
 :results:
-# Out[14]:
+# Out[58]:
 :end:
 
 #+begin_src ipython :results raw drawer :exports both :async t :session dual_data
-  plot_bump(X, y, 0, 'all', 100)
+  plot_bump(X, y, -1, 'all', 100)
 #+end_src
 
 #+RESULTS:
 :results:
-# Out[16]:
-[[file:./obipy-resources/DFkBe7.png]]
+# Out[65]:
+[[file:./obipy-resources/a6wYVE.png]]
 :end:
+
+#+begin_src ipython :results raw drawer :exports both :async t :session dual_data
+  plot_bump(X, y, 1, 'all', 50)
+#+end_src
+
+#+RESULTS:
+:results:
+# Out[64]:
+[[file:./obipy-resources/hPSxE3.png]]
+:end:
+
+*** Do Wimmer analysis see melanie
+look at diffusion (circular mean and circstd vs time at each trial), mean at 0 std goes up
+in first days circmean not fixed because of drift
+in last days circmean fixed but more diffusion
+
+for each single trial bumps: extract circmean and circstd at each time point and average over trials
+std of the circmean -> precision
+mean of circstd -> width of the bump at each trials how the bump broadens (Klaus)

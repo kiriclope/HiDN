@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import sys
+from multiprocessing.context import ForkProcess
 
 import matplotlib
 import matplotlib.lines as lines
@@ -12,9 +13,7 @@ from dual_data.common.options import set_options
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.coefficients import get_coefs
 from dual_data.overlap.animated_bump import animated_bump
-from dual_data.preprocess.helpers import avg_epochs, preprocess_X
-from scipy.spatial.distance import yule
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from dual_data.preprocess.helpers import avg_epochs
 
 sns.set_context("poster")
 sns.set_style("ticks")
@@ -25,12 +24,32 @@ width = 7
 matplotlib.rcParams["figure.figsize"] = [width, width * golden_ratio]
 
 
+def to_polar_coords_in_N_dims(x):
+    r = np.linalg.norm(x)
+    coords = [r]
+    for i in range(len(x) - 1):
+        # `arccos` returns the angle in radians
+        angle = np.arccos(x[i] / np.sqrt(np.sum(x[i:] ** 2)))
+        coords.append(angle)
+    return np.array(coords)
+
+
+def gram_schmidt(a, b):
+    u = a
+    v = b - np.dot(b, u) / np.dot(u, u) * u
+
+    # Normalize the vectors (make them unit vectors)
+    e1 = u / np.linalg.norm(u)
+    e2 = v / np.linalg.norm(v)
+
+    return e1, e2
+
+
 def circular_convolution(signal, windowSize=10, axis=-1):
     signal_copy = signal.copy()
 
     if axis != -1 and signal.ndim != 1:
         signal_copy = np.swapaxes(signal_copy, axis, -1)
-        print(signal_copy.shape)
 
     ker = np.concatenate(
         (np.ones((windowSize,)), np.zeros((signal_copy.shape[-1] - windowSize,)))
@@ -43,7 +62,6 @@ def circular_convolution(signal, windowSize=10, axis=-1):
 
     if axis != -1 and signal.ndim != 1:
         smooth_signal = np.swapaxes(smooth_signal, axis, -1)
-        print(smooth_signal.shape)
 
     return smooth_signal
 
@@ -80,6 +98,8 @@ def run_get_cos(**kwargs):
 
     dist_coefs, _ = get_coefs(model, X_avg, y_S1_S2, **options)
 
+    options["task"] = "Dual"
+
     options["features"] = "sample"
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X_S1_S2, epochs=["ED"])
@@ -98,28 +118,37 @@ def run_get_cos(**kwargs):
 
     idx = np.arange(X_avg.shape[1])
     print("non zeros", idx.shape)
+    # theta = np.arctan2(unit_vector(dist_coefs[idx]), unit_vector(sample_coefs[idx]))
 
-    theta = np.arctan2(unit_vector(dist_coefs[idx]), unit_vector(sample_coefs[idx]))
-    print(theta.shape)
+    e1, e2 = gram_schmidt(sample_coefs[idx], dist_coefs[idx])
+    theta = np.arctan2(e2, e1)
+
+    # T = np.column_stack((e1, e2))
 
     options["task"] = task
-
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
 
-    # X_avg = avg_epochs(X_S1_S2, epochs=["STIM"])
+    # vec = np.ones(X.shape[1])
+    # new_vec = np.dot(T.T, vec)
+    # theta = to_polar_coords_in_N_dims(new_vec)
+
+    # x_t = []
+    # for i in range(X.shape[0]):
+    #     new_x = T_inv.dot(X[i])
+    #     x_t.append(to_polar_coords_in_N_dims(new_x))
+
+    # x_t = np.array(x_t)
 
     index_order = theta.argsort()
-    print(index_order.shape, X_S1_S2.shape)
+    print(index_order.shape, X.shape)
 
-    # X = X_S1_S2
-    # X = X_S1_S2[:, idx]
     X = X[:, index_order, :]
     print(X.shape)
     return X, y
 
 
 def plot_bump(X, y, sample, trial, windowSize=10):
-    X_sample = X[y == sample]
+    X_sample = X[y == sample].copy()
 
     # X_scaled = StandardScaler().fit_transform(X[trial])
     # X_scaled = MinMaxScaler().fit_transform(X[trial])
@@ -133,8 +162,6 @@ def plot_bump(X, y, sample, trial, windowSize=10):
         # X_scaled = X - np.mean(X)
         # X_scaled = StandardScaler().fit_transform(X[trial])
         # X_scaled = MinMaxScaler().fit_transform(X[1])
-
-    print(X_scaled.shape)
 
     if trial == "all":
         X_scaled = np.mean(X_scaled, 0)

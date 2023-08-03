@@ -15,11 +15,18 @@ from dual_data.decode.classifiers import get_clf
 from dual_data.decode.my_mne import my_cross_val_multiscore
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from joblib import Parallel, delayed
-from mne.decoding import (GeneralizingEstimator, SlidingEstimator,
-                          cross_val_multiscore, get_coef)
+from mne.decoding import (
+    GeneralizingEstimator,
+    SlidingEstimator,
+    cross_val_multiscore,
+    get_coef,
+)
 from sklearn.base import clone
-from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
-                                     StratifiedKFold)
+from sklearn.model_selection import (
+    LeaveOneOut,
+    RepeatedStratifiedKFold,
+    StratifiedKFold,
+)
 from sklearn.utils import resample
 from tqdm import tqdm
 
@@ -155,14 +162,6 @@ def run_mne_scores(**kwargs):
         pass
 
     X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
-
-    X_days = preprocess_X(
-        X_days,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
 
     model = get_clf(**options)
 

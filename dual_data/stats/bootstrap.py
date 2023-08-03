@@ -1,5 +1,6 @@
 import numpy as np
 from joblib import Parallel, delayed
+from scipy.stats import bootstrap
 from sklearn.utils import resample
 
 from . import progressbar as pgb
@@ -62,3 +63,25 @@ def my_boots_ci(X, statfunc, conf=0.95, n_samples=1000, n_jobs=-1, verbose=1):
     ci = np.vstack((lval, uval)).T
 
     return mean, ci
+
+
+# def my_boots_ci(X, statfunc, n_samples=10000, method="BCa", alpha=0.05, axis=0):
+#     boots_samples = bootstrap(
+#         X,
+#         statistic=statfunc,
+#         n_resamples=n_samples,
+#         method=method,
+#         confidence_level=1.0 - alpha,
+#         vectorized=True,
+#         axis=axis,
+#     )
+
+#     # print(boots_samples)
+
+#     ci = [boots_samples.confidence_interval.low, boots_samples.confidence_interval.high]
+#     mean_boots = np.mean(boots_samples.bootstrap_distribution)
+
+#     ci[0] = mean_boots - ci[0]
+#     ci[1] = ci[1] - mean_boots
+
+#     return ci

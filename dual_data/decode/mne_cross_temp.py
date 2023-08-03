@@ -14,15 +14,28 @@ from dual_data.decode.mne_scores import run_mne_scores
 from dual_data.decode.my_mne import my_cross_val_multiscore
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from joblib import Parallel, delayed
-from mne.decoding import (GeneralizingEstimator, SlidingEstimator,
-                          cross_val_multiscore, get_coef)
+from mne.decoding import (
+    GeneralizingEstimator,
+    SlidingEstimator,
+    cross_val_multiscore,
+    get_coef,
+)
 from sklearn.base import clone
-from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
-                                     StratifiedKFold)
+from sklearn.model_selection import (
+    LeaveOneOut,
+    RepeatedStratifiedKFold,
+    StratifiedKFold,
+)
 from sklearn.utils import resample
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+import matplotlib
+
+golden_ratio = (5**0.5 - 1) / 2
+width = 8
+matplotlib.rcParams["figure.figsize"] = [width, width * golden_ratio]
 
 
 def get_ci(res, conf=0.95):
@@ -133,7 +146,7 @@ def plot_scores_time(scores, ci_scores=None):
 
 
 def plot_scores_mat(scores_mat, figname, title):
-    fig, ax = plt.subplots(1, 1)
+    fig, ax = plt.subplots(1, 1, num=figname)
     im = ax.imshow(
         scores_mat,
         interpolation="lanczos",
@@ -195,15 +208,7 @@ def run_mne_cross_temp(**kwargs):
 
     task = options["task"]
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"])
-
-    X_days = preprocess_X(
-        X_days,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
+    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
 
     model = get_clf(**options)
 

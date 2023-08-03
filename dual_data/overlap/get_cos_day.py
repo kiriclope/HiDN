@@ -2,9 +2,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
+from dual_data.common.plot_utils import save_fig
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.coefficients import get_coefs
-from dual_data.preprocess.helpers import avg_epochs, preprocess_X
+from dual_data.preprocess.helpers import avg_epochs
 from scipy.spatial.distance import cosine
 
 
@@ -46,16 +47,7 @@ def get_coef_feat(X_days, y_days, **options):
 def run_get_cos_day(**kwargs):
     options = set_options(**kwargs)
 
-    X_days, y_days = get_X_y_days(options["mouse"], IF_RELOAD=options["reload"])
-
-    X_days = preprocess_X(
-        X_days,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
-
+    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
     n_days = len(y_days.day.unique())
     days = np.arange(1, n_days + 1)
 
@@ -105,19 +97,28 @@ def run_get_cos_day(**kwargs):
 
     ci_day = np.array(ci_day)
 
+    figname = options["mouse"] + "_cos_days"
+    if options["laser"]:
+        figname += "_laser_on"
+
+    fig = plt.figure(figname)
     plt.plot(days, cos_day)
     plt.xlabel("Days")
     plt.ylabel("Angle Sample/Dist axes")
 
-    plt.fill_between(
-        days,
-        cos_day - ci_day[:, 0],
-        cos_day + ci_day[:, 1],
-        alpha=0.25,
-        color="k",
-    )
+    # plt.fill_between(
+    #     days,
+    #     cos_day - ci_day[:, 0],
+    #     cos_day + ci_day[:, 1],
+    #     alpha=0.25,
+    #     # color="k",
+    # )
+
+    plt.errorbar(days, cos_day, yerr=ci_day.T, color="k")
 
     plt.plot([days[0], days[-1]], [90, 90], "k--")
+
+    save_fig(fig, figname)
     plt.show()
 
 

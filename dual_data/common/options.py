@@ -1,4 +1,9 @@
 import multiprocessing
+import warnings
+
+from sklearn.exceptions import ConvergenceWarning
+
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 import numpy as np
 
@@ -24,7 +29,7 @@ def set_options(**kwargs):
     opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
     opts["day"] = "first"  # int or 'first', 'middle', 'last'
 
-    opts["trials"] = "correct"  # 'correct', 'incorrect'
+    opts["trials"] = ""  # 'correct', 'incorrect'
 
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
@@ -34,14 +39,15 @@ def set_options(**kwargs):
     ################################
     # perm/boots param
     ################################
+    opts["bootstrap"] = 1
+    opts["shuffle"] = 0
+
     opts["n_samples"] = 1000  # for permutation test
     opts["n_shuffles"] = 1000  # for permutation test
     opts["n_boots"] = 1000  # for bootstrap
     opts["n_repeats"] = 10  # for repeated Kfold
 
     opts["avg_coefs"] = True
-    opts["bootstrap"] = 0
-    opts["shuffle"] = 0
 
     opts["add_vlines"] = 0
 
@@ -84,7 +90,7 @@ def set_options(**kwargs):
 
     # precision
     opts["tol"] = 1e-3
-    opts["max_iter"] = int(1e4)
+    opts["max_iter"] = int(1000)
 
     # intercept
     opts["fit_intercept"] = True  # always set to true
@@ -103,7 +109,8 @@ def set_options(**kwargs):
     opts["shrinkage"] = "auto"
 
     # standardization
-    opts["standardize"] = "robust"  # 'standard', 'robust', 'center', None
+    opts["standardize"] = "standard"  # 'standard', 'robust', 'center', None
+    opts["unit_var"] = False
 
     # params for SGD
     opts["learning_rate"] = "optimal"  # optimal, adaptative
@@ -113,7 +120,7 @@ def set_options(**kwargs):
     # Dimensionality reduction
     ################################
     # prescreening
-    opts["prescreen"] = 1
+    opts["prescreen"] = 0  # fpr, fdr, fwe or None
     opts["pval"] = 0.05
     opts["bolasso_pval"] = 0.05
 
@@ -132,24 +139,24 @@ def set_options(**kwargs):
     opts["random_state"] = np.random.randint(1e4)
     opts["out_fold"] = "repeated"  # stratified, loo, repeated
     opts["n_out"] = 5
-    opts["outer_score"] = "f1_weighted"  # accuracy, roc_auc, f1_macro, f1_weighted
+    opts["outer_score"] = "roc_auc"
+    # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning
-    opts["in_fold"] = "stratified"  # stratified, loo, repeated
+    opts["in_fold"] = "repeated"  # stratified, loo, repeated
     opts["n_in"] = 5
-    opts[
-        "inner_score"
-    ] = "roc_auc"  # accuracy, roc_auc, f1_macro, f1_weighted, neg_log_loss
+    opts["inner_score"] = "roc_auc"
+    # accuracy, roc_auc, f1_macro, f1_weighted, neg_log_loss
 
     # multiclass/label
     opts["multilabel"] = False
     opts["multiclass"] = False
 
-    opts.update(kwargs)
-
     # gridsearch params
     opts["n_lambda"] = 20
-    opts["n_alpha"] = 50
+    opts["n_alpha"] = 10
+
+    opts.update(kwargs)
 
     opts["Cs"] = np.logspace(-4, 4, opts["n_lambda"])
     opts["alphas"] = np.linspace(0, 1, opts["n_alpha"])

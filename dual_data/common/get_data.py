@@ -61,7 +61,7 @@ def get_X_y_days_multi(mouse=gv.mouse):
 def create_df(y_raw, day=None):
     y_ = np.delete(y_raw, [3, 5, 6, 7], axis=0)
 
-    print(y_.shape)
+    # print(y_.shape)
 
     if day is None:
         y_df = pd.DataFrame(
@@ -166,7 +166,7 @@ def get_X_y_days(mouse=gv.mouse, days=gv.days, path=gv.filedir, IF_RELOAD=0):
             print("loading files from", path + mouse)
             X_days = pickle.load(open(path + mouse + "/X_days.pkl", "rb"))
             y_days = pd.read_pickle(path + mouse + "/y_days.pkl")
-        except ValueError:
+        except:
             IF_RELOAD = 1
 
     if IF_RELOAD == 1:
@@ -180,7 +180,7 @@ def get_X_y_days(mouse=gv.mouse, days=gv.days, path=gv.filedir, IF_RELOAD=0):
 
             for day in days:
                 X, y = get_fluo_data(mouse, day, days)
-                print(X.shape, y.shape)
+                print("X", X.shape, "y", y.shape)
 
                 y_df = create_df(y, day=day)
 
@@ -193,7 +193,7 @@ def get_X_y_days(mouse=gv.mouse, days=gv.days, path=gv.filedir, IF_RELOAD=0):
         pickle.dump(X_days, open(path + mouse + "/X_days.pkl", "wb"))
         y_days.to_pickle(path + mouse + "/y_days.pkl")
 
-        print(y_days)
+        print("X_days", X_days.shape, "y_days", y_days.shape)
 
     return X_days, y_days
 
@@ -446,7 +446,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             )
         )
     else:
-        y_S1_S2 = np.hstack((np.zeros(X_S1.shape[0]), np.ones(X_S2.shape[0])))
+        y_S1_S2 = np.hstack((-np.ones(X_S1.shape[0]), np.ones(X_S2.shape[0])))
 
     # if kwargs["preprocess"]:
     #     X_S1_S2 = preprocess_X(
