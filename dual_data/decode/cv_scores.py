@@ -4,15 +4,23 @@ import numpy as np
 from common.get_data import get_X_y_days, get_X_y_S1_S2
 from common.options import set_options
 from common.plot_utils import add_vlines
-from mne.decoding import (GeneralizingEstimator, LinearModel, Scaler,
-                          SlidingEstimator, Vectorizer, cross_val_multiscore,
-                          get_coef)
-from preprocess.helpers import avg_epochs, preprocess_X
-from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
-                                     StratifiedKFold)
-
 from decode.classifiers import get_clf
 from decode.methods import outer_temp_cv
+from mne.decoding import (
+    GeneralizingEstimator,
+    LinearModel,
+    Scaler,
+    SlidingEstimator,
+    Vectorizer,
+    cross_val_multiscore,
+    get_coef,
+)
+from preprocess.helpers import avg_epochs, preprocess_X
+from sklearn.model_selection import (
+    LeaveOneOut,
+    RepeatedStratifiedKFold,
+    StratifiedKFold,
+)
 
 
 def get_score(model, X_train, X_test, y, **options):

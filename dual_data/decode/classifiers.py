@@ -1,7 +1,5 @@
 import numpy as np
 import pandas as pd
-from dual_data.decode.bolasso_sklearn import bolasso
-from dual_data.decode.SGDClassifierCV import SGDClassifierCV
 from imblearn.over_sampling import SVMSMOTE
 from imblearn.pipeline import Pipeline
 from scipy.spatial.distance import correlation
@@ -19,6 +17,9 @@ from sklearn.model_selection import (
 )
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 from sklearn.svm import LinearSVC
+
+from dual_data.decode.bolasso_sklearn import bolasso
+from dual_data.decode.SGDClassifierCV import SGDClassifierCV
 
 # from sklearn.pipeline import Pipeline
 

@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-import common.constants as gv
-from common.options import set_options
-from common.plot_utils import save_fig, pkl_save
-
-from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs
-
-from decode.classifiers import get_clf
-from decode.coefficients import get_coefs
-
 from statistics.bootstrap import my_boots_ci
 
+import common.constants as gv
+import matplotlib.pyplot as plt
+import numpy as np
+import seaborn as sns
+from common.options import set_options
+from common.plot_utils import pkl_save, save_fig
+from data.get_data import get_X_y_days, get_X_y_S1_S2
+from decode.classifiers import get_clf
+from decode.coefficients import get_coefs
 from imblearn.over_sampling import SVMSMOTE
+from preprocess.helpers import avg_epochs
 
 options = set_options()
 

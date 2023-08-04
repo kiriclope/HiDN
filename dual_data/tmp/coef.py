@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-import numpy as np
 import matplotlib.pyplot as plt
-
+import numpy as np
 from common.options import set_options
 from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs
 from decode.classifiers import get_clf
 from decode.coefficients import get_coefs
+from preprocess.helpers import avg_epochs
+
 
 def get_overlap(X, coefs):
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 import numpy as np
-
 from common.options import set_options
 from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs
 from preprocess.augmentation import spawner
+from preprocess.helpers import avg_epochs
 
 if __name__ == "__main__":
 

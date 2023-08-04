@@ -137,13 +137,13 @@ def set_options(**kwargs):
     ################################
     # outer cv for score estimates
     opts["random_state"] = np.random.randint(1e4)
-    opts["out_fold"] = "repeated"  # stratified, loo, repeated
+    opts["out_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_out"] = 5
     opts["outer_score"] = "roc_auc"
     # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning
-    opts["in_fold"] = "repeated"  # stratified, loo, repeated
+    opts["in_fold"] = "stratified"  # stratified, loo, repeated
     opts["n_in"] = 5
     opts["inner_score"] = "roc_auc"
     # accuracy, roc_auc, f1_macro, f1_weighted, neg_log_loss

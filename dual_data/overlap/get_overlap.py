@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import sys
 
-import dual_data.common.constants as gv
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+
+import dual_data.common.constants as gv
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.common.plot_utils import add_vlines, save_fig

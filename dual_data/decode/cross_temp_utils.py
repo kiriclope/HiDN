@@ -1,26 +1,24 @@
-import warnings
 import numbers
 import time
-from traceback import format_exc
-from contextlib import suppress
+import warnings
 from collections import Counter
+from contextlib import suppress
+from traceback import format_exc
 
 import numpy as np
 import scipy.sparse as sp
 from joblib import Parallel, logger
-from tqdm import tqdm
-
-from sklearn.base import is_classifier, clone
-from sklearn.utils import indexable, check_random_state, _safe_indexing
-from sklearn.utils.validation import _check_fit_params
-from sklearn.utils.validation import _num_samples
-from sklearn.utils.fixes import delayed
-from sklearn.utils.metaestimators import _safe_split
+from sklearn.base import clone, is_classifier
+from sklearn.exceptions import FitFailedWarning, NotFittedError
 from sklearn.metrics import check_scoring
 from sklearn.metrics._scorer import _check_multimetric_scoring, _MultimetricScorer
-from sklearn.exceptions import FitFailedWarning, NotFittedError
 from sklearn.model_selection._split import check_cv
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils import _safe_indexing, check_random_state, indexable
+from sklearn.utils.fixes import delayed
+from sklearn.utils.metaestimators import _safe_split
+from sklearn.utils.validation import _check_fit_params, _num_samples
+from tqdm import tqdm
 
 __all__ = [
     "temp_cross_validate",

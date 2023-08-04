@@ -1,9 +1,9 @@
 import glob
-import numpy as np
-import matplotlib.pyplot as plt
 
 import common.constants as gv
-from common.plot_utils import save_fig, pkl_load, concat_fig
+import matplotlib.pyplot as plt
+import numpy as np
+from common.plot_utils import concat_fig, pkl_load, save_fig
 
 if __name__ == '__main__':
 

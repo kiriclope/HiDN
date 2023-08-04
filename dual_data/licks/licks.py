@@ -3,8 +3,9 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from dual_data.common.plot_utils import add_vlines
 from scipy.io import loadmat
+
+from dual_data.common.plot_utils import add_vlines
 
 
 def plot_lick_rate(licks_counts, bin_edges, n_mice=1):

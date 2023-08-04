@@ -4,16 +4,17 @@ import time
 import warnings
 from datetime import timedelta
 
-import dual_data.common.plot_utils
 import matplotlib.pyplot as plt
 import numpy as np
+from mne.decoding import SlidingEstimator, get_coef
+from sklearn.metrics.pairwise import cosine_similarity
+
+import dual_data.common.plot_utils
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.common.plot_utils import add_vlines, save_fig
 from dual_data.decode.classifiers import get_clf
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
-from mne.decoding import SlidingEstimator, get_coef
-from sklearn.metrics.pairwise import cosine_similarity
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 

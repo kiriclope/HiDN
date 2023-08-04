@@ -4,10 +4,11 @@ from importlib import reload
 import mat73
 import numpy as np
 import pandas as pd
+from scipy.io import loadmat
+
 from dual_data.common import constants as gv
 from dual_data.common import options
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
-from scipy.io import loadmat
 
 reload(gv)
 

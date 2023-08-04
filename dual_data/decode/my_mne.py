@@ -6,12 +6,13 @@
 #
 # License: BSD-3-Clause
 
-import numpy as np
 import datetime as dt
 import numbers
+
+import numpy as np
+from mne.fixes import BaseEstimator, _get_check_scoring, is_classifier
 from mne.parallel import parallel_func
-from mne.fixes import BaseEstimator, is_classifier, _get_check_scoring
-from mne.utils import warn, verbose
+from mne.utils import verbose, warn
 
 
 class LinearModel(BaseEstimator):
@@ -230,7 +231,7 @@ def _set_cv(cv, estimator=None, X=None, y=None):
         est_is_classifier = is_classifier(estimator)
     # Setup CV
     from sklearn import model_selection as models
-    from sklearn.model_selection import check_cv, StratifiedKFold, KFold
+    from sklearn.model_selection import KFold, StratifiedKFold, check_cv
 
     if isinstance(cv, (int, np.int64)):
         XFold = StratifiedKFold if est_is_classifier else KFold
@@ -442,8 +443,8 @@ def cross_val_multiscore(
     # This code is copied from sklearn
 
     from sklearn.base import clone
-    from sklearn.utils import indexable
     from sklearn.model_selection._split import check_cv
+    from sklearn.utils import indexable
 
     check_scoring = _get_check_scoring()
 
@@ -638,8 +639,8 @@ def my_cross_val_multiscore(
     # This code is copied from sklearn
 
     from sklearn.base import clone
-    from sklearn.utils import indexable
     from sklearn.model_selection._split import check_cv
+    from sklearn.utils import indexable
 
     check_scoring = _get_check_scoring()
 

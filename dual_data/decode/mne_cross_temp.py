@@ -6,13 +6,6 @@ from datetime import timedelta
 
 import matplotlib.pyplot as plt
 import numpy as np
-from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
-from dual_data.common.options import set_options
-from dual_data.common.plot_utils import add_vlines, save_fig
-from dual_data.decode.classifiers import get_clf
-from dual_data.decode.mne_scores import run_mne_scores
-from dual_data.decode.my_mne import my_cross_val_multiscore
-from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from joblib import Parallel, delayed
 from mne.decoding import (
     GeneralizingEstimator,
@@ -28,6 +21,14 @@ from sklearn.model_selection import (
 )
 from sklearn.utils import resample
 from tqdm import tqdm
+
+from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+from dual_data.common.options import set_options
+from dual_data.common.plot_utils import add_vlines, save_fig
+from dual_data.decode.classifiers import get_clf
+from dual_data.decode.mne_scores import run_mne_scores
+from dual_data.decode.my_mne import my_cross_val_multiscore
+from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 

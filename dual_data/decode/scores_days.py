@@ -3,9 +3,25 @@ import sys
 import time
 from datetime import timedelta
 
-import dual_data.stats.progressbar as pgb
 import matplotlib.pyplot as plt
 import numpy as np
+from joblib import Parallel, delayed
+from mne.decoding import (
+    GeneralizingEstimator,
+    SlidingEstimator,
+    cross_val_multiscore,
+    get_coef,
+)
+from sklearn.base import clone
+from sklearn.model_selection import (
+    LeaveOneOut,
+    RepeatedStratifiedKFold,
+    StratifiedKFold,
+)
+from sklearn.utils import resample
+from tqdm import tqdm
+
+import dual_data.stats.progressbar as pgb
 from dual_data.common.constants import paldict
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
@@ -13,14 +29,6 @@ from dual_data.common.plot_utils import add_vlines, save_fig
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.my_mne import my_cross_val_multiscore
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
-from joblib import Parallel, delayed
-from mne.decoding import (GeneralizingEstimator, SlidingEstimator,
-                          cross_val_multiscore, get_coef)
-from sklearn.base import clone
-from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
-                                     StratifiedKFold)
-from sklearn.utils import resample
-from tqdm import tqdm
 
 
 def get_ci(res, conf=0.95):

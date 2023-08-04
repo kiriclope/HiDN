@@ -1,12 +1,12 @@
 import random
 
 import numpy as np
+
 # import scikits.bootstrap as boot
 import scipy.stats as stats
 from joblib import Parallel, delayed, parallel_backend
 from numpy.random import randint
-from sklearn.feature_selection import (SelectKBest, chi2, f_classif,
-                                       mutual_info_classif)
+from sklearn.feature_selection import SelectKBest, chi2, f_classif, mutual_info_classif
 from sklearn.utils import resample
 
 from . import progressbar as pgb

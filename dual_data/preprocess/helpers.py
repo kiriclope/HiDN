@@ -1,8 +1,9 @@
 import numpy as np
-from dual_data.common import constants as gv
 from scipy import stats
 from scipy.stats import circmean, norm
 from sklearn.preprocessing import MinMaxScaler
+
+from dual_data.common import constants as gv
 
 # from scipy.signal import savgol_filter, detrend
 

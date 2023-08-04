@@ -3,17 +3,9 @@ import sys
 import time
 from datetime import timedelta
 
-import dual_data.stats.progressbar as pgb
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-from dual_data.common.constants import paldict
-from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
-from dual_data.common.options import set_options
-from dual_data.common.plot_utils import add_vlines, save_fig
-from dual_data.decode.classifiers import get_clf
-from dual_data.decode.my_mne import my_cross_val_multiscore
-from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 from joblib import Parallel, delayed
 from mne.decoding import (
     GeneralizingEstimator,
@@ -29,6 +21,15 @@ from sklearn.model_selection import (
 )
 from sklearn.utils import resample
 from tqdm import tqdm
+
+import dual_data.stats.progressbar as pgb
+from dual_data.common.constants import paldict
+from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+from dual_data.common.options import set_options
+from dual_data.common.plot_utils import add_vlines, save_fig
+from dual_data.decode.classifiers import get_clf
+from dual_data.decode.my_mne import my_cross_val_multiscore
+from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 
 
 def get_ci(res, conf=0.95):
@@ -113,10 +114,10 @@ def get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1):
     return scores
 
 
-def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
+def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA", day="first"):
     x = np.linspace(0, 14, scores.shape[0])
 
-    if "first" in figname:
+    if "first" in day:
         pal = sns.color_palette("muted")
     else:
         pal = sns.color_palette("bright")
@@ -174,7 +175,7 @@ def run_mne_scores(**kwargs):
     # X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
 
     cv = options["n_out"]
-    if options["in_fold"] == "loo":
+    if options["out_fold"] == "loo":
         cv = LeaveOneOut()
 
     if options["out_fold"] == "repeated":
@@ -184,6 +185,7 @@ def run_mne_scores(**kwargs):
             random_state=options["random_state"],
         )
 
+    print("cv", cv)
     scoring = options["outer_score"]
 
     estimator = SlidingEstimator(model, n_jobs=None, scoring=scoring, verbose=False)
@@ -218,10 +220,11 @@ def run_mne_scores(**kwargs):
         pvalue = (np.sum(boots_scores >= scores, axis=0) + 1.0) / (n_boots + 1)
         ci_scores = get_ci(boots_scores)
 
-    figname = options["mouse"] + "_" + options["features"] + "_score"
+    figname = options["mouse"] + "_" + options["features"] + "_score_" + options["task"]
+
     title = options["task"]
 
-    plot_scores_time(figname, title, scores, ci_scores, options["task"])
+    plot_scores_time(figname, title, scores, ci_scores, options["task"], options["day"])
 
     # other bootstrap implementation using bagging
     # options["method"] = "bootstrap"

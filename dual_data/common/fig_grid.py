@@ -2,7 +2,7 @@ import xml.etree.ElementTree as ET
 
 import matplotlib
 import matplotlib.pyplot as plt
-from svgutils.compose import SVG, Figure, Panel, Text
+from svgutils.compose import SVG, Figure, Text
 
 
 def get_svg_size(svg_file):

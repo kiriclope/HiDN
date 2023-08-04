@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import matplotlib.pyplot as plt
 import numpy as np
+
 from dual_data.common import constants as gv
 from dual_data.common.get_data import get_X_y_days
 from dual_data.common.options import set_options

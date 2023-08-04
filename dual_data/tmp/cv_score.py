@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 import numpy as np
-from imblearn.over_sampling import SVMSMOTE
-
-from dask.distributed import Client
-from dask.distributed import LocalCluster
-
 from common.options import set_options
+from dask.distributed import Client, LocalCluster
 from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs, preprocess_X
 from decode.classifiers import get_clf
 from decode.methods import outer_temp_cv
+from imblearn.over_sampling import SVMSMOTE
+from preprocess.helpers import avg_epochs, preprocess_X
 
 
 def augment_imbal(X, y):

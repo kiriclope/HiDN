@@ -1,11 +1,11 @@
-import matplotlib
-
-import numpy as np
-import matplotlib.pyplot as plt
-import pickle as pkl
 import copy
+import pickle as pkl
 
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.collections import PatchCollection
+
 
 def save_fig(fig, figname, path='.', format='svg', dpi='figure'):
 

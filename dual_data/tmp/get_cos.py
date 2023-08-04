@@ -1,23 +1,23 @@
 from importlib import reload
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.spatial.distance import cosine
 
 import common.constants as gv
 import common.options
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.spatial.distance import cosine
 
 reload(gv)
 reload(common.options)
 
-from common.options import set_options
 import common.plot_utils
-from common.plot_utils import save_fig, pkl_save
+from common.options import set_options
+from common.plot_utils import pkl_save, save_fig
 from data.get_data import get_X_y_days, get_X_y_S1_S2
-from preprocess.helpers import avg_epochs, preprocess_X
-
 from decode.classifiers import get_clf
 from decode.coefficients import get_coefs
+from preprocess.helpers import avg_epochs, preprocess_X
 from stats.bootstrap import my_boots_ci
+
 
 def get_ci(res, conf=0.95):
     ostats = np.sort(res, axis=0)

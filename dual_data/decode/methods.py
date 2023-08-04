@@ -1,10 +1,13 @@
 import numpy as np
-from dual_data.cross_temp_utils import (permutation_test_temp_score,
-                                        temp_cross_val_score)
+from dual_data.cross_temp_utils import permutation_test_temp_score, temp_cross_val_score
 from joblib import Parallel, delayed, parallel_backend
 from sklearn.base import clone
-from sklearn.model_selection import (LeaveOneOut, RepeatedStratifiedKFold,
-                                     StratifiedKFold, cross_val_score)
+from sklearn.model_selection import (
+    LeaveOneOut,
+    RepeatedStratifiedKFold,
+    StratifiedKFold,
+    cross_val_score,
+)
 from tqdm import tqdm
 
 

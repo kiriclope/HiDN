@@ -2,13 +2,14 @@ import os
 import pickle as pkl
 import string
 
-import dual_data.common.constants as gv
 import matplotlib
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from PIL import Image
+
+import dual_data.common.constants as gv
 
 sns.set_context("poster")
 sns.set_style("ticks")

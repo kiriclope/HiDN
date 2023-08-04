@@ -1,11 +1,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
+
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.coefficients import get_coefs
 from dual_data.preprocess.helpers import avg_epochs, preprocess_X
-from scipy.spatial.distance import cosine
 
 
 def get_total_overlap(X, y, eps, coefs):
