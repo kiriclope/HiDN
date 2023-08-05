@@ -70,9 +70,15 @@ def get_total_overlap(X, y, eps, coefs, intercept, model, RETURN_AB=0):
 
     overlap = np.array(overlap).T
 
-    idx = np.where(y == 0)[0]
-    A = -np.nanmean(overlap[idx], axis=0) / X.shape[1]
-    B = -np.nanmean(overlap[~idx], axis=0) / X.shape[1]
+    idx = np.where(y == -1)[0]
+    A = 0
+    if len(idx) > 0:
+        A = -np.nanmean(overlap[idx], axis=0) / X.shape[1]
+
+    idx = np.where(y == 1)[0]
+    B = 0
+    if len(idx) > 0:
+        B = -np.nanmean(overlap[idx], axis=0) / X.shape[1]
 
     # print("overlap", overlap.shape, "A", A.shape, "B", B.shape)
 

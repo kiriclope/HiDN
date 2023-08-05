@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import sys
-from multiprocessing.context import ForkProcess
 
 import matplotlib
 import matplotlib.lines as lines

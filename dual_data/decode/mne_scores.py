@@ -131,9 +131,9 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA", day="fi
     }
 
     fig = plt.figure(figname)
-    ax = plt.gca()
+    # ax = plt.gca()
     plt.plot(x, scores, label="score", color=paldict[task])
-    ax.axhline(0.5, color="k", linestyle="--", label="chance")
+    plt.hlines(0.5, 0, 12, color="k", linestyle="--", label="chance")
     plt.xlabel("Time (s)")
     plt.ylabel("Score")
     add_vlines()
@@ -150,7 +150,6 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA", day="fi
         )
     plt.title(title)
     save_fig(fig, figname)
-    plt.show()
 
 
 def run_mne_scores(**kwargs):

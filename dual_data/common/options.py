@@ -29,7 +29,7 @@ def set_options(**kwargs):
     opts["task"] = "DualGo"  # DPA, DualGo, DualNoGo, Dual, or all
     opts["day"] = "first"  # int or 'first', 'middle', 'last'
 
-    opts["trials"] = ""  # 'correct', 'incorrect'
+    opts["trials"] = "correct"  # 'correct', 'incorrect'
 
     opts["features"] = "sample"  # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
@@ -39,7 +39,7 @@ def set_options(**kwargs):
     ################################
     # perm/boots param
     ################################
-    opts["bootstrap"] = 1
+    opts["bootstrap"] = 0
     opts["shuffle"] = 0
 
     opts["n_samples"] = 1000  # for permutation test
@@ -109,7 +109,7 @@ def set_options(**kwargs):
     opts["shrinkage"] = "auto"
 
     # standardization
-    opts["standardize"] = "standard"  # 'standard', 'robust', 'center', None
+    opts["scaler"] = "standard"  # 'standard', 'robust', 'center', None
     opts["unit_var"] = False
 
     # params for SGD
@@ -120,16 +120,16 @@ def set_options(**kwargs):
     # Dimensionality reduction
     ################################
     # prescreening
-    opts["prescreen"] = 0  # fpr, fdr, fwe or None
+    opts["prescreen"] = None  # fpr, fdr, fwe or None
     opts["pval"] = 0.05
     opts["bolasso_pval"] = 0.05
 
     # PCA
-    opts["pca"] = 0
+    opts["pca"] = False
     opts["n_comp"] = None  # None or mle or int
 
     # corr
-    opts["corr"] = 0
+    opts["corr"] = False
     opts["threshold"] = 0.25
 
     ################################

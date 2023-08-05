@@ -1,3 +1,4 @@
+from collections.abc import KeysView
 import numpy as np
 import pandas as pd
 from imblearn.over_sampling import SVMSMOTE
@@ -20,6 +21,7 @@ from sklearn.svm import LinearSVC
 
 from dual_data.decode.bolasso_sklearn import bolasso
 from dual_data.decode.SGDClassifierCV import SGDClassifierCV
+from dual_data.decode.LinearSVCCV import LinearSVCCV
 
 # from sklearn.pipeline import Pipeline
 
@@ -111,12 +113,13 @@ def get_clf(**kwargs):
         )
 
     if kwargs["clf"] == "SVM":
-        clf = LinearSVC(
+        clf = LinearSVCCV(
+            Cs=kwargs["Cs"],
+            cv=cv,
             penalty=kwargs["penalty"],
             loss="squared_hinge",
             dual=False,
             tol=kwargs["tol"],
-            C=1,
             multi_class="ovr",
             fit_intercept=kwargs["fit_intercept"],
             intercept_scaling=kwargs["intercept_scaling"],
@@ -186,15 +189,15 @@ def get_clf(**kwargs):
     pipe = []
 
     # scaling
-    if kwargs["standardize"] == "custom":
+    if kwargs["scaler"] == "custom":
         pipe.append(("scaler", CustomScaler()))
-    if kwargs["standardize"] == "minmax":
+    if kwargs["scaler"] == "minmax":
         pipe.append(("scaler", MinMaxScaler()))
-    if kwargs["standardize"] == "standard":
+    if kwargs["scaler"] == "standard":
         pipe.append(("scaler", StandardScaler()))
-    if kwargs["standardize"] == "center":
+    if kwargs["scaler"] == "center":
         pipe.append(("scaler", StandardScaler(with_std=False)))
-    if kwargs["standardize"] == "robust":
+    if kwargs["scaler"] == "robust":
         pipe.append(("scaler", RobustScaler(unit_variance=kwargs["unit_var"])))
 
     # prescreen
@@ -251,7 +254,7 @@ def get_clf(**kwargs):
     print(
         "MODEL:",
         "SCALER",
-        kwargs["standardize"],
+        kwargs["scaler"],
         "IMBALANCE",
         kwargs["imbalance"],
         "PRESCREEN",
