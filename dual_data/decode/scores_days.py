@@ -140,15 +140,16 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
 def run_scores_days(**kwargs):
     options = set_options(**kwargs)
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
+    X_days, y_days = get_X_y_days(**options)
 
-    X_days = preprocess_X(
-        X_days,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
+    # X_days = preprocess_X(
+    #     X_days,
+    #     scaler=options["scaler_BL"],
+    #     avg_mean=options["avg_mean_BL"],
+    #     avg_noise=options["avg_noise_BL"],
+    #     unit_var=options["unit_var_BL"],
+    # )
 
     model = get_clf(**options)
 

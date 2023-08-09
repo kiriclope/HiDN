@@ -68,15 +68,16 @@ def run_get_overlap_day(**kwargs):
         eps = -1
         options["overlap"] = "sample"
 
-    X_days, y_days = get_X_y_days(options["mouse"], IF_RELOAD=options["reload"])
+    # X_days, y_days = get_X_y_days(options["mouse"], IF_RELOAD=options["reload"])
+    X_days, y_days = get_X_y_days(**options)
 
-    X_days = preprocess_X(
-        X_days,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
+    # X_days = preprocess_X(
+    #     X_days,
+    #     scaler=options["scaler_BL"],
+    #     avg_mean=options["avg_mean_BL"],
+    #     avg_noise=options["avg_noise_BL"],
+    #     unit_var=options["unit_var_BL"],
+    # )
 
     n_days = len(y_days.day.unique())
     days = np.arange(1, n_days + 1)

@@ -75,7 +75,8 @@ def run_perf_tasks(**kwargs):
     if options["mouse"] == "all":
         _, y_days = get_X_y_mice(IF_RELOAD=options["reload"])
     else:
-        _, y_days = get_X_y_days(options["mouse"], IF_RELOAD=options["reload"])
+        # _, y_days = get_X_y_days(options["mouse"], IF_RELOAD=options["reload"])
+        _, y_days = get_X_y_days(**options)
 
     perf_type = options["perf_type"]
     sample = options["sample"]

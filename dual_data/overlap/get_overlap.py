@@ -44,7 +44,7 @@ def get_coef_feat(X_days, y_days, **options):
     print("X_avg", X_avg.shape)
     coefs, model = get_coefs(model, X_avg, y_S1_S2, **options)
 
-    coefs = coefs / np.linalg.norm(coefs)
+    # coefs = coefs / np.linalg.norm(coefs)
     return coefs, model
 
 
@@ -104,7 +104,8 @@ def run_get_overlap(**kwargs):
     except:
         pass
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    X_days, y_days = get_X_y_days(**options)
 
     coefs, model = get_coef_feat(X_days, y_days, **options)
 
@@ -127,8 +128,9 @@ def run_get_overlap(**kwargs):
             n_samples=1000,
         )
 
-    # plot_overlap(data=A, ci=overlap_ci, **options)
-    # plot_overlap(data=B, ci=overlap_ci, **options)
+    if options["show_AB"]:
+        plot_overlap(data=A, ci=overlap_ci, **options)
+        plot_overlap(data=B, ci=overlap_ci, **options)
     plot_overlap(data=overlap, ci=overlap_ci, **options)
 
 
@@ -172,6 +174,7 @@ def plot_overlap(data, ci=None, **options):
     plt.ylabel("Overlap")
 
     save_fig(fig, figname)
+    print("Done")
 
 
 def run_all():

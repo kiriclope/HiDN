@@ -109,7 +109,8 @@ def get_coefs(model, X, y, **options):
 
 if __name__ == "__main__":
     options = set_options()
-    X_days, y_days = get_X_y_days(IF_PREP=1)
+    # X_days, y_days = get_X_y_days(IF_PREP=1)
+    X_days, y_days = get_X_y_days(**options)
 
     model = get_clf(**options)
 

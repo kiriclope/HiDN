@@ -86,12 +86,12 @@ def run_get_cos(**kwargs):
     except:
         pass
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    X_days, y_days = get_X_y_days(**options)
 
     model = get_clf(**options)
 
     options["task"] = "Dual"
-
     options["features"] = "distractor"
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X_S1_S2, epochs=["MD"])
@@ -99,7 +99,6 @@ def run_get_cos(**kwargs):
     dist_coefs, _ = get_coefs(model, X_avg, y_S1_S2, **options)
 
     options["task"] = "Dual"
-
     options["features"] = "sample"
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X_S1_S2, epochs=["ED"])
@@ -120,7 +119,9 @@ def run_get_cos(**kwargs):
     print("non zeros", idx.shape)
     # theta = np.arctan2(unit_vector(dist_coefs[idx]), unit_vector(sample_coefs[idx]))
 
-    e1, e2 = gram_schmidt(sample_coefs[idx], dist_coefs[idx])
+    e1 = sample_coefs
+    e2 = dist_coefs
+    # e1, e2 = gram_schmidt(sample_coefs[idx], dist_coefs[idx])
     theta = np.arctan2(e2, e1)
 
     # T = np.column_stack((e1, e2))
@@ -144,6 +145,7 @@ def run_get_cos(**kwargs):
 
     X = X[:, index_order, :]
     print(X.shape)
+    print("Done")
     return X, y
 
 

@@ -62,15 +62,16 @@ def get_score(model, X_train, X_test, y, **options):
 
 if __name__ == "__main__":
     options = set_options()
-    X_days, y_days = get_X_y_days(IF_PREP=1, IF_AVG=0)
+    # X_days, y_days = get_X_y_days(IF_PREP=1, IF_AVG=0)
+    X_days, y_days = get_X_y_days(**options)
 
-    X_days = preprocess_X(
-        X_days,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
+    # X_days = preprocess_X(
+    #     X_days,
+    #     scaler=options["scaler_BL"],
+    #     avg_mean=options["avg_mean_BL"],
+    #     avg_noise=options["avg_noise_BL"],
+    #     unit_var=options["unit_var_BL"],
+    # )
 
     model = get_clf(**options)
 

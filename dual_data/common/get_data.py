@@ -8,7 +8,7 @@ from scipy.io import loadmat
 
 from dual_data.common import constants as gv
 from dual_data.common import options
-from dual_data.preprocess.helpers import avg_epochs, preprocess_X
+from dual_data.preprocess.helpers import avg_epochs, preprocess_df
 
 reload(gv)
 
@@ -75,28 +75,31 @@ def create_df(y_raw, day=None):
             columns=["sample_odor", "test_odor", "response", "tasks", "laser", "day"],
         )
 
-    y_df.sample_odor[y_df.sample_odor == 17] = 0
-    y_df.sample_odor[y_df.sample_odor == 18] = 1
+    y_df.loc[y_df.sample_odor == 17, "sample_odor"] = 0
+    y_df.loc[y_df.sample_odor == 18, "sample_odor"] = 1
 
-    y_df.test_odor[y_df.test_odor == 11] = 0
-    y_df.test_odor[y_df.test_odor == 12] = 1
+    y_df.loc[y_df.test_odor == 11, "test_odor"] = 0
+    y_df.loc[y_df.test_odor == 12, "test_odor"] = 1
 
-    y_df.response[y_df.response == 1] = "correct_hit"
-    y_df.response[y_df.response == 2] = "incorrect_miss"
-    y_df.response[y_df.response == 3] = "incorrect_fa"
-    y_df.response[y_df.response == 4] = "correct_rej"
+    y_df.loc[y_df.response == 1, "response"] = "correct_hit"
+    y_df.loc[y_df.response == 2, "response"] = "incorrect_miss"
+    y_df.loc[y_df.response == 3, "response"] = "incorrect_fa"
+    y_df.loc[y_df.response == 4, "response"] = "correct_rej"
 
-    y_df.tasks[y_df.tasks == 0] = "DPA"
-    y_df.tasks[y_df.tasks == 13] = "DualGo"
-    y_df.tasks[y_df.tasks == 14] = "DualNoGo"
+    y_df.loc[y_df.tasks == 0, "tasks"] = "DPA"
+    y_df.loc[y_df.tasks == 13, "tasks"] = "DualGo"
+    y_df.loc[y_df.tasks == 14, "tasks"] = "DualNoGo"
 
     return y_df
 
 
-def get_fluo_data(
-    mouse=gv.mouse, day=gv.day, days=gv.days, path=gv.data_path, data_type=gv.data_type
-):
+def get_fluo_data(idx_day, **kwargs):
     """returns X_raw, y_raw from fluorescence data"""
+
+    mouse = kwargs["mouse"]
+    path = kwargs["data_path"]
+    data_type = kwargs["data_type"]
+    n_days = kwargs["n_days"]
 
     if "ACC" in mouse:
         data = loadmat(path + "/" + mouse + "/SamedROI/" + mouse + "_all_days" + ".mat")
@@ -105,51 +108,38 @@ def get_fluo_data(
             path
             + "/"
             + mouse
-            + "/SamedROI_0%dDays/" % len(days)
+            + "/SamedROI_0%dDays/" % n_days
             + mouse
             + "_day_"
-            + str(day)
+            + str(idx_day)
             + ".mat"
         )
 
     if "raw" in data_type:
-        print("raw")
         X_raw = np.rollaxis(data["Cdf_Mice"], 1, 0)
     else:
-        print("dF")
         X_raw = np.rollaxis(data["dff_Mice"], 1, 0)
 
     y_raw = data["Events"].transpose()
 
     if "ACC" in mouse:
-        print(
-            "mouse",
-            mouse,
-            "days",
-            days,
-            "type",
-            data_type,
-            "all data: X",
-            X_raw.shape,
-            "y",
-            y_raw.shape,
-        )
-
         X_raw = X_raw.reshape(
-            (6, int(X_raw.shape[0] / 6), X_raw.shape[1], X_raw.shape[2])
+            (n_days, int(X_raw.shape[0] / n_days), X_raw.shape[1], X_raw.shape[2])
         )
-        y_raw = y_raw.T.reshape((6, int(y_raw.T.shape[0] / 6), y_raw.T.shape[1]))
+        y_raw = y_raw.T.reshape(
+            (n_days, int(y_raw.T.shape[0] / n_days), y_raw.T.shape[1])
+        )
 
-        X_raw = X_raw[day - 1]
-        y_raw = y_raw[day - 1].T
-
-        print("X", X_raw.shape, "y", y_raw.shape)
+        X_raw = X_raw[idx_day - 1]
+        y_raw = y_raw[idx_day - 1].T
 
     print(
         "mouse",
         mouse,
+        "n_days",
+        n_days,
         "day",
-        day,
+        idx_day,
         "type",
         data_type,
         "all data: X",
@@ -161,16 +151,87 @@ def get_fluo_data(
     return X_raw, y_raw
 
 
-def get_X_y_days(mouse=gv.mouse, days=gv.days, path=gv.filedir, IF_RELOAD=0):
-    if IF_RELOAD == 0:
+# def get_fluo_data(
+#     mouse=gv.mouse, day=gv.day, days=gv.days, path=gv.data_path, data_type=gv.data_type
+# ):
+#     """returns X_raw, y_raw from fluorescence data"""
+
+#     if "ACC" in mouse:
+#         data = loadmat(path + "/" + mouse + "/SamedROI/" + mouse + "_all_days" + ".mat")
+#     else:
+#         data = loadmat(
+#             path
+#             + "/"
+#             + mouse
+#             + "/SamedROI_0%dDays/" % len(days)
+#             + mouse
+#             + "_day_"
+#             + str(day)
+#             + ".mat"
+#         )
+
+#     if "raw" in data_type:
+#         X_raw = np.rollaxis(data["Cdf_Mice"], 1, 0)
+#     else:
+#         X_raw = np.rollaxis(data["dff_Mice"], 1, 0)
+
+#     y_raw = data["Events"].transpose()
+
+#     if "ACC" in mouse:
+#         print(
+#             "mouse",
+#             mouse,
+#             "days",
+#             days,
+#             "type",
+#             data_type,
+#             "all data: X",
+#             X_raw.shape,
+#             "y",
+#             y_raw.shape,
+#         )
+
+#         X_raw = X_raw.reshape(
+#             (6, int(X_raw.shape[0] / 6), X_raw.shape[1], X_raw.shape[2])
+#         )
+#         y_raw = y_raw.T.reshape((6, int(y_raw.T.shape[0] / 6), y_raw.T.shape[1]))
+
+#         X_raw = X_raw[day - 1]
+#         y_raw = y_raw[day - 1].T
+
+#         print("X", X_raw.shape, "y", y_raw.shape)
+
+#     print(
+#         "mouse",
+#         mouse,
+#         "day",
+#         day,
+#         "type",
+#         data_type,
+#         "all data: X",
+#         X_raw.shape,
+#         "y",
+#         y_raw.shape,
+#     )
+
+#     return X_raw, y_raw
+
+
+def get_X_y_days(**kwargs):
+    path = kwargs["data_path"]
+    mouse = kwargs["mouse"]
+    n_days = kwargs["n_days"]
+    days = np.arange(1, n_days + 1)
+
+    if kwargs["reload"] == 0:
         try:
             print("loading files from", path + mouse)
             X_days = pickle.load(open(path + mouse + "/X_days.pkl", "rb"))
             y_days = pd.read_pickle(path + mouse + "/y_days.pkl")
         except:
-            IF_RELOAD = 1
+            kwargs["reload"] = 1
 
-    if IF_RELOAD == 1:
+    if kwargs["reload"] == 1:
         print("reading raw data")
 
         if ("AP" in mouse) or ("PP" in mouse):
@@ -180,7 +241,7 @@ def get_X_y_days(mouse=gv.mouse, days=gv.days, path=gv.filedir, IF_RELOAD=0):
             y_days = []
 
             for day in days:
-                X, y = get_fluo_data(mouse, day, days)
+                X, y = get_fluo_data(idx_day=day, **kwargs)
                 print("X", X.shape, "y", y.shape)
 
                 y_df = create_df(y, day=day)
@@ -194,9 +255,65 @@ def get_X_y_days(mouse=gv.mouse, days=gv.days, path=gv.filedir, IF_RELOAD=0):
         pickle.dump(X_days, open(path + mouse + "/X_days.pkl", "wb"))
         y_days.to_pickle(path + mouse + "/y_days.pkl")
 
-        print("X_days", X_days.shape, "y_days", y_days.shape)
+    print("X_days", X_days.shape, "y_days", y_days.shape)
+
+    if kwargs["preprocess"]:
+        print("##########################################")
+        print(
+            "PREPROCESSING:",
+            "SCALER",
+            kwargs["scaler_BL"],
+            "AVG MEAN",
+            kwargs["avg_mean_BL"],
+            "AVG NOISE",
+            kwargs["avg_noise_BL"],
+            "UNIT VAR",
+            kwargs["unit_var_BL"],
+        )
+        print("##########################################")
+
+        X_days = preprocess_df(X_days, y_days, **kwargs)
 
     return X_days, y_days
+
+
+# def get_X_y_days(mouse=gv.mouse, days=gv.days, path=gv.filedir, IF_RELOAD=0):
+#     if IF_RELOAD == 0:
+#         try:
+#             print("loading files from", path + mouse)
+#             X_days = pickle.load(open(path + mouse + "/X_days.pkl", "rb"))
+#             y_days = pd.read_pickle(path + mouse + "/y_days.pkl")
+#         except:
+#             IF_RELOAD = 1
+
+#     if IF_RELOAD == 1:
+#         print("reading raw data")
+
+#         if ("AP" in mouse) or ("PP" in mouse):
+#             X_days, y_days = get_X_y_days_multi(mouse)
+#         else:
+#             X_days = []
+#             y_days = []
+
+#             for day in days:
+#                 X, y = get_fluo_data(mouse, day, days)
+
+#                 print("X", X.shape, "y", y.shape)
+
+#                 y_df = create_df(y, day=day)
+
+#                 X_days.append(X)
+#                 y_days.append(y_df)
+
+#             X_days = np.vstack(X_days)
+#             y_days = pd.concat(y_days, axis=0, ignore_index=True)
+
+#         pickle.dump(X_days, open(path + mouse + "/X_days.pkl", "wb"))
+#         y_days.to_pickle(path + mouse + "/y_days.pkl")
+
+#         print("X_days", X_days.shape, "y_days", y_days.shape)
+
+#     return X_days, y_days
 
 
 def get_X_y_mice(mice=gv.mice, days=gv.days, path=gv.filedir, IF_RELOAD=0):
@@ -239,15 +356,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
         kwargs["laser"],
     )
     print("##########################################")
-
-    if kwargs["preprocess"]:
-        X = preprocess_X(
-            X,
-            scaler=kwargs["scaler_BL"],
-            avg_mean=kwargs["avg_mean_BL"],
-            avg_noise=kwargs["avg_noise_BL"],
-            unit_var=kwargs["unit_var_BL"],
-        )
 
     idx_trials = True
     if kwargs["trials"] == "correct":
@@ -448,14 +556,5 @@ def get_X_y_S1_S2(X, y, **kwargs):
         )
     else:
         y_S1_S2 = np.hstack((-np.ones(X_S1.shape[0]), np.ones(X_S2.shape[0])))
-
-    # if kwargs["preprocess"]:
-    #     X_S1_S2 = preprocess_X(
-    #         X_S1_S2,
-    #         scaler=kwargs["scaler_BL"],
-    #         avg_mean=kwargs["avg_mean_BL"],
-    #         avg_noise=kwargs["avg_noise_BL"],
-    #         unit_var=kwargs["unit_var_BL"],
-    #     )
 
     return X_S1_S2, y_S1_S2

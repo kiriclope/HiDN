@@ -209,7 +209,8 @@ def run_mne_cross_temp(**kwargs):
 
     task = options["task"]
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    X_days, y_days = get_X_y_days(**options)
 
     model = get_clf(**options)
 

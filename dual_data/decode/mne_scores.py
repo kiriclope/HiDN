@@ -7,29 +7,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from joblib import Parallel, delayed
-from mne.decoding import (
-    GeneralizingEstimator,
-    SlidingEstimator,
-    cross_val_multiscore,
-    get_coef,
-)
-from sklearn.base import clone
+from mne.decoding import SlidingEstimator, cross_val_multiscore
 from sklearn.model_selection import (
     LeaveOneOut,
     RepeatedStratifiedKFold,
     StratifiedKFold,
 )
+
 from sklearn.utils import resample
-from tqdm import tqdm
 
 import dual_data.stats.progressbar as pgb
-from dual_data.common.constants import paldict
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.common.plot_utils import add_vlines, save_fig
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.my_mne import my_cross_val_multiscore
-from dual_data.preprocess.helpers import avg_epochs, preprocess_X
 
 
 def get_ci(res, conf=0.95):
@@ -106,14 +98,6 @@ def get_boots_score(estimator, X, y, cv, n_jobs=-1):
     return scores
 
 
-def get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1):
-    scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs)
-    # Mean scores across cross-validation splits
-    scores = np.mean(scores, axis=0)
-
-    return scores
-
-
 def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA", day="first"):
     x = np.linspace(0, 14, scores.shape[0])
 
@@ -161,7 +145,8 @@ def run_mne_scores(**kwargs):
     except ValueError:
         pass
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    X_days, y_days = get_X_y_days(**options)
 
     model = get_clf(**options)
 
@@ -187,7 +172,7 @@ def run_mne_scores(**kwargs):
     print("cv", cv)
     scoring = options["outer_score"]
 
-    estimator = SlidingEstimator(model, n_jobs=None, scoring=scoring, verbose=False)
+    estimator = SlidingEstimator(model, n_jobs=-1, scoring=scoring, verbose=False)
 
     start_time = time.time()
     scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)

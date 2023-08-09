@@ -48,7 +48,9 @@ def get_coef_feat(X_days, y_days, **options):
 def run_get_cos_day(**kwargs):
     options = set_options(**kwargs)
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    X_days, y_days = get_X_y_days(**options)
+
     n_days = len(y_days.day.unique())
     days = np.arange(1, n_days + 1)
 

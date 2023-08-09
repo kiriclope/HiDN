@@ -51,15 +51,16 @@ def run_mne_coefs(**kwargs):
     except:
         pass
 
-    X_days, y_days = get_X_y_days(mouse=options["mouse"])
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"])
+    X_days, y_days = get_X_y_days(**options)
 
-    X_days = preprocess_X(
-        X_days,
-        scaler=options["scaler_BL"],
-        avg_mean=options["avg_mean_BL"],
-        avg_noise=options["avg_noise_BL"],
-        unit_var=options["unit_var_BL"],
-    )
+    # X_days = preprocess_X(
+    #     X_days,
+    #     scaler=options["scaler_BL"],
+    #     avg_mean=options["avg_mean_BL"],
+    #     avg_noise=options["avg_noise_BL"],
+    #     unit_var=options["unit_var_BL"],
+    # )
 
     options["method"] = "bolasso"
 

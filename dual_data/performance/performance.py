@@ -63,7 +63,9 @@ def perf_tasks_days(y_days, perf_type="correct_hit", IF_TASKS=1, IF_LASER=0):
 
 if __name__ == "__main__":
     options = set_options()
-    _, y_days = get_X_y_days(IF_RELOAD=1)
+
+    # _, y_days = get_X_y_days(IF_RELOAD=1)
+    X_days, y_days = get_X_y_days(**options)
 
     perf_type = "correct"
 

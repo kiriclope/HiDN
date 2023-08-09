@@ -190,7 +190,6 @@ def preprocess_X(
     avg_mean=0,
     avg_noise=0,
     unit_var=0,
-    return_center_scale=0,
 ):
     # X = savgol_filter(X, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
 
@@ -213,24 +212,40 @@ def preprocess_X(
 
     # X_scale = detrend(X_scale, bp=[gv.bins_STIM[0], gv.bins_DIST[0]])
 
-    print("##########################################")
-    print(
-        "PREPROCESSING:",
-        "SCALER",
-        scaler,
-        "AVG MEAN",
-        bool(avg_mean),
-        "AVG NOISE",
-        bool(avg_noise),
-        "UNIT VAR",
-        bool(unit_var),
-    )
-    print("##########################################")
+    # print("##########################################")
+    # print(
+    #     "PREPROCESSING:",
+    #     "SCALER",
+    #     scaler,
+    #     "AVG MEAN",
+    #     bool(avg_mean),
+    #     "AVG NOISE",
+    #     bool(avg_noise),
+    #     "UNIT VAR",
+    #     bool(unit_var),
+    # )
+    # print("##########################################")
 
-    if return_center_scale:
-        return X_scale, center, scale
-    else:
-        return X_scale
+    return X_scale
+
+
+def preprocess_df(X, y, **kwargs):
+    n_days = kwargs["n_days"]
+    days = np.arange(1, n_days + 1)
+
+    X_scaled = np.zeros(X.shape)
+    for day in days:
+        idx = y.day == day
+        X_day = X[idx]
+        X_scaled[idx] = preprocess_X(
+            X_day,
+            scaler=kwargs["scaler_BL"],
+            avg_mean=kwargs["avg_mean_BL"],
+            avg_noise=kwargs["avg_noise_BL"],
+            unit_var=kwargs["unit_var_BL"],
+        )
+
+    return X_scaled
 
 
 def avg_epochs(X, epochs=None):

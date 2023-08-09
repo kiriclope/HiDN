@@ -81,9 +81,9 @@ class bolasso(BaseEstimator, ClassifierMixin):
         self.p_val_ = pval_ttest
         alpha_bf = self.confidence
 
-        _, self.p_val_, _, alpha_bf = multipletests(
-            pval_ttest, alpha=self.confidence, method="bonferroni"
-        )
+        # _, self.p_val_, _, alpha_bf = multipletests(
+        #     pval_ttest, alpha=self.confidence, method="bonferroni"
+        # )
 
         if self.verbose:
             print("p_val", self.p_val_.shape)

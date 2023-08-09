@@ -167,7 +167,7 @@ bins_RWD2 = bins[int((t_RWD2[0] + T_WINDOW) * frame_rate) : int(t_RWD2[1] * fram
 # print("bins LD", bins_LD)
 
 global data_type
-data_type = "dF"  # 'raw' or 'dF'
+data_type = "raw"  # 'raw' or 'dF'
 
 global pal
 pal = [

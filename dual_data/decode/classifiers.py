@@ -1,4 +1,3 @@
-from collections.abc import KeysView
 import numpy as np
 import pandas as pd
 from imblearn.over_sampling import SVMSMOTE
@@ -18,6 +17,7 @@ from sklearn.model_selection import (
 )
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 from sklearn.svm import LinearSVC
+from mne.decoding import Scaler, Vectorizer
 
 from dual_data.decode.bolasso_sklearn import bolasso
 from dual_data.decode.SGDClassifierCV import SGDClassifierCV
@@ -195,10 +195,18 @@ def get_clf(**kwargs):
         pipe.append(("scaler", MinMaxScaler()))
     if kwargs["scaler"] == "standard":
         pipe.append(("scaler", StandardScaler()))
+    if kwargs["scaler"] == "mne_standard":
+        pipe.append(("scaler", Scaler(scalings="mean")))
+        pipe.append(("vec", Vectorizer()))
     if kwargs["scaler"] == "center":
         pipe.append(("scaler", StandardScaler(with_std=False)))
+    if kwargs["scaler"] == "median":
+        pipe.append(("scaler", RobustScaler(with_scaling=False)))
     if kwargs["scaler"] == "robust":
         pipe.append(("scaler", RobustScaler(unit_variance=kwargs["unit_var"])))
+    if kwargs["scaler"] == "mne_robust":
+        pipe.append(("scaler", Scaler(scalings="median")))
+        pipe.append(("vec", Vectorizer()))
 
     # prescreen
     if kwargs["prescreen"] == "fpr":
@@ -269,5 +277,5 @@ def get_clf(**kwargs):
         kwargs["clf"],
     )
 
-    print(clf)
+    # print(pipe)
     return pipe
