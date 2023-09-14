@@ -49,17 +49,21 @@ def my_boots_ci(X, statfunc, conf=0.95, n_samples=1000, n_jobs=-1, verbose=1):
 
     # Sort the array of per-sample statistics and cut off ends
     # ostats = sorted(stats)
-    ostats = np.sort(res, axis=0)
-    mean = np.mean(ostats, axis=0)
-
-    p = (1.0 - conf) / 2.0 * 100
-    lperc = np.percentile(ostats, p, axis=0)
-    lval = mean - lperc
-
-    p = (conf + (1.0 - conf) / 2.0) * 100
-    uperc = np.percentile(ostats, p, axis=0)
-    uval = -mean + uperc
-
+    try:
+        res = res[~np.isnan(res)]
+        ostats = np.sort(res, axis=0)
+        mean = np.nanmean(ostats, axis=0)
+    
+        p = (1.0 - conf) / 2.0 * 100
+        lperc = np.nanpercentile(ostats, p, axis=0)
+        lval = mean - lperc
+    
+        p = (conf + (1.0 - conf) / 2.0) * 100
+        uperc = np.nanpercentile(ostats, p, axis=0)
+        uval = -mean + uperc
+    except:
+        lval = np.nan
+        uval = np.nan
     ci = np.vstack((lval, uval)).T
 
     return mean, ci

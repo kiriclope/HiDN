@@ -29,9 +29,13 @@ def bagged_coefs(model, X, **options):
         model_boot = model.estimators_[i_boot]
 
         try:
-            pval = model_boot.named_steps["filter"].pvalues_
-            idx = pval <= options["pval"]
 
+            mask = model_boot.named_steps["filter"]._get_support_mask()
+            # print("coef", coef.shape, "idx", np.sum(idx))
+            
+            # pval = model_boot.named_steps["filter"].pvalues_
+            # idx = pval <= options["pval"]
+            
             # print("pval", pval.shape)
 
             if options["multilabel"] or options["multiclass"]:
@@ -40,13 +44,13 @@ def bagged_coefs(model, X, **options):
                 coefs[i_boot, :, idx] = coef.T
             else:
                 coef = model_boot.named_steps["clf"].coef_[0]
-                coefs[i_boot, idx] = coef
+                coefs[i_boot, mask] = coef
 
         except:
             coef = model_boot.named_steps["clf"].coef_[0]
             coefs[i_boot] = coef
 
-        if options["standardize"] is not None:
+        if options["scaler"] is not None:
             coefs[i_boot] = rescale_coefs(model_boot, coefs[i_boot])
 
     if options["avg_coefs"]:
@@ -82,7 +86,7 @@ def get_coefs(model, X, y, **options):
             coef = model.named_steps["clf"].coef_[0]
             coefs[idx] = coef
 
-        if options["standardize"] is not None:
+        if options["scaler"] is not None:
             coefs = rescale_coefs(model, coefs)
     elif options["corr"]:
         idx = model.named_steps["corr"].to_drop

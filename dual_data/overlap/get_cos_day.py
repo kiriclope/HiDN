@@ -53,7 +53,12 @@ def run_get_cos_day(**kwargs):
 
     n_days = len(y_days.day.unique())
     days = np.arange(1, n_days + 1)
-
+    
+    # options["features"] = "sample"
+    # options["day"] = 6
+    # c_sample_fix = get_coef_feat(X_days, y_days, **options)
+    # print("coefs sample", np.array(c_sample_fix).shape)
+    
     cos_day = []
     for day in days:
         options["day"] = day
@@ -65,7 +70,8 @@ def run_get_cos_day(**kwargs):
         options["features"] = "distractor"
         c_dist = get_coef_feat(X_days, y_days, **options)
         print("coefs dist", np.array(c_dist).shape)
-
+        
+        # cos = 1 - cosine(c_sample, c_sample_fix)
         cos = 1 - cosine(c_sample, c_dist)
 
         cos_day.append(np.arccos(np.clip(cos, -1.0, 1.0)) * 180 / np.pi)
@@ -118,7 +124,7 @@ def run_get_cos_day(**kwargs):
     # )
 
     plt.errorbar(days, cos_day, yerr=ci_day.T, color="k")
-
+    
     plt.plot([days[0], days[-1]], [90, 90], "k--")
 
     save_fig(fig, figname)

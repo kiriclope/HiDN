@@ -2,6 +2,7 @@
 import sys
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import numpy as np
 import seaborn as sns
 
@@ -65,7 +66,7 @@ def get_total_overlap(X, y, eps, coefs, intercept, model, RETURN_AB=0):
     overlap = []
     for i_epoch in range(X.shape[-1]):
         # overlap.append(model.decision_function(X[..., i_epoch]))
-        overlap.append(np.dot(coefs, X[..., i_epoch].T))
+        overlap.append(np.dot(coefs, X[..., i_epoch].T) * 100)
         # overlap.append(projection(X[..., i_epoch], coefs, intercept))
 
     overlap = np.array(overlap).T
@@ -104,13 +105,14 @@ def run_get_overlap(**kwargs):
     except:
         pass
 
-    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])    
     X_days, y_days = get_X_y_days(**options)
-
+        
     coefs, model = get_coef_feat(X_days, y_days, **options)
-
-    intercept = model.intercept_
-
+    
+    # intercept = model.intercept_
+    intercept = None
+    
     options["task"] = task
     options["features"] = "sample"
     options["trials"] = trials
@@ -168,8 +170,11 @@ def plot_overlap(data, ci=None, **options):
         )
 
     add_vlines()
-    plt.xlim([0, 14])
-
+    plt.xlim([0, 12])
+    plt.xticks([0, 2, 4, 6, 8, 10, 12])
+    plt.gca().xaxis.set_major_locator(ticker.MaxNLocator(4))
+    plt.gca().yaxis.set_major_locator(ticker.MaxNLocator(4))
+    
     plt.xlabel("Time (s)")
     plt.ylabel("Overlap")
 

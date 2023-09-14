@@ -36,23 +36,24 @@
 : /home/leon/mambaforge/envs/dual_data/bin/python
 
 #+begin_src ipython
-    import numpy as np
-    import matplotlib
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    import pandas as pd
+  import numpy as np
+  import matplotlib
+  import matplotlib.pyplot as plt
+  import seaborn as sns
+  import pandas as pd
 
-    sns.set_context("poster")
-    sns.set_style("ticks")
-    plt.rc("axes.spines", top=False, right=False)
-    fig_path = '../figs/perf'
-    golden_ratio = (5**.5 - 1) / 2
-    width = 6
+  sns.set_context("poster")
+  sns.set_style("ticks")
+  plt.rc("axes.spines", top=False, right=False)
+  fig_path = '../figs/perf'
+  golden_ratio = (5**.5 - 1) / 2
+  width = 5
 
-    matplotlib.rcParams['figure.figsize'] = [width, width * golden_ratio ]
-    matplotlib.rcParams['lines.markersize'] = 5
-    %matplotlib inline
-    %config InlineBackend.figure_format = 'png'
+  matplotlib.rcParams['figure.figsize'] = [width, width * golden_ratio ]
+  matplotlib.rcParams['lines.markersize'] = 4
+  matplotlib.rcParams['font.size'] = 5
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
 #+end_src
 
 #+RESULTS:
@@ -65,7 +66,7 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/d7e2f6dd1a25cbf4008ae3e26fb8893aca58aef1.png]]
+[[file:./.ob-jupyter/63fa6b7523922c339462c521294fbd33b50e7371.png]]
 
 * Behavioral performance
 *** Imports
@@ -338,33 +339,38 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 *** Sample Overlap
 **** Parameters
 #+begin_src ipython
-      mice = ['JawsM15']
-      tasks = ['DPA', 'DualGo', 'DualNoGo']
-      days = ['first', 'last']
+  mouse = 'ACCM03'
+  mice = ['JawsM15']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = ['first', 'last']
 
-      kwargs = dict()
-      kwargs = {'prescreen': 0, 'pval':0.05, 'trials':'correct', 'balance':0
-                , 'method':'bolasso', 'bolasso_pval':0.05,
-                'bootstrap':True, 'preprocess':True,
-                'scaler_BL':'robust', 'avg_noise':True,
-                'unit_var_BL':False,
-                'clf':'SVM', 'scaler': None, 'tol':0.001,
-                'out_fold': 'stratified',
-                }
+  kwargs = dict()
+  kwargs = {'prescreen': None, 'pval':0.05, 'trials':'correct', 'balance': True,
+            'method':'bootstrap', 'bolasso_pval':0.05,
+            'bootstrap':True, 'n_boots':1000,
+            'preprocess':True, 'scaler_BL':'robust', 'avg_noise':True, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l1',
+            'out_fold': 'repeated', 'n_out': 5,
+            'in_fold': 'repeated', 'n_in': 5,
+             'random_state': None, 'n_repeats': 10
+            }
+
+  time = np.linspace(0, 14, 84)
+
 #+end_src
 
 #+RESULTS:
 
 **** single mouse
 
-#+begin_src ipython
-
-  mouse = 'ACCM04'
+#+begin_src ipython  
   task= 'DualGo'
   features = 'distractor'
 
   kwargs['show_AB'] = False
-
+  kwargs['reload'] = False
+  kwargs['in_fold'] = 'stratified'
+  
   for day in ['first', 'last']:
       run_get_overlap(mouse=mouse, features=features, task=task, day=day, **kwargs)
       kwargs['reload'] = False
@@ -373,91 +379,355 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 #+RESULTS:
 :RESULTS:
 #+begin_example
-    reading raw data
-    mouse ACCM04 n_days 6 day 1 type dF all data: X (160, 113, 84) y (9, 160)
-    X (160, 113, 84) y (9, 160)
-    mouse ACCM04 n_days 6 day 2 type dF all data: X (160, 113, 84) y (9, 160)
-    X (160, 113, 84) y (9, 160)
-    mouse ACCM04 n_days 6 day 3 type dF all data: X (160, 113, 84) y (9, 160)
-    X (160, 113, 84) y (9, 160)
-    mouse ACCM04 n_days 6 day 4 type dF all data: X (160, 113, 84) y (9, 160)
-    X (160, 113, 84) y (9, 160)
-    mouse ACCM04 n_days 6 day 5 type dF all data: X (160, 113, 84) y (9, 160)
-    X (160, 113, 84) y (9, 160)
-    mouse ACCM04 n_days 6 day 6 type dF all data: X (160, 113, 84) y (9, 160)
-    X (160, 113, 84) y (9, 160)
-    X_days (960, 113, 84) y_days (960, 6)
+    loading files from /home/leon/dual_task/dual_data/data/ACCM03
+    X_days (960, 361, 84) y_days (960, 6)
     ##########################################
     PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
     ##########################################
     ##########################################
-    MODEL: SCALER None IMBALANCE False PRESCREEN 0 PCA False METHOD bolasso FOLDS stratified CLF SVM
+    MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
     ##########################################
     DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
     ##########################################
     multiple days
-    X_S1 (86, 113, 84) X_S2 (89, 113, 84)
-    X_avg (175, 113)
-    boots_coefs (1000, 113)
-    p_val (113,)
-    significant 105
-    X_fs (175, 105)
-    samples (175,) features (113,) non zero 105
+    X_S1 (82, 361, 84) X_S2 (104, 361, 84)
+    n_max 82
+    X_avg (164, 361)
     ##########################################
     DATA: FEATURES sample TASK DualGo TRIALS correct DAYS first LASER 0
     ##########################################
     multiple days
-    X_S1 (41, 113, 84) X_S2 (45, 113, 84)
-    X (86, 113, 84) y (86,)
-  bootstrap: 100% 1000/1000 [00:02<00:00, 471.69it/s]
+    X_S1 (44, 361, 84) X_S2 (38, 361, 84)
+    n_max 38
+    X (76, 361, 84) y (76,)
+  bootstrap: 100% 1000/1000 [00:02<00:00, 413.10it/s]
     Done
-    loading files from /home/leon/dual_task/dual_data/data/ACCM04
-    X_days (960, 113, 84) y_days (960, 6)
+    loading files from /home/leon/dual_task/dual_data/data/ACCM03
+    X_days (960, 361, 84) y_days (960, 6)
     ##########################################
     PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
     ##########################################
     ##########################################
-    MODEL: SCALER None IMBALANCE False PRESCREEN 0 PCA False METHOD bolasso FOLDS stratified CLF SVM
+    MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
     ##########################################
     DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
     ##########################################
     multiple days
-    X_S1 (121, 113, 84) X_S2 (118, 113, 84)
-    X_avg (239, 113)
-    boots_coefs (1000, 113)
-    p_val (113,)
-    significant 108
-    X_fs (239, 108)
-    samples (239,) features (113,) non zero 108
+    X_S1 (134, 361, 84) X_S2 (146, 361, 84)
+    n_max 134
+    X_avg (268, 361)
     ##########################################
     DATA: FEATURES sample TASK DualGo TRIALS correct DAYS last LASER 0
     ##########################################
     multiple days
-    X_S1 (62, 113, 84) X_S2 (59, 113, 84)
-    X (121, 113, 84) y (121,)
-  bootstrap: 100% 1000/1000 [00:02<00:00, 489.04it/s]
+    X_S1 (70, 361, 84) X_S2 (64, 361, 84)
+    n_max 64
+    X (128, 361, 84) y (128,)
+  bootstrap: 100% 1000/1000 [00:03<00:00, 303.31it/s]
     Done
 #+end_example
-[[file:./.ob-jupyter/ff1550143a7b9b1223e1d5917acbfd7eadfd2ace.png]]
+[[file:./.ob-jupyter/fb31bf271bf3e8f2772bc8f5e3fc593817f81a06.png]]
 :END:
 
 
 **** all mice
 #+begin_src ipython :
-  mice = ['ChRM04', 'JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  # mice = ['ChRM04', 'JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  mice = ['JawsM15', 'ACCM03']
   tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  features = 'sample'
+  
+  kwargs['show_AB'] = False
+  kwargs['reload'] = False
+  kwargs['in_fold'] = 'stratified'
 
   for mouse in mice:
       for task in tasks:
-          run_get_overlap(mouse=mouse, features='sample', task=task, day='first', method='bolasso')
-          run_get_overlap(mouse=mouse, features='sample', task=task, day='last', method='bolasso')
+          run_get_overlap(mouse=mouse, features=features, task=task, day='first', **kwargs)
+          run_get_overlap(mouse=mouse, features=features, task=task, day='last', **kwargs)
           plt.close('all')
 #+end_src
 
 #+RESULTS:
-:results:
-# Out[53]:
-:end:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (60, 693, 84) X_S2 (65, 693, 84)
+  n_max 60
+  X_avg (120, 693)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (35, 693, 84) X_S2 (35, 693, 84)
+  n_max 35
+  X (70, 693, 84) y (70,)
+bootstrap: 100% 1000/1000 [00:05<00:00, 196.07it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (79, 693, 84) X_S2 (81, 693, 84)
+  n_max 79
+  X_avg (158, 693)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (45, 693, 84) X_S2 (44, 693, 84)
+  n_max 44
+  X (88, 693, 84) y (88,)
+bootstrap: 100% 1000/1000 [00:03<00:00, 274.47it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (60, 693, 84) X_S2 (65, 693, 84)
+  n_max 60
+  X_avg (120, 693)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (27, 693, 84) X_S2 (28, 693, 84)
+  n_max 27
+  X (54, 693, 84) y (54,)
+bootstrap: 100% 1000/1000 [00:02<00:00, 366.88it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (79, 693, 84) X_S2 (81, 693, 84)
+  n_max 79
+  X_avg (158, 693)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (38, 693, 84) X_S2 (40, 693, 84)
+  n_max 38
+  X (76, 693, 84) y (76,)
+bootstrap: 100% 1000/1000 [00:03<00:00, 294.39it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (60, 693, 84) X_S2 (65, 693, 84)
+  n_max 60
+  X_avg (120, 693)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (33, 693, 84) X_S2 (37, 693, 84)
+  n_max 33
+  X (66, 693, 84) y (66,)
+bootstrap: 100% 1000/1000 [00:02<00:00, 337.01it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (79, 693, 84) X_S2 (81, 693, 84)
+  n_max 79
+  X_avg (158, 693)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (41, 693, 84) X_S2 (41, 693, 84)
+  n_max 41
+  X (82, 693, 84) y (82,)
+bootstrap: 100% 1000/1000 [00:03<00:00, 290.41it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  X_days (960, 361, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (97, 361, 84) X_S2 (89, 361, 84)
+  n_max 89
+  X_avg (178, 361)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (51, 361, 84) X_S2 (54, 361, 84)
+  n_max 51
+  X (102, 361, 84) y (102,)
+bootstrap: 100% 1000/1000 [00:02<00:00, 371.11it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  X_days (960, 361, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (143, 361, 84) X_S2 (137, 361, 84)
+  n_max 137
+  X_avg (274, 361)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (73, 361, 84) X_S2 (77, 361, 84)
+  n_max 73
+  X (146, 361, 84) y (146,)
+bootstrap: 100% 1000/1000 [00:03<00:00, 299.96it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  X_days (960, 361, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (97, 361, 84) X_S2 (89, 361, 84)
+  n_max 89
+  X_avg (178, 361)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (44, 361, 84) X_S2 (38, 361, 84)
+  n_max 38
+  X (76, 361, 84) y (76,)
+bootstrap: 100% 1000/1000 [00:02<00:00, 392.76it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  X_days (960, 361, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (143, 361, 84) X_S2 (137, 361, 84)
+  n_max 137
+  X_avg (274, 361)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (70, 361, 84) X_S2 (64, 361, 84)
+  n_max 64
+  X (128, 361, 84) y (128,)
+bootstrap: 100% 1000/1000 [00:03<00:00, 317.32it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  X_days (960, 361, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (97, 361, 84) X_S2 (89, 361, 84)
+  n_max 89
+  X_avg (178, 361)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days
+  X_S1 (53, 361, 84) X_S2 (51, 361, 84)
+  n_max 51
+  X (102, 361, 84) y (102,)
+bootstrap: 100% 1000/1000 [00:02<00:00, 372.10it/s]
+  Done
+  loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  X_days (960, 361, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (143, 361, 84) X_S2 (137, 361, 84)
+  n_max 137
+  X_avg (274, 361)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days
+  X_S1 (73, 361, 84) X_S2 (73, 361, 84)
+  n_max 73
+  X (146, 361, 84) y (146,)
+bootstrap: 100% 1000/1000 [00:03<00:00, 297.36it/s]
+  Done
+#+end_example
 
 **** summary
 
@@ -498,9 +768,6 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 #+end_src
 
 #+RESULTS:
-:results:
-# Out[9]:
-:end:
 
 *** single mouse
 #+begin_src ipython :
@@ -508,11 +775,118 @@ mice_dpa, mice_go, mice_nogo = get_licks_mice(path, n_session=11, response="inco
 #+end_src
 
 #+RESULTS:
-:results:
-# Out[12]:
-[[file:./obipy-resources/4jLAUr.png]]
-:end:
+:RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN fdr PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (27, 693, 84) X_S2 (31, 693, 84)
+  X_avg (58, 693)
+  boots_coefs (1000, 693)
+  p_val (693,)
+  significant 305
+  X_fs (58, 305)
+  samples (58,) features (693,) non zero 305
+  coefs sample (693,)
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN fdr PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (21, 693, 84) X_S2 (19, 693, 84)
+  X_avg (40, 693)
+  boots_coefs (1000, 693)
+  p_val (693,)
+  significant 303
+  X_fs (40, 303)
+  samples (40,) features (693,) non zero 303
+  coefs sample (693,)
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN fdr PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (17, 693, 84) X_S2 (22, 693, 84)
+  X_avg (39, 693)
+  boots_coefs (1000, 693)
+  p_val (693,)
+  significant 230
+  X_fs (39, 230)
+  samples (39,) features (693,) non zero 230
+  coefs sample (693,)
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN fdr PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (22, 693, 84) X_S2 (24, 693, 84)
+  X_avg (46, 693)
+  boots_coefs (1000, 693)
+  p_val (693,)
+  significant 198
+  X_fs (46, 198)
+  samples (46,) features (693,) non zero 198
+  coefs sample (693,)
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN fdr PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (29, 693, 84) X_S2 (28, 693, 84)
+  X_avg (57, 693)
+  boots_coefs (1000, 693)
+  p_val (693,)
+  significant 349
+  X_fs (57, 349)
+  samples (57,) features (693,) non zero 349
+  coefs sample (693,)
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN fdr PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (23, 693, 84) X_S2 (22, 693, 84)
+  X_avg (45, 693)
+  boots_coefs (1000, 693)
+  p_val (693,)
+  significant 170
+  X_fs (45, 170)
+  samples (45,) features (693,) non zero 170
+  coefs sample (693,)
+  ##########################################
+  MODEL: SCALER None IMBALANCE False PRESCREEN fdr PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS correct DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (27, 693, 84) X_S2 (31, 693, 84)
+  X_avg (58, 693)
+  boots_coefs (1000, 693)
+  p_val (693,)
+  significant 308
+  X_fs (58, 308)
+  samples (58,) features (693,) non zero 308
+  coefs sample (693,)
+#+end_example
+[[file:./.ob-jupyter/ebc794d2d3e4e6b29b6101e2e3c0877be6d40ea5.png]]
+:END:
 
+#+begin_src ipython
+
+#+end_src
 * Bump attractor Dynamics
 *** Method
 Here, I get the unitary normal vectors of the sample and distractor subspaces, namely, s and d
@@ -522,40 +896,43 @@ Then, I define theta[i] = arctan2(d[i], s[i]) and rearrange the neurons given th
   from scipy.stats import circmean, circstd
   from dual_data.overlap.get_cos import run_get_cos, plot_bump
   from dual_data.common.plot_utils import add_vlines
+  from dual_data.decode.bump import decode_bump, circcvl
 #+end_src
 
 #+RESULTS:
+
 *** Parameters
+
 #+begin_src ipython
-  mice = ['JawsM15']
+  mouse = 'JawsM15'
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   days = ['first', 'last']
 
   kwargs = dict()
-  kwargs = {'prescreen': 0, 'pval':0.05, 'trials':'correct', 'balance':0
-            , 'method':'bolasso', 'bolasso_pval':0.001,
-            'bootstrap':True, 'preprocess':True,
-            'scaler_BL':'robust', 'avg_noise':True,
-            'unit_var_BL':False,
-            'clf':'log_loss', 'scaler': None, 'tol':0.001,
-            'out_fold': 'stratified',
+  kwargs = {'prescreen': None, 'pval':0.05, 'trials':'correct', 'balance': True,
+            'method':'bootstrap', 'bolasso_pval':0.05,
+            'bolasso':True, 'n_boots':10000,
+            'preprocess':True, 'scaler_BL':'robust', 'avg_noise':True, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l1',
+            'out_fold': 'repeated', 'random_state': None,
+            'in_fold': 'stratified', 'n_in': 5,
+            'n_repeats': 10,
             }
+
+  time = np.linspace(0, 14, 84)
 #+end_src
 
 #+RESULTS:
 
 *** Single mouse
 #+begin_src ipython
-  mouse = 'JawsM15'
   task= 'DPA'
-
-
+  
   day = 'first'
-  X_first, y_first = run_get_cos(mouse=mouse, day=day, task=task, **kwargs)
+  X_df, y_df, X_first, y_first, theta_first = run_get_cos(mouse=mouse, day=day, task=task, **kwargs)
 
   day = 'last'
-  X_last, y_last = run_get_cos(mouse=mouse, day=day, task=task, **kwargs)
-
+  X_dl, y_dl, X_last, y_last, theta_last = run_get_cos(mouse=mouse, day=day, task=task, **kwargs)
 #+end_src
 
 #+RESULTS:
@@ -566,35 +943,62 @@ Then, I define theta[i] = arctan2(d[i], s[i]) and rearrange the neurons given th
   PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
   ##########################################
   ##########################################
-  MODEL: SCALER None IMBALANCE False PRESCREEN 0 PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days
   X_S1 (55, 693, 84) X_S2 (70, 693, 84)
-  boots_coefs (1000, 693)
-  p_val (693,)
-  significant 598
-  X_fs (125, 598)
-  samples (125,) features (693,) non zero 598
+  n_max 55
   ##########################################
   DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days
   X_S1 (60, 693, 84) X_S2 (65, 693, 84)
-  boots_coefs (1000, 693)
-  p_val (693,)
-  significant 629
-  X_fs (125, 629)
-  samples (125,) features (693,) non zero 629
+  n_max 60
   non zeros (693,)
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days
   X_S1 (35, 693, 84) X_S2 (35, 693, 84)
-  (693,) (70, 693, 84)
-  (70, 693, 84)
+  n_max 35
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (9, 693, 84) X_S2 (10, 693, 84)
+  n_max 9
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (13, 693, 84) X_S2 (11, 693, 84)
+  n_max 11
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (13, 693, 84) X_S2 (14, 693, 84)
+  n_max 13
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  n_max 16
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (13, 693, 84) X_S2 (12, 693, 84)
+  n_max 12
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  n_max 16
   Done
   loading files from /home/leon/dual_task/dual_data/data/JawsM15
   X_days (1152, 693, 84) y_days (1152, 6)
@@ -602,160 +1006,575 @@ Then, I define theta[i] = arctan2(d[i], s[i]) and rearrange the neurons given th
   PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
   ##########################################
   ##########################################
-  MODEL: SCALER None IMBALANCE False PRESCREEN 0 PCA False METHOD bolasso FOLDS stratified CLF log_loss
+  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
   ##########################################
   multiple days
   X_S1 (78, 693, 84) X_S2 (82, 693, 84)
-  boots_coefs (1000, 693)
-  p_val (693,)
-  significant 616
-  X_fs (160, 616)
-  samples (160,) features (693,) non zero 616
+  n_max 78
   ##########################################
   DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
   ##########################################
   multiple days
   X_S1 (79, 693, 84) X_S2 (81, 693, 84)
-  boots_coefs (1000, 693)
-  p_val (693,)
-  significant 649
-  X_fs (160, 649)
-  samples (160,) features (693,) non zero 649
+  n_max 79
   non zeros (693,)
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER 0
   ##########################################
   multiple days
   X_S1 (45, 693, 84) X_S2 (44, 693, 84)
-  (693,) (89, 693, 84)
-  (89, 693, 84)
+  n_max 44
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (9, 693, 84) X_S2 (10, 693, 84)
+  n_max 9
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (13, 693, 84) X_S2 (11, 693, 84)
+  n_max 11
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (13, 693, 84) X_S2 (14, 693, 84)
+  n_max 13
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  n_max 16
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (13, 693, 84) X_S2 (12, 693, 84)
+  n_max 12
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  n_max 16
   Done
 #+end_example
 
+**** plots
+
 #+begin_src ipython
-  plot_bump(X_first, y_first, -1, 'all', 100)
-  plot_bump(X_last, y_last, -1, 'all', 100)
+  plot_bump(X_first, y_first, 'all', 100)
+  plt.savefig('./raster_' + mouse + '_first.svg', dpi=300)
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-[[file:./.ob-jupyter/b27073d8f187badc28a5085fa5b48737e3c52650.png]]
-[[file:./.ob-jupyter/c87c57fd74fb0d7f0eb8c5dbcdd7701156e054cd.png]]
-:END:
+[[file:./.ob-jupyter/e426a16f976e21dbcba2cb935c25015957fef62c.png]]
+
 
 #+begin_src ipython :
-  plot_bump(X_first, y_first, 1, 'all', 100)
-  plot_bump(X_last, y_last, 1, 'all', 100)
+  plot_bump(X_last, y_last, 'all', 100)
+  plt.savefig('./raster_' + mouse + '_last.svg', dpi=300)  
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-[[file:./.ob-jupyter/49cf0f4bd7fd666ee75cdc98d7fb031e9b168b19.png]]
-[[file:./.ob-jupyter/2f4adadc3e9508c4145282fe582abea953c0cb5f.png]]
-:END:
+[[file:./.ob-jupyter/8e4eec1c4e9cd7f713939168614b60a85455096b.png]]
 
-**** decoder
-#+begin_src ipython
-
-  def decode_bump(signal, axis=-1, windowSize=100, SMOOTH=False):
-      signal_copy = signal.copy()
-      if axis != -1 and signal.ndim != 1:
-          signal_copy = np.swapaxes(signal_copy, axis, -1)
-
-      if SMOOTH:
-          signal_copy = circcvl(signal_copy, windowSize=10, axis=-1)
-
-      length = signal_copy.shape[-1]
-      dPhi = np.pi / length
-
-      dft = np.dot(signal_copy, np.exp(-2.0j * np.arange(length) * dPhi))
-
-      if axis != -1 and signal.ndim != 1:
-          dft = np.swapaxes(dft, axis, -1)
-
-      m1 = 2.0 * np.absolute(dft) / length
-      phi = np.arctan2(dft.imag, dft.real) % (2.0 * np.pi)
-
-      return m1, phi
-
-
-  def circcvl(signal, windowSize=10, axis=-1):
-      signal_copy = signal.copy()
-
-      if axis != -1 and signal.ndim != 1:
-          signal_copy = np.swapaxes(signal_copy, axis, -1)
-
-      ker = np.concatenate(
-          (np.ones((windowSize,)), np.zeros((signal_copy.shape[-1] - windowSize,)))
-          )
-
-      smooth_signal = np.real(
-          np.fft.ifft(
-              np.fft.fft(signal_copy, axis=-1) * np.fft.fft(ker, axis=-1), axis=-1
-          )
-      ) * (1.0 / float(windowSize))
-
-      if axis != -1 and signal.ndim != 1:
-          smooth_signal = np.swapaxes(smooth_signal, axis, -1)
-
-      return smooth_signal
-
-#+end_src
-
-#+RESULTS:
-
-**** Do Wimmer analysis see melanie
-for each single trial bumps: extract circmean and circstd at each time point and average over trials
-std of the circmean -> precision
-mean of circstd -> width of the bump at each trials how the bump broadens (Klaus)
+*** Energy Landscape
 
 #+begin_src ipython
   from scipy.stats import bootstrap
+
   def my_boots_ci(X, statfunc, n_samples=10000, method="BCa", alpha=0.05, axis=0):
         boots_samples = bootstrap(
-              (X,),
+              X,
               statistic=statfunc,
               n_resamples=n_samples,
               method=method,
               confidence_level=1.0 - alpha,
-              vectorized = True,
-              axis = axis,
+              vectorized=True,
+              axis=axis,
         )
 
-        # print(boots_samples)
-
-        ci = np.array([boots_samples.confidence_interval.low, boots_samples.confidence_interval.high])
-        mean_boots = np.mean(boots_samples.bootstrap_distribution, axis=-1)
-
-        ci[0] = mean_boots - ci[0]
-        ci[1] = ci[1] - mean_boots
-
-        return ci
-
+  from dual_data.stats.bootstrap import my_boots_ci
 #+end_src
 
 #+RESULTS:
 
-**** phase
 #+begin_src ipython
-  amp, phase_first = decode_bump(X_first, axis=1, SMOOTH=True)
-  amp, phase_last = decode_bump(X_last, axis=1, SMOOTH=True)
+  import numpy as np
+  import scipy.linalg
+
+  def compute_transition_matrix(X, num_bins):
+      # Bin the activity data
+      amp, phase = decode_bump(X, axis=1, windowSize=10, SMOOTH=False)
+
+      X_discrete = np.digitize(phase, np.linspace(phase.min(), phase.max(), num_bins-1))
+      # X_discrete = np.where(X_discrete==0, num_bins, X_discrete)
+
+      # Initialize transition matrix
+      transition_matrix = np.zeros((num_bins, num_bins))
+
+      # Compute transitions
+      for i in range(X_discrete.shape[0] - 1):
+          transition_matrix[X_discrete[i], X_discrete[i+1]] += 1
+
+      transition_matrix[-1, 0] += np.sum((X_discrete[:-1] == (num_bins-1)) & (X_discrete[1:] == 0))
+      transition_matrix[0, -1] += np.sum((X_discrete[:-1] == 0) & (X_discrete[1:] == (num_bins-1)))
+
+      # Normalize transition matrix (to make it stochastic)
+
+      transition_matrix /= (transition_matrix.sum(axis=1, keepdims=True) + 0.000001)
+      transition_matrix = np.nan_to_num(transition_matrix, nan=0.0)
+
+      return transition_matrix, phase
+
+  def compute_steady_state(transition_matrix):
+      # The steady state distribution is the left eigenvector of the transition matrix corresponding to eigenvalue 1
+      eigenvalues, eigenvectors = scipy.linalg.eig(transition_matrix.T)
+      steady_state = np.real(eigenvectors[:,np.isclose(eigenvalues, 1.0)][:,0])
+
+      # Normalize steady state distribution
+      steady_state /= (steady_state.sum() + 0.000001)
+      steady_state = np.nan_to_num(steady_state, nan=0.0)
+
+      # inf_positions = np.isinf(steady_state)
+      # # set those positions to a specific value, for example 0 or np.nan
+      # steady_state[inf_positions] = 0  # or np.nan
+
+      return steady_state
+
+  def compute_energy_landscape(steady_state):
+      # Compute the energy landscape as the negative log of the steady state distribution
+      energy_landscape = -np.log(1 + steady_state )
+
+      # # Optional: subtract the minimum value so that the energy landscape starts at 0
+      energy_landscape -= energy_landscape.min()
+
+      energy_landscape /= energy_landscape.sum()
+
+      return energy_landscape
+
+  def run_energy(X, num_bins, window):
+      try:
+          transition_matrix, phase = compute_transition_matrix(X, num_bins=num_bins)
+          steady_state = compute_steady_state(transition_matrix)
+          energy = compute_energy_landscape(steady_state)
+          energy_cvl = circcvl(energy, window)
+      except:
+          energy_cvl = np.nan * np.zeros(num_bins)
+      return energy_cvl
+
 #+end_src
 
 #+RESULTS:
+
+#+begin_src ipython
+time[24]
+#+end_src
+
+#+RESULTS:
+: 4.048192771084337
+
+
+#+begin_src ipython
+  # Note: X should be the neuronal activities reshaped to be one dimensional. 
+  # For example assuming X is a 2D array with dimensions (trials, time), you could reshape it by X = X.reshape(-1)
+
+  num_bins = int(0.1 * X_first.shape[1]+1)  # Or any other number depending on the specifics of your problem
+  num_bins = int(101) 
+  window = int(0.1 * num_bins)
+  
+  init = 18
+  last = 53
+  X1 = X_first
+  print(X1.shape)
+  transition_matrix, phase_first = compute_transition_matrix(X1[..., init:last], num_bins=num_bins)
+  steady_state = compute_steady_state(transition_matrix)
+  energy_first = compute_energy_landscape(steady_state)
+
+  _, ci_first = my_boots_ci(X1[..., init:last],lambda x: run_energy(x, num_bins, window), n_samples=1000)
+  # print(ci_first.shape)
+
+  X2 = X_last
+  print(X2.shape)
+  transition_matrix, phase_last = compute_transition_matrix(X2[..., init:last], num_bins=num_bins)
+  steady_state = compute_steady_state(transition_matrix)
+  energy_last = compute_energy_landscape(steady_state)
+
+  _, ci_last = my_boots_ci(X2[..., init:last], lambda x: run_energy(x, num_bins, window), n_samples=1000)
+
+#+end_src
+
+#+RESULTS:
+: (70, 693, 84)
+: bootstrap: 100% 1000/1000 [00:03<00:00, 329.77it/s]
+: (88, 693, 84)
+: bootstrap: 100% 1000/1000 [00:03<00:00, 315.64it/s]
+
+#+begin_src ipython
+
+  theta = np.linspace(phase_first.min(), phase_first.max(), num_bins) * 180 / np.pi + 180
+  plt.plot(theta, circcvl(energy_first, window) * 100, lw=4)
+  plt.fill_between(
+      theta,
+      (energy_first - ci_first[:, 0]) * 100,
+      (energy_first + ci_first[:, 1]) * 100,
+      alpha=0.2,
+  )
+
+  theta = np.linspace(phase_last.min(), phase_last.max(), num_bins) * 180 / np.pi + 180
+  plt.plot(theta, circcvl(energy_last, window) * 100, lw=4)
+  plt.fill_between(
+      theta,
+      (energy_last - ci_last[:, 0]) * 100,
+      (energy_last + ci_last[:, 1]) * 100,
+      alpha=0.2,
+  )
+
+  plt.ylabel('Energy (a.u.)')
+  plt.xlabel('Pref. Location (°)')
+  plt.xticks([0, 90, 180, 270, 360])
+  plt.ylim([0, 2])
+  plt.savefig('landscape_' + mouse + '.svg', dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/a098a27c2754022687e7134559184d5637344bad.png]]
+
+#+RESULTS:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** hmm
+#+begin_src ipython
+  from hmmlearn import hmm
+  import numpy as np
+  from sklearn.decomposition import PCA
+
+  def hmm_model(X):
+      # Reshape your data to 2D: (trials * time, neurons)
+      # X_flat = np.reshape(X, (X.shape[0]*X.shape[2], X.shape[1]))
+      amp, phase = decode_bump(X, axis=1, SMOOTH=False)
+      X_flat = phase.reshape(-1, 1)
+      # # Create an HMM instance and set parameters
+      model = hmm.GaussianHMM(n_components=2, covariance_type="full", n_iter=1000)
+
+      # Fit the model to your data
+      model.fit(X_flat)
+
+      # Predict the optimal sequence of internal hidden state
+      hidden_states = model.predict(X_flat)
+      
+      # You might want to reshape hidden states back to original form for further analysis
+      # hidden_states = np.reshape(hidden_states, (X.shape[0], X.shape[2]))
+
+      return model
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+time[53]
+#+end_src
+
+#+RESULTS:
+: 8.939759036144578
+
+#+begin_src ipython
+  model_first = hmm_model(X_first[..., 18:53])
+  model_last = hmm_model(X_last[..., 18:53])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print(model_first.transmat_)
+  print(model_last.transmat_)
+#+end_src
+#+RESULTS:
+: [[0.93696053 0.06303947]
+:  [0.02450997 0.97549003]]
+: [[0.95605818 0.04394182]
+:  [0.02878403 0.97121597]]
+
+*** gmm
+#+begin_src ipython
+  from sklearn.mixture import GaussianMixture
+
+  def gmm_fit(X):
+      # assuming X is your data
+      gmm = GaussianMixture(n_components=2)  # Choose the number of components (2 in a double well case)
+
+      amp, phase = decode_bump(X, axis=1, SMOOTH=False)
+      centers = phase.reshape(-1, 1)
+
+      gmm.fit(centers)
+
+      # Predict the labels for the data samples in X using GMM model
+      labels = gmm.predict(centers)
+
+      # Obtain the Gaussian distribution parameters
+      weights = gmm.weights_
+      means = gmm.means_
+      covariances = gmm.covariances_
+      return weights, means, covariances
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  weights_first, means_first, cov_first = gmm_fit(X_first[18:53])
+  weights_last, means_last, cov_last = gmm_fit(X_last[18:53])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  g_first = landscape(weights_first, means_first, cov_first)
+  g_last = landscape(weights_last, means_last, cov_last)
+
+  x = np.linspace(-5, 5, 1000)
+  plt.plot(x, g_first)
+  plt.plot(x, g_last)
+
+  plt.title("Double Well GMM")
+
+  plt.show()
+
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/6e5b163039168d77bed115b679b21f84ae2df45e.png]]
+
+#+begin_src ipython
+  import matplotlib.pyplot as plt
+  # Create a grid for visualization
+  def landscape(weights, means, covs):
+      x = np.linspace(-5, 5, 1000)
+
+      # Calculate Gaussian distribution for each point on the grid
+      g1 = weights[0] * np.exp(-0.5 * ((x - means[0][0])**2) / covs[0][0])
+      g2 = weights[1] * np.exp(-0.5 * ((x - means[1][0])**2) / covs[1][0])
+
+      # Add both parts 
+      g_total = g1 + g2 
+
+      return g_total
+
+#+end_src
+
+#+RESULTS:
+: b25faf5e-5328-4c07-82c0-24d7df5badf9
+
+*** msd
+#+begin_src ipython
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  # We assume you already have your data organized into trials, neurons, and timepoints
+  # data[i, j, k] is the activity of neuron j at time k in trial i
+
+  def compute_centroid(data):
+      # create equal weights for all neurons
+      neurons = np.arange(data.shape[1])
+      centroid = np.average(data, axis=1, weights=neurons)
+      return centroid
+
+  def compute_msd(centroid):
+      num_timepoints = centroid.shape[1]
+      msd = np.zeros(num_timepoints)
+
+      for delta_t in range(num_timepoints):
+          diffs = centroid[:, delta_t:] - centroid[:, :centroid.shape[1]-delta_t]
+          sq_diffs = np.square(diffs)
+          mean_sq_diff = np.mean(sq_diffs, axis=1)
+          msd[delta_t] = np.mean(mean_sq_diff)
+      return msd
+
+  def compute_circular_centroid(X, angles):
+      # Ensure angles array same size as neurons dimension
+      assert X.shape[1] == angles.size
+
+      # Convert angles to complex number representation
+      vectors = np.exp(1j * angles)
+
+      # Compute circular centroid
+      centroid = np.sum(X * vectors[None, :, None], axis=1) / np.sum(X, axis=1)
+
+      # Get the angles via the arctan of the mean complex vector
+      centroid_angles = np.angle(centroid)
+
+      return centroid_angles
+
+  # compute the centroid and then the MSD for your data
+  double_well_centroid = compute_circular_centroid(X_first[..., 18:53], theta_first)
+  double_well_msd = compute_msd(double_well_centroid)
+
+  cont_attractor_centroid = compute_circular_centroid(X_last[..., 18:53], theta_last)
+  cont_attractor_msd = compute_msd(cont_attractor_centroid)
+
+  # Plot the results
+  plt.loglog(double_well_msd, label='Double well')
+  plt.loglog(cont_attractor_msd, label='Continuous attractor')
+  plt.legend(fontsize=8)
+  plt.show()
+
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/5cb08c505d734ca68b611c1ed3a7cd87fadb9f66.png]]
+
+*** Bump width
+#+begin_src ipython
+  import astropy.stats.circstats as ast
+
+  def mean_circ_std(X, y, theta):
+
+      # theta = np.linspace(0, 2*np.pi, X.shape[1])
+
+      mean_std_all = []
+      X_copy = X.copy()
+      for k in [-1, 1]:
+          X_k = X_copy[y==k]
+
+          std = np.zeros( (X_k.shape[0], X_k.shape[-1]))
+
+          for i in range(X_k.shape[0]):
+              for j in range(X_k.shape[-1]):
+                  try:
+                      std[i][j] = ast.circstd(theta, weights=X_k[i,:,j])
+                  except:
+                      std[i][j] = np.nan
+
+          mean_std_all.append(np.nanmean(std, 0))
+      
+      mean_std_all = np.vstack(mean_std_all)
+
+      return np.nanmean(mean_std_all, 0) * 180 / np.pi
+
+  mean_cstd_first = mean_circ_std(X_first, y_first, theta_first);
+  mean_cstd_last = mean_circ_std(X_last, y_last, theta_last);
+
+  # mean_cstd_first = []
+  # mean_cstd_last = []
+  # for i in range(3):
+  #     mean_cstd_first.append(mean_circ_std(X_df[i], y_df[i], theta_first))
+  #     mean_cstd_last.append(mean_circ_std(X_dl[i+3], y_dl[i+3], theta_last))
+
+  # mean_cstd_first = np.mean(np.array(mean_cstd_first), 0) 
+  # mean_cstd_last = np.mean(np.array(mean_cstd_last), 0) 
+
+  time = np.linspace(0, 14, 84)
+  plt.plot(time, mean_cstd_first)
+  plt.plot(time, mean_cstd_last)
+  plt.xlabel('Time (s)')
+  plt.ylabel('$<\sigma> (°)$')
+  add_vlines()
+
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: /home/leon/mambaforge/envs/dual_data/lib/python3.8/site-packages/astropy/stats/circstats.py:237: RuntimeWarning: invalid value encountered in sqrt
+:   return np.sqrt(2.0 * (1.0 - _length(data, 1, 0.0, axis, weights)))
+[[file:./.ob-jupyter/4535679b62150645a3db28549f06ed7133bfe4c9.png]]
+:END:
+
+*** Bump precision
+#+begin_src ipython
+  import astropy.stats.circstats as ast
+
+  def std_circ_mean(X, y, theta):
+
+      std_cm_all = []
+      X_copy = X.copy()
+      for k in [-1, 1]:
+          X_k = X_copy[y==k]
+
+          cm = np.zeros( (X_k.shape[0], X_k.shape[-1]))
+
+          for i in range(X_k.shape[0]):
+              for j in range(X_k.shape[-1]):
+                  try:
+                      cm[i][j] = ast.circmean(theta, weights=X_k[i,:,j]) # over neurons
+                  except:
+                      cm[i][j] = np.nan
+                      
+          std_cm_all.append(np.nanstd(cm, 0)) # std over trials
+
+      std_cm_all = np.vstack(std_cm_all)
+      return np.nanmean(std_cm_all, 0) * 180 / np.pi  # avg over samples
+
+  std_cmean_first = []
+  std_cmean_last = []
+  for i in range(3):
+      std_cmean_first.append(std_circ_mean(X_df[i], y_df[i], theta_first))
+      std_cmean_last.append(std_circ_mean(X_dl[i+3], y_dl[i+3], theta_last))
+
+  std_cmean_first = np.mean(np.array(std_cmean_first), 0) 
+  std_cmean_last = np.mean(np.array(std_cmean_last), 0)
+
+  # std_cmean_first = std_circ_mean(X_first, y_first, theta_first)
+  # std_cmean_last = std_circ_mean(X_last, y_last, theta_last)
+
+  time = np.linspace(0, 14, 84)
+  plt.plot(time, std_cmean_first, label='first')
+  plt.plot(time, std_cmean_last, label='last')
+  plt.legend(fontsize=12)
+  plt.ylabel('$< \sqrt{\delta \phi^2}>$')
+  plt.xlabel('Time (s)')
+  plt.xlim([2, 14])
+  add_vlines()
+
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/4bf68497435ae733eaf4ebe61fc2ed41675f99da.png]]
+
+*** phase
+
+#+begin_src ipython
+  amp, phase_first = decode_bump(X_first, axis=1, SMOOTH=False)
+  amp, phase_last = decode_bump(X_last, axis=1, SMOOTH=False)
+#+end_src
+
+#+RESULTS:
+
+**** plot phase
+#+begin_src ipython
+  # plt.plot(time, phase_first[y_first==1].T, alpha=0.2);
+  # add_vlines()
+  
+  plt.hist(phase_first[:,18].T, histtype='step', bins='auto', density=True);
+  plt.hist(phase_last[:,18].T, histtype='step', bins='auto', density=True);
+  # # plt.plot(time, phase_stim.T, alpha=0.2);
+  # add_vlines()
+
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/acd29b528a7a1e388d468146520036a00611dad7.png]]
 
 **** std of circmean of X
 #+begin_src ipython
   def circ_mean(X, y, axis=0):
      # X = X % (2 * np.pi)
      X_copy = X.copy()
-     X_copy[y==1] = (X_copy[y==1] - np.pi)
-     cm = circmean(X_copy, axis=axis) * 180 / np.pi
-     # cm = circmean(X[y==1], axis=axis) * 180 / np.pi
-     # cm1 = circmean(X[y==-1], axis=axis) * 180 / np.pi
-     # cm = (cm+cm1)/2
+     # X_copy[y==1] = (X_copy[y==1] - np.pi)
+     # cm = circmean(X_copy, axis=axis) * 180 / np.pi
+     cm = circmean(X_copy[y==1], axis=axis) * 180 / np.pi
+     cm1 = circmean(X[y==-1], axis=axis) * 180 / np.pi
+     cm = (cm+cm1)/2
 
      return cm
 
@@ -763,116 +1582,385 @@ mean of circstd -> width of the bump at each trials how the bump broadens (Klaus
 
   mean_first = circ_mean(phase_first, y_first)
   plt.plot(time, mean_first, label='first')
-  ci = my_boots_ci(phase_first[y_first==-1], circmean, axis=0) * 180 / np.pi
-  plt.fill_between(time, mean_first-ci[0], mean_first+ci[1], alpha=0.25)
+  # ci = my_boots_ci(phase_first[y_first==1], circmean, axis=0) * 180 / np.pi
+  # plt.fill_between(time, mean_first-ci[0], mean_first+ci[1], alpha=0.25)
 
   mean_last = circ_mean(phase_last, y_last)
   plt.plot(time, mean_last, label='last')
-  ci = my_boots_ci(phase_last[y_last==-1], circmean, axis=0) * 180 / np.pi
-  plt.fill_between(time, mean_last-ci[0], mean_last+ci[1], alpha=0.25)
+  # ci = my_boots_ci(phase_last[y_last==1], circmean, axis=0) * 180 / np.pi
+  # plt.fill_between(time, mean_last-ci[0], mean_last+ci[1], alpha=0.25)
 
   plt.xlabel('Time (s)');
   plt.ylabel('$<\phi>_k$ (°)');
-  plt.ylim([0, 90])
+  # plt.ylim([0, 275])
+  plt.xlim([2, 10])
   plt.legend()
   add_vlines()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/1c90ee90ad6eaff2986e6415a2728023c9dae619.png]]
+[[file:./.ob-jupyter/3ed17de6eb0f08ca514eb1f27ef5134e654b6a13.png]]
+
 **** mean of circstd of X
 #+begin_src ipython
-  def circ_std(X, y=None, axis=0, label=''):
-      std = circstd(X[y==-1], axis=axis) * 180 / np.pi
-      std1 = circstd(X[y==1], axis=axis) * 180 / np.pi
-      std = (std+std1) / 2
+
+  from scipy.stats import circstd
+  def circ_std(X, y=None, axis=0):
+      std = circstd(X[y==-1], axis=0) * 180 / np.pi
+      std1 = circstd(X[y==1], axis=0) * 180 / np.pi
+
+      std = (std + std1) / 2
 
       return std
-
-  std_first = circ_std(phase_first, y_first, label='first')
-  plt.plot(time, std_first, label='first')
-  ci = my_boots_ci(phase_first[y_first==-1], circstd, axis=0) * 180 / np.pi
-  plt.fill_between(time, std_first-ci[0], std_first+ci[1], alpha=0.25)
-  time = np.linspace(0, 14, 84)
-
-  std_last = circ_std(phase_last, y_last, label='last')
-  plt.plot(time, std_last, label='first')
-  ci = my_boots_ci(phase_last[y_last==-1], circstd, axis=0) * 180 / np.pi
-  plt.fill_between(time, std_last-ci[0], std_last+ci[1], alpha=0.25)
-
-  plt.xlabel('Time (s)');
-  plt.ylabel('$<\delta \phi>_k$ (°)');
-  plt.legend()
-  add_vlines()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/1a2a281abd90997d2d2fe18dedc65bbcc4dc451a.png]]
 
-**** Drift
 #+begin_src ipython
-  time = np.linspace(0, 14, 84)
-  sample_off = (time>= 3.) & (time<3.2)
+  std_first = circ_std(phase_first, y_first)
+  _, ci_first = my_boots_ci(phase_first, lambda x: circ_std(x, y_first))
 
-  phase = phase_first[y_first==-1]
-  drift = phase - phase[:, sample_off]
-
-  phase = phase_first[y_first==1]
-  drift1 = phase - phase[:, sample_off]
-
-  drift = np.vstack((drift, drift1))
-
-  plt.plot(time, np.mean(drift**2, 0))
-
-  phase = phase_last[y_last==-1]
-  drift = phase - phase[:, sample_off]
-
-  phase = phase_last[y_last==1]
-  drift1 = phase - phase[:, sample_off]
-
-  drift = np.vstack((drift, drift1))
-
-  plt.plot(time, np.mean(drift**2, 0))
-  plt.xlabel('Time (s)')
-  plt.ylabel('Accuracy ($deg^2$)')
-  add_vlines()
+  std_last = circ_std(phase_last, y_last)
+  _, ci_last = my_boots_ci(phase_last, lambda x: circ_std(x, y_last) ) 
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/718734a7ff2f3d1e41b2eff15cf704d3fd2e9e2b.png]]
+: bootstrap: 100% 1000/1000 [00:09<00:00, 106.07it/s]
+: bootstrap: 100% 1000/1000 [00:00<00:00, 1058.01it/s]
 
-**** Diffusion
 #+begin_src ipython
 
-  phase = phase_first[y_first==-1]
-  # dtheta = phase - np.mean(phase, axis=0)
-  dtheta = phase - circmean(phase, axis=0)
+  plt.plot(time, std_first, label='First')
+  plt.fill_between(time, std_first-ci_first[:, 0], std_first+ci_first[:, 1], alpha=0.2)
 
-  phase = phase_first[y_first==1]
-  # dtheta1 = phase - np.mean(phase, axis=0)
-  dtheta1 = phase - circmean(phase, axis=0)
+  plt.plot(time, std_last, label='Last')
+  plt.fill_between(time, std_last-ci_last[:,0], std_last+ci_last[:,1], alpha=0.2)
 
-  dtheta = np.vstack((dtheta, dtheta1))
+  plt.xlabel('Time Stim. Offset (s)');
+  # plt.ylabel('$< \sqrt{\delta \phi^2}>_k$ (°)'); 
+  plt.ylabel('Error (°)');
+  plt.ylim([0, 120])
+  plt.yticks([0, 60, 120])
+  plt.xticks([3, 6, 9], [0, 3, 6])
+  plt.xlim([3, 9])
+  
+  plt.legend(fontsize=12)
+  # add_vlines()
+  plt.savefig('diff_' + mouse + '.svg', dpi=300)
+#+end_src
 
-  plt.plot(time, np.mean(dtheta**2, axis=0))
+#+RESULTS:
+[[file:./.ob-jupyter/e2899571504463af26b2e97632bec24d3b3f23ab.png]]
 
-  phase = phase_last[y_last==-1]
-  # dtheta = phase - np.mean(phase, axis=0)
-  dtheta = phase - circmean(phase, axis=0)
+#+begin_src ipython
 
-  phase = phase_last[y_last==1]
-  # dtheta1 = phase - np.mean(phase, axis=0)
-  dtheta1 = phase - circmean(phase, axis=0)
+#+end_src
+*** Drift
+#+begin_src ipython
+  def compute_drift(X, y, thresh):
 
-  dtheta = np.vstack((dtheta, dtheta1))
+      amp, phase = decode_bump(X, axis=1, SMOOTH=False)
 
-  plt.plot(time, np.mean(dtheta**2, axis=0))
+      phase_S1 = phase[y==-1]
 
+      # idx_S1 = np.abs(phase_S1[:, 18] - np.pi) > thresh
+      # phase_S1 = phase_S1[idx_S1]
+      # print(phase_S1.shape)
+
+      drift_S1 = phase_S1 - phase_S1[:, [18,]]
+
+      phase_S2 = phase[y==1]
+
+      # idx_S2 = np.abs(phase_S2[:, 18] - np.pi) < thresh
+      # phase_S2 = phase_S2[idx_S2]
+      # print(phase_S2.shape)      
+
+      drift_S2 = phase_S2 - phase_S2[:, [18,]]
+
+      drift = np.vstack((drift_S1, drift_S2))
+
+      return drift
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+  time = np.linspace(0, 14, 84)
+  # sample_off = (time>= 3.) & (time<3.2)
+
+  # thresh = 2.0 * np.pi
+  # drift_first = compute_drift(X_first, y_first, thresh)
+  # drift_last = compute_drift(X_last, y_last, thresh)
+
+  drift_first = []
+  drift_last = []
+  thresh = 2.0 * np.pi
+  for i in range(3):
+    drift_first.append(compute_drift(X_df[i], y_df[i], thresh))
+    drift_last.append(compute_drift(X_dl[i+3], y_dl[i+3], thresh))
+
+  drift_first = np.vstack(drift_first)
+  drift_last = np.vstack(drift_last)
+
+  plt.plot(time, np.mean(np.abs(drift_first), 0))
+  plt.plot(time, np.mean(np.abs(drift_last), 0))
   plt.xlabel('Time (s)')
-  plt.ylabel('Precision ($deg^2$)')
+  plt.ylabel('Drift ($deg$)')
+  add_vlines()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/4f8529d7e147efe3b3e917b7d417c5cee4d4425b.png]]
+
+*** Diffusion
+
+#+begin_src ipython
+  def compute_diff(X, y, thresh=np.pi/2.0):
+      # Calculate the mean and standard deviation across time for each neuron
+      # mean_value = np.mean(X, axis=2, keepdims=True)
+      # std_value = np.std(X, axis=2, keepdims=True)
+
+      # # Subtract the mean and divide by standard deviation
+      # X_standardized = (X - mean_value) / std_value
+
+      # # handle case when standard deviation is 0
+      # X_scaled = np.nan_to_num(X_standardized, nan=0.0)
+      # # min_value = np.min(X)
+
+      # # Shift values if the minimum is negative
+      # if min_value < 0:
+      #     X_shifted = X - min_value
+      # else:
+      #     X_shifted = X
+
+      # # Normalization: divide by maximum across time for each neuron
+      # X_scaled = X_shifted / X_shifted.max(axis=2, keepdims=True)
+
+      # df = X_to_df(X[y==-1])
+      # model = fit_glmm(df)
+      # resid = reshape_residuals(model, X[y==-1])
+
+      amp, phase_S1 = decode_bump(X[y==-1], axis=1, SMOOTH=False)
+
+      # phase_S1 = phase[y==-1]
+
+      # idx_S1 = np.abs(phase_S1[:, 18] - np.pi) > thresh
+      # phase_S1 = phase_S1[idx_S1]
+
+      dtheta_S1 = phase_S1 - circmean(phase_S1, axis=0)
+
+      # df = X_to_df(X[y==1])
+      # model = fit_glmm(df)
+      # resid = reshape_residuals(model, X[y==1])
+
+      amp, phase_S2 = decode_bump(X[y==1], axis=1, SMOOTH=False)
+
+      # phase_S2 = phase[y==1]      
+
+      # idx_S2 = np.abs(phase_S2[:, 18] - np.pi) < thresh
+      # phase_S2 = phase_S2[idx_S2]
+      
+      dtheta_S2 = phase_S2 - circmean(phase_S2, axis=0)
+
+      dtheta = np.vstack((dtheta_S1, dtheta_S2)) * 180 / np.pi
+
+      return np.mean(np.abs(dtheta), 0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  diff_first = []
+  diff_last = []
+  time = np.linspace(0, 14, 84)
+
+  thresh = 2.0 * np.pi
+  for i in range(3):
+    diff_first.append(compute_diff(X_df[i], y_df[i], thresh))
+    diff_last.append(compute_diff(X_dl[i+3], y_dl[i+3], thresh))
+
+  plt.plot(time, np.mean(np.array(diff_first), 0))
+  plt.plot(time, np.mean(np.array(diff_last), 0))
+  plt.xlabel('Time (s)')
+  plt.ylabel('Precision ($deg$)')
+  plt.xlim([2, 10])
+  # plt.ylim([2, 150])
   add_vlines()
 
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/895ee0a7216ba699919c79513c8a64b5f1b9732d.png]]
+[[file:./.ob-jupyter/d231eb144b3eb6d8d379f2e3ec302b5bff778fb6.png]]
+
+#+begin_src ipython
+  diff_first = compute_diff(X_first, y_first, thresh)
+  diff_last = compute_diff(X_last, y_last, thresh)
+  
+  _, ci_first = my_boots_ci(X_first,lambda x: compute_diff(x, y_first, thresh), n_samples=10000)
+  _, ci_last = my_boots_ci(X_last,lambda x: compute_diff(x, y_last, thresh), n_samples=10000)
+
+#+end_src
+
+#+RESULTS:
+: bootstrap: 100% 1000/1000 [00:15<00:00, 62.81it/s]
+: bootstrap: 100% 1000/1000 [00:03<00:00, 290.49it/s]
+
+#+begin_src ipython
+
+  plt.plot(time, diff_first)
+  plt.fill_between(
+      time,
+      (diff_first - ci_first[:, 0]),
+      (diff_first + ci_first[:, 1]),
+      alpha=0.2,
+  )
+
+  plt.plot(time, diff_last)
+  plt.fill_between(
+      time,
+      (diff_last - ci_last[:, 0]),
+      (diff_last + ci_last[:, 1]),
+      alpha=0.2,
+  )
+
+  plt.xlabel('Time (s)')
+  plt.ylabel('Precision Error (°)')
+  # plt.ylim([0, 150])
+  plt.xlim([3, 9])
+  # add_vlines()
+
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+| 3.0 | 9.0 |
+[[file:./.ob-jupyter/ba44fa7e487a4d834b707560f355a027dd592cad.png]]
+:END:
+
+#+begin_src ipython
+  import pandas as pd
+
+  def X_to_df(X):
+      # assuming X is your 3D Numpy array and has shape (trials, neurons, time)
+      trials, neurons, time = X.shape
+
+      # create a dataframe from reshaped and duplicated arrays for trial, neuron, and time
+      df = pd.DataFrame({
+          'trial': np.repeat(np.arange(trials), neurons*time),
+          'neuron': np.repeat(np.tile(np.arange(neurons), trials), time),
+          'time': np.tile(np.arange(time), trials*neurons),
+          'activity': X.flatten()   # flatten your 3D activity data
+      })
+
+      return df
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  # Let's say you have a DataFrame df that includes columns for 'trial', 'neuron', 'time', and 'activity'.
+  # 'activity' is your response variable, while 'trial', 'neuron', 'time' are your explanatory variables.
+  # We will model 'trial' as a random effect to adjust for trial-to-trial variability
+
+  def fit_glmm(df):
+      # convert your trial indices to a categorical variable
+      df['trial'] = df['trial'].astype('category')
+
+      # and define an intercept model for neuron and time as fixed effects
+      md = smf.mixedlm("activity ~ neuron + time", df, groups=df['trial'])
+      
+      # enter the method to use in the fit and fit the model
+      mdf = md.fit(method="cg")
+
+      # print the summary statistics of the fitted model
+      print(mdf.summary())
+
+      return mdf
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+  def reshape_residuals(model, X):
+      resid_series = model.resid
+      # Convert this residual series to a numpy array
+      resid_array = resid_series.to_numpy()
+      # Reshape it to the original shape of your data 'X'
+      resid_reshaped = resid_array.reshape(X.shape)
+
+      return resid_reshaped
+#+end_src
+#+RESULTS:
+
+#+begin_src ipython
+  df_first = X_to_df(X_first)
+  model_first = fit_glmm(df_first)
+  resid_first = reshape_residuals(model_first, X_first)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+             Mixed Linear Model Regression Results
+  ============================================================
+  Model:            MixedLM Dependent Variable: activity      
+  No. Observations: 4074840 Method:             REML          
+  No. Groups:       70      Scale:              9.9669        
+  Min. group size:  58212   Log-Likelihood:     -10466768.3956
+  Max. group size:  58212   Converged:          Yes           
+  Mean group size:  58212.0                                   
+  -------------------------------------------------------------
+                 Coef.  Std.Err.    z     P>|z|  [0.025  0.975]
+  -------------------------------------------------------------
+  Intercept      0.023     0.033   0.712  0.476  -0.041   0.087
+  neuron         0.000     0.000  20.680  0.000   0.000   0.000
+  time           0.003     0.000  39.420  0.000   0.002   0.003
+  Group Var      0.074     0.004                               
+  ============================================================
+#+end_example
+
+#+begin_src ipython
+  df_last = X_to_df(X_last)
+  model_last = fit_glmm(df_last)
+  resid_last = reshape_residuals(model_last, X_last)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+             Mixed Linear Model Regression Results
+  ============================================================
+  Model:            MixedLM Dependent Variable: activity      
+  No. Observations: 5180868 Method:             REML          
+  No. Groups:       89      Scale:              10.7128       
+  Min. group size:  58212   Log-Likelihood:     -13494696.6502
+  Max. group size:  58212   Converged:          Yes           
+  Mean group size:  58212.0                                   
+  -------------------------------------------------------------
+                 Coef.  Std.Err.    z     P>|z|  [0.025  0.975]
+  -------------------------------------------------------------
+  Intercept      0.022     0.037   0.595  0.552  -0.050   0.093
+  neuron         0.000     0.000  27.408  0.000   0.000   0.000
+  time           0.003     0.000  55.082  0.000   0.003   0.003
+  Group Var      0.118     0.005                               
+  ============================================================
+#+end_example
+
+#+begin_src ipython
+  diff_first = compute_diff(resid_first, y_first, thresh)
+  diff_last = compute_diff(resid_last, y_last, thresh)
+
+  plt.plot(time, diff_first)
+  plt.plot(time, diff_last)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+| <matplotlib.lines.Line2D | at | 0x7f65b3f3e430> |
+[[file:./.ob-jupyter/cfa327d86717ec853ffc0acb758f64cf844bcb23.png]]
+:END:

@@ -14,6 +14,7 @@ from dual_data.decode.classifiers import get_clf
 from dual_data.decode.coefficients import get_coefs
 from dual_data.overlap.animated_bump import animated_bump
 from dual_data.preprocess.helpers import avg_epochs
+from dual_data.common.plot_utils import add_vlines, save_fig
 
 sns.set_context("poster")
 sns.set_style("ticks")
@@ -88,7 +89,7 @@ def run_get_cos(**kwargs):
 
     # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
     X_days, y_days = get_X_y_days(**options)
-
+    
     model = get_clf(**options)
 
     options["task"] = "Dual"
@@ -110,25 +111,40 @@ def run_get_cos(**kwargs):
     # plt.hist(sample_coefs, color="r", bins="auto", histtype="step")
     # plt.xlabel("dist")
 
-    idx_sample = sample_coefs != 0
-    idx_dist = dist_coefs != 0
+    # idx_sample = sample_coefs != 0
+    # idx_dist = dist_coefs != 0
 
-    idx = idx_sample & idx_dist
-
+    # idx = idx_sample & idx_dist
+    
     idx = np.arange(X_avg.shape[1])
     print("non zeros", idx.shape)
+    
     # theta = np.arctan2(unit_vector(dist_coefs[idx]), unit_vector(sample_coefs[idx]))
-
-    e1 = sample_coefs
-    e2 = dist_coefs
+    e1 = unit_vector(sample_coefs)
+    e2 = unit_vector(dist_coefs)
     # e1, e2 = gram_schmidt(sample_coefs[idx], dist_coefs[idx])
     theta = np.arctan2(e2, e1)
 
     # T = np.column_stack((e1, e2))
 
+    index_order = theta.argsort()
+    # print(index_order.shape, X.shape)
+    
     options["task"] = task
-    X, y = get_X_y_S1_S2(X_days, y_days, **options)
-
+    # options['balance'] = False
+    X_all, y_all = get_X_y_S1_S2(X_days, y_days, **options)
+    X_all = X_all[:, index_order, :]
+    
+    X_day = []
+    y_day = []    
+    for day in range(1, options['n_days'] + 1):
+        options['day'] = day
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        X = X[:, index_order, :]
+        
+        X_day.append(X)
+        y_day.append(y)
+    
     # vec = np.ones(X.shape[1])
     # new_vec = np.dot(T.T, vec)
     # theta = to_polar_coords_in_N_dims(new_vec)
@@ -139,61 +155,53 @@ def run_get_cos(**kwargs):
     #     x_t.append(to_polar_coords_in_N_dims(new_x))
 
     # x_t = np.array(x_t)
-
-    index_order = theta.argsort()
-    print(index_order.shape, X.shape)
-
-    X = X[:, index_order, :]
-    print(X.shape)
+    
+    # X = X[:, index_order, :]
+    # print(X.shape)
     print("Done")
-    return X, y
+    return X_day, y_day, X_all, y_all, theta
 
 
-def plot_bump(X, y, sample, trial, windowSize=10):
-    X_sample = X[y == sample].copy()
+def plot_bump(X, y, trial, windowSize=10):
 
-    # X_scaled = StandardScaler().fit_transform(X[trial])
-    # X_scaled = MinMaxScaler().fit_transform(X[trial])
-    if windowSize != 0:
-        X_scaled = circular_convolution(X_sample, windowSize, axis=1)
-        # X_scaled = circular_convolution(X_scaled, 8, axis=-1)
-        # X_scaled = X_scaled - np.mean(X_scaled, 0)
-
-    else:
-        X_scaled = X_sample
-        # X_scaled = X - np.mean(X)
+    fig, ax = plt.subplots(1, 2, figsize= [1.5*width, width * golden_ratio])
+    sample = [-1, 1]
+    for i in range(2):
+        X_sample = X[y == sample[i]].copy()
+    
         # X_scaled = StandardScaler().fit_transform(X[trial])
-        # X_scaled = MinMaxScaler().fit_transform(X[1])
+        # X_scaled = MinMaxScaler().fit_transform(X[trial])
+        if windowSize != 0:
+            X_scaled = circular_convolution(X_sample, windowSize, axis=1)
+        
+        if trial == "all":
+            X_scaled = np.mean(X_scaled, 0)
+        else:
+            X_scaled = X_scaled[trial]
+        
+        # animated_bump(X_scaled)
 
-    if trial == "all":
-        X_scaled = np.mean(X_scaled, 0)
-    else:
-        X_scaled = X_scaled[trial]
+        im = ax[i].imshow(
+            np.roll(X_scaled, 0, axis=0),
+            interpolation="lanczos",
+            origin="lower",
+            cmap="jet",
+            extent=[0, 14, 0, 360],
+            vmin=-.5,
+            vmax=1.,
+            aspect="auto",
+        )
 
-    # animated_bump(X_scaled)
+        ax[i].set_xlabel("Time (s)")
+        ax[i].set_ylabel("Pref. Location (°)")
+        ax[i].set_yticks([0, 90, 180, 270, 360])
+        ax[i].set_xlim([0, 12])
 
-    fig, ax = plt.subplots(1, 1)
-    im = ax.imshow(
-        np.roll(X_scaled, 0, axis=0),
-        interpolation="lanczos",
-        origin="lower",
-        cmap="jet",
-        extent=[0, 14, 0, 360],
-        # vmin=-0.2,
-        # vmax=0.2,
-        aspect="auto",
-    )
-
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("dF")
-
-    plt.xlabel("Time (s)")
-    plt.ylabel("Prefered Location (°)")
-    plt.yticks([0, 90, 180, 270, 360])
-    plt.xlim([0, 12])
-
-    # cbar.set_ticks([-1, 0.25, 0.5, 0.75, 1])
-
+    
+    cbar = plt.colorbar(im, ax=ax[1])
+    cbar.set_label("<Norm. Fluo>")
+    cbar.set_ticks([-.5, 0.5, 1.])
+    
     # # plt.plot(np.mean(X_scaled, 0))
     # trans = transforms.blended_transform_factory(ax.transData, ax.transAxes)
     # line = plt.Line2D((1, 2), (1.1, 1.1), transform=trans, color="k")

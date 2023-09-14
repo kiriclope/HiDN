@@ -1,5 +1,5 @@
 import random
-
+from scipy.stats import bootstrap
 import numpy as np
 
 # import scikits.bootstrap as boot
@@ -225,3 +225,27 @@ def my_bootstraped_ci(
     # print(ci.shape)
 
     return mean, ci
+
+
+def scipy_boots_ci(X, statfunc, n_samples=10000, method="BCa", alpha=0.05, axis=0):
+    boots_samples = bootstrap(
+        (X,),
+        statistic=statfunc,
+        n_resamples=n_samples,
+        method=method,
+        confidence_level=1.0 - alpha,
+        vectorized=True,
+        axis=axis,
+    )
+
+    # print(boots_samples)
+
+    ci = np.array(
+        [boots_samples.confidence_interval.low, boots_samples.confidence_interval.high]
+    )
+    mean_boots = np.mean(boots_samples.bootstrap_distribution, axis=-1)
+
+    ci[0] = mean_boots - ci[0]
+    ci[1] = ci[1] - mean_boots
+
+    return ci

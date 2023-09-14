@@ -28,7 +28,7 @@ def set_options(**kwargs):
     ################################
     opts["perf_type"] = "hit"
     opts["sample"] = "all"
-
+    
     ################################
     # task param
     ################################
@@ -60,8 +60,8 @@ def set_options(**kwargs):
     ################################
     # preprocessing parameters
     ################################
-    opts["preprocess"] = 0
-
+    opts["preprocess"] = 1
+    
     # scaling fluo
     opts["scaler_BL"] = "robust"  # standard, robust, center
     opts["center_BL"] = None
@@ -120,7 +120,7 @@ def set_options(**kwargs):
     # Dimensionality reduction
     ################################
     # prescreening
-    opts["prescreen"] = None  # fpr, fdr, fwe or None
+    opts["prescreen"] = 'fdr'  # fpr, fdr, fwe or None
     opts["pval"] = 0.05
     opts["bolasso_pval"] = 0.05
 
