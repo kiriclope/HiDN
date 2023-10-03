@@ -18,7 +18,7 @@ def set_options(**kwargs):
     opts["data_type"] = "raw"  # "raw" or "dF"
 
     opts["n_days"] = 6  # PrL,ACC 6 or multi 10
-
+    
     opts["reload"] = False
     opts["n_jobs"] = int(0.90 * multiprocessing.cpu_count())
     opts["verbose"] = 0

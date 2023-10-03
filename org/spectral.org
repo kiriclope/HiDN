@@ -1,0 +1,226 @@
+#+TITLE: Spectral analysis
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session dual_data :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+
+  %run ../notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Spectral Analysis
+** imports
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data') 
+#+end_src
+
+#+RESULTS:
+
+** Function
+
+#+begin_src ipython
+  from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from dual_data.common.options import set_options
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  mouse = 'JawsM15'
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = ['first', 'last']
+
+  kwargs = dict()
+  kwargs = {'prescreen': None, 'pval':0.05, 'trials':'correct', 'balance': False,
+            'method':'bootstrap', 'bolasso_pval':0.05,
+            'bolasso':True, 'n_boots':10000,
+            'preprocess':False, 'scaler_BL': None, 'avg_noise':False, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l1',
+            'out_fold': 'repeated', 'random_state': None,
+            'in_fold': 'stratified', 'n_in': 5,
+            'n_repeats': 10,
+            }
+
+  time = np.linspace(0, 14, 84)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+  options = set_options(**kwargs)
+  options['day'] = "first"
+  options["task"] = "DPA"
+  
+  X_days, y_days = get_X_y_days(**options)
+  X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
+  print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: loading files from /home/leon/dual_task/dual_data/data/JawsM15
+: X_days (1152, 693, 84) y_days (1152, 6)
+: ##########################################
+: DATA: FEATURES sample TASK DPA TRIALS correct DAYS first LASER 0
+: ##########################################
+: multiple days
+: X_S1 (35, 693, 84) X_S2 (35, 693, 84)
+: (70, 693, 84) (70,)
+
+#+begin_src ipython
+  import numpy as np
+  from scipy import fftpack
+  from scipy.signal import welch
+
+  # Assuming X is your data matrix shaped (n_trials, n_neurons, n_times)
+  n_trials, n_neurons, n_times = X.shape
+
+  # Placeholder for the transformed data
+  X_transformed = np.empty((n_trials, n_neurons, n_times), dtype=complex)
+
+  # Apply FFT on the time dimension of each neuron's activity
+  fs = 6.0  # The sampling frequency
+  nperseg = 84  # Length of each segment
+  
+  freqs, psds = welch(X, fs, nperseg=nperseg)
+
+  print(freqs.shape)
+  print(psds.shape)
+#+end_src
+
+#+RESULTS:
+: (43,)
+: (70, 693, 43)
+
+#+begin_src ipython
+  import matplotlib.pyplot as plt
+
+  # Let's say you want to plot the average PSD across all neurons and trials
+  average_psd = psds.mean(axis=(0,1))
+
+  # Select only the PSD and frequencies for positive frequency components
+  positive_freq_mask = (freqs>=0)
+  positive_freqs = freqs[positive_freq_mask]
+  average_psd = average_psd[positive_freq_mask]
+
+  # Create the plot
+  plt.figure(figsize=(10, 5))
+  plt.plot(positive_freqs, average_psd)
+
+  # Add labels and title
+  plt.xlabel("Frequency [Hz]", fontsize=12)
+  plt.ylabel("Power Spectral Density", fontsize=12)
+  plt.title("Average PSD Across Neurons and Trials", fontsize=14)
+
+  # Log-log scales can often be useful for spectral data
+  # plt.xscale("log")
+  # plt.yscale("log")
+  
+  # Show the plot
+  plt.grid(True)
+  plt.show()
+
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/54ab64ad2335cced41f6fe249731e58cffdf1548.png]]
+
+
+
+[[file:./.ob-jupyter/d18bbe1489a62a220fd6fff9635fd49b6a9bee0a.png]]
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import mne
+  import numpy as np
+
+  n_trials, n_neurons, n_times = X.shape
+  print(X.shape)
+  # Assuming X is your data matrix shaped (n_trials, n_neurons, n_times)
+  # transposed_data would have shape (n_times, n_neurons, n_trials)
+  transposed_data = np.transpose(X, (2, 1, 0))
+
+  print(transposed_data.shape)
+
+  # As MNE works with channels (neurons in this context) and time,
+  # we need to average or otherwise reshape data
+  # In this example, we're averaging over trials
+  # data_to_analyze has shape (n_neurons, n_times)
+  data_to_analyze = np.mean(transposed_data, axis=-1)
+
+  # Define an Info object, which includes all the necessary information 
+  # For simplicity, here we'll provide only bare minimum (channel names and sampling frequency)
+  # sfreq: Sampling frequency (in Hz)
+  # ch_names: Labels for each neuron (channel in terms of MNE)
+  sfreq = 1000  # The correct value here depends on your data
+  ch_names = ['neuron' + str(i) for i in range(n_neurons)]
+  info = mne.create_info(ch_names=ch_names, sfreq=sfreq)
+
+  # Create a `Raw` object, which is MNE's standard format for continuous data
+  raw = mne.io.RawArray(data_to_analyze, info)
+
+  # Now you can perform spectral analysis on this `Raw` object:
+  # Pick one or more neurons to analyze
+  picks = mne.pick_channels(ch_names, include=['neuron0'])
+
+  # Frequency of interest
+  fmin, fmax = 2, 300  # These values depends on your data and research question
+
+  # Perform power spectral density estimate
+  psd, freqs = mne.time_frequency.psd_welch(raw, fmin=fmin, fmax=fmax, picks=picks)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (195, 693, 84)
+: (84, 693, 195)
+# [goto error]
+#+begin_example
+  [0;31m---------------------------------------------------------------------------[0m
+  [0;31mValueError[0m                                Traceback (most recent call last)
+  Cell [0;32mIn[14], line 27[0m
+  [1;32m     24[0m info [38;5;241m=[39m mne[38;5;241m.[39mcreate_info(ch_names[38;5;241m=[39mch_names, sfreq[38;5;241m=[39msfreq)
+  [1;32m     26[0m [38;5;66;03m# Create a `Raw` object, which is MNE's standard format for continuous data[39;00m
+  [0;32m---> 27[0m raw [38;5;241m=[39m [43mmne[49m[38;5;241;43m.[39;49m[43mio[49m[38;5;241;43m.[39;49m[43mRawArray[49m[43m([49m[43mdata_to_analyze[49m[43m,[49m[43m [49m[43minfo[49m[43m)[49m
+  [1;32m     29[0m [38;5;66;03m# Now you can perform spectral analysis on this `Raw` object:[39;00m
+  [1;32m     30[0m [38;5;66;03m# Pick one or more neurons to analyze[39;00m
+  [1;32m     31[0m picks [38;5;241m=[39m mne[38;5;241m.[39mpick_channels(ch_names, include[38;5;241m=[39m[[38;5;124m'[39m[38;5;124mneuron0[39m[38;5;124m'[39m])
+
+  File [0;32m<decorator-gen-248>:12[0m, in [0;36m__init__[0;34m(self, data, info, first_samp, copy, verbose)[0m
+
+  File [0;32m~/mambaforge/envs/dual_data/lib/python3.8/site-packages/mne/io/array/array.py:68[0m, in [0;36mRawArray.__init__[0;34m(self, data, info, first_samp, copy, verbose)[0m
+  [1;32m     63[0m     [38;5;28;01mraise[39;00m [38;5;167;01mValueError[39;00m(
+  [1;32m     64[0m         [38;5;124m"[39m[38;5;124mData must be a 2D array of shape (n_channels, [39m[38;5;124m"[39m
+  [1;32m     65[0m         [38;5;124m"[39m[38;5;124mn_samples), got shape [39m[38;5;132;01m%s[39;00m[38;5;124m"[39m [38;5;241m%[39m (data[38;5;241m.[39mshape,)
+  [1;32m     66[0m     )
+  [1;32m     67[0m [38;5;28;01mif[39;00m [38;5;28mlen[39m(data) [38;5;241m!=[39m [38;5;28mlen[39m(info[[38;5;124m"[39m[38;5;124mch_names[39m[38;5;124m"[39m]):
+  [0;32m---> 68[0m     [38;5;28;01mraise[39;00m [38;5;167;01mValueError[39;00m(
+  [1;32m     69[0m         [38;5;124m"[39m[38;5;124mlen(data) ([39m[38;5;132;01m%s[39;00m[38;5;124m) does not match [39m[38;5;124m"[39m
+  [1;32m     70[0m         [38;5;124m'[39m[38;5;124mlen(info[[39m[38;5;124m"[39m[38;5;124mch_names[39m[38;5;124m"[39m[38;5;124m]) ([39m[38;5;132;01m%s[39;00m[38;5;124m)[39m[38;5;124m'[39m [38;5;241m%[39m ([38;5;28mlen[39m(data), [38;5;28mlen[39m(info[[38;5;124m"[39m[38;5;124mch_names[39m[38;5;124m"[39m]))
+  [1;32m     71[0m     )
+  [1;32m     72[0m [38;5;28;01massert[39;00m [38;5;28mlen[39m(info[[38;5;124m"[39m[38;5;124mch_names[39m[38;5;124m"[39m]) [38;5;241m==[39m info[[38;5;124m"[39m[38;5;124mnchan[39m[38;5;124m"[39m]
+  [1;32m     73[0m [38;5;28;01mif[39;00m copy [38;5;129;01min[39;00m ([38;5;124m"[39m[38;5;124mauto[39m[38;5;124m"[39m, [38;5;124m"[39m[38;5;124minfo[39m[38;5;124m"[39m, [38;5;124m"[39m[38;5;124mboth[39m[38;5;124m"[39m):
+
+  [0;31mValueError[0m: len(data) (84) does not match len(info["ch_names"]) (693)
+#+end_example
+:END:
