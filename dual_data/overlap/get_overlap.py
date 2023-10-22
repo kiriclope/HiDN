@@ -33,15 +33,15 @@ def get_coef_feat(X_days, y_days, **options):
 
     if options["features"] == "sample":
         options["task"] = "Dual"
-        options["epoch"] = ["ED"]
+        options["epochs"] = ["ED"]
         options["overlap"] = "sample"
     elif options["features"] == "distractor":
         options["task"] = "Dual"
-        options["epoch"] = ["MD"]
+        options["epochs"] = ["MD"]
         options["overlap"] = "distractor"
-
+    
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    X_avg = avg_epochs(X_S1_S2, epochs=options["epoch"])
+    X_avg = avg_epochs(X_S1_S2, **options)
     print("X_avg", X_avg.shape)
     coefs, model = get_coefs(model, X_avg, y_S1_S2, **options)
 
@@ -143,11 +143,13 @@ def plot_overlap(data, ci=None, **options):
 
     fig = plt.figure(figname)
 
+    xtime = np.linspace(0, gv.duration, data.shape[-1])
+    
     if options["day"] == "first":
         pal = sns.color_palette("muted")
     else:
         pal = sns.color_palette("bright")
-
+        
     paldict = {
         "DPA": pal[3],
         "DualGo": pal[0],
@@ -156,13 +158,13 @@ def plot_overlap(data, ci=None, **options):
         "all": pal[4],
     }
 
-    plt.plot(gv.time, data, color=paldict[options["task"]])
-
+    plt.plot(xtime, data, color=paldict[options["task"]])
+    
     plt.plot([0, gv.duration], [0, 0], "--k")
-
+    
     if ci is not None:
         plt.fill_between(
-            gv.time,
+            xtime,
             data - ci[:, 0],
             data + ci[:, 1],
             alpha=0.25,

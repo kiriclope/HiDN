@@ -31,7 +31,7 @@ def create_test_svg(title):
     plt.close("all")
 
 
-def create_grid(figlist, figname, dim):
+def create_grid(figlist, figname, dim, fontsize=22):
     width, height = get_svg_size(figlist[0])
     print(width, height)
     size = ["%dpt" % (dim[0] * width), "%dpt" % (dim[1] * height)]
@@ -48,7 +48,7 @@ def create_grid(figlist, figname, dim):
             chr(65 + i),
             25 + (i % dim[0]) * width,
             20 + (i // dim[0]) * height,
-            size=16,
+            size=fontsize,
             weight="bold",
         )
         # Add them to the figure

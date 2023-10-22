@@ -15,9 +15,9 @@ def set_options(**kwargs):
     opts["path"] = "/home/leon/dual_task/dual_data/"
 
     opts["mouse"] = "JawsM15"
-    opts["data_type"] = "raw"  # "raw" or "dF"
-
-    opts["n_days"] = 6  # PrL,ACC 6 or multi 10
+    opts["data_type"] = "dF"  # "raw" or "dF"
+    
+    opts["n_days"] = 6  # PrL,ACC 6 or multi 10 this is updated later
     
     opts["reload"] = False
     opts["n_jobs"] = int(0.90 * multiprocessing.cpu_count())
@@ -120,7 +120,7 @@ def set_options(**kwargs):
     # Dimensionality reduction
     ################################
     # prescreening
-    opts["prescreen"] = 'fdr'  # fpr, fdr, fwe or None
+    opts["prescreen"] = None  # fpr, fdr, fwe or None
     opts["pval"] = 0.05
     opts["bolasso_pval"] = 0.05
 
@@ -164,21 +164,89 @@ def set_options(**kwargs):
     opts["data_path"] = opts["path"] + "data/"
     opts["fig_path"] = opts["path"] + "figs/"
 
+    opts["n_days"] = 6  # PrL,ACC 6 or multi 10 this is updated later
+    opts["n_discard"] = 0
+    opts["n_first"] = 3  # 3 or 2
+    opts["n_middle"] = 0  # 0 or 2
+    
     if "P" in opts["mouse"]:
         opts["n_days"] = 10  # PrL 6, ACC 5 or multi 10
+        opts["n_discard"] = 0
+        opts["n_first"] = 5  # 3 or 2
+        opts["n_middle"] = 0  # 0 or 2
 
+    
     if opts["day"] == "first":
         palette = sns.color_palette("muted")
     else:
         palette = sns.color_palette("bright")
 
+    frame_rate = 6
+    inv_frame = 0  # 1 / frame_rate
+    T_WINDOW = 0.25
+    duration = 14  # 14, 19.2
+    if "P" in opts["mouse"]:
+        duration = 19.2
+        
+    time = np.linspace(0, duration, int(duration * frame_rate))
+    opts["bins"] = np.arange(0, len(time))
+    
+    t_BL = [0, 2]
+    t_STIM = [2 + inv_frame, 3]
+    t_ED = [3 + inv_frame, 4.5]
+    t_DIST = [4.5 + inv_frame, 5.5]
+    t_MD = [5.5 + inv_frame, 6.5]
+    t_CUE = [6.5 + inv_frame, 7]
+    t_RWD = [7 + inv_frame, 7.5]
+    t_LD = [7.5 + inv_frame, 9]
+    t_TEST = [9 + inv_frame, 10]
+    t_RWD2 = [11 + inv_frame, 12]
+    
+    if "P" in opts["mouse"]:
+        t_BL = [0 + inv_frame, 2]
+        t_STIM = [2 + inv_frame, 3]
+        t_ED = [3 + inv_frame, 4]
+        t_DIST = [4 + inv_frame, 5]
+        t_MD = [5 + inv_frame, 6]
+        t_CUE = [6 + inv_frame, 7]
+        t_RWD = [7 + inv_frame, 8]
+        t_LD = [8 + inv_frame, 9]
+        t_TEST = [9 + inv_frame, 10]
+        t_RWD2 = [10 + inv_frame, 11]
+    
+    opts["bins_BL"] = opts["bins"][int(t_BL[0] * frame_rate) : int(t_BL[1] * frame_rate)]
+    
+    opts["bins_STIM"]= opts["bins"][int((t_STIM[0] + T_WINDOW) * frame_rate) : int(t_STIM[1] * frame_rate)]
+    
+    opts["bins_ED"] = opts["bins"][int((t_ED[0] + T_WINDOW) * frame_rate) : int((t_ED[1]) * frame_rate)]
+
+    opts["bins_DIST"] = opts["bins"][int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * frame_rate)]
+
+    opts["bins_MD"]= opts["bins"][int((t_MD[0] + T_WINDOW) * frame_rate) : int((t_MD[1]) * frame_rate)]
+
+    opts["bins_CUE"] = opts["bins"][int((t_CUE[0] + T_WINDOW) * frame_rate) : int(t_CUE[1] * frame_rate)]
+
+    opts["bins_RWD"] = opts["bins"][int((t_RWD[0] + T_WINDOW) * frame_rate) : int(t_RWD[1] * frame_rate)]
+    
+    opts["bins_LD"] = opts["bins"][int((t_LD[0] + T_WINDOW) * frame_rate) : int(t_LD[1] * frame_rate)]
+    
+    opts["bins_TEST"] = opts["bins"][
+        int((t_TEST[0] + T_WINDOW) * frame_rate) : int((t_TEST[1]) * frame_rate)
+    ]
+
+    opts["bins_CHOICE"] = opts["bins"][
+        int((t_TEST[1] + T_WINDOW) * frame_rate) : int(t_RWD2[0] * frame_rate)
+    ]
+    
+    opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + T_WINDOW) * frame_rate) : int(t_RWD2[1] * frame_rate)]
+    
     opts["pal"] = [
         palette[3],
         palette[0],
         palette[2],
         palette[1],
     ]
-
+    
     opts["paldict"] = {
         "DPA": palette[3],
         "DualGo": palette[0],

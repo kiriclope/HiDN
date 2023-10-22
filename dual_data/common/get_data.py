@@ -17,13 +17,13 @@ def get_X_y_days_multi(mouse=gv.mouse):
     data = mat73.loadmat(
         "/home/leon/dual_task/dual_data/data/%s/dataProcessed.mat" % mouse
     )
-
+    
     X_days = np.swapaxes(data["Cdf_Mice"], 0, 1)
     y_ = np.zeros((X_days.shape[0], 6))
     y_days = pd.DataFrame(
         y_, columns=["sample_odor", "dist_odor", "tasks", "response", "laser", "day"]
     )
-
+    
     y_days.sample_odor[data["S1All"][0] - 1] = 0
     y_days.sample_odor[data["S2All"][0] - 1] = 1
     y_days.sample_odor[data["S3All"][0] - 1] = 2
@@ -103,6 +103,16 @@ def get_fluo_data(idx_day, **kwargs):
 
     if "ACC" in mouse:
         data = loadmat(path + "/" + mouse + "/SamedROI/" + mouse + "_all_days" + ".mat")
+    elif "PP" in mouse:
+        data = mat73.loadmat(
+            path
+            + "/"
+            + mouse
+            + "/SamedROI_10Days/"
+            + "Day0"
+            + str(idx_day)
+            + "/DFF_Data01.mat"
+        )
     else:
         data = loadmat(
             path
@@ -119,7 +129,7 @@ def get_fluo_data(idx_day, **kwargs):
         X_raw = np.rollaxis(data["Cdf_Mice"], 1, 0)
     else:
         X_raw = np.rollaxis(data["dff_Mice"], 1, 0)
-
+        
     y_raw = data["Events"].transpose()
 
     if "ACC" in mouse:
@@ -234,8 +244,8 @@ def get_X_y_days(**kwargs):
     if kwargs["reload"] == 1:
         print("reading raw data")
 
-        if ("AP" in mouse) or ("PP" in mouse):
-            X_days, y_days = get_X_y_days_multi(mouse)
+        if ("AP" in mouse):
+            X_days, y_days = get_X_y_days_multi(mouse)            
         else:
             X_days = []
             y_days = []
@@ -485,16 +495,16 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
     idx_days = True
     if isinstance(kwargs["day"], str):
-        print("multiple days")
+        print("multiple days", kwargs["n_discard"], kwargs["n_first"], kwargs["n_middle"])
         if kwargs["day"] == "first":
-            idx_days = (y.day > gv.n_discard) & (y.day <= gv.n_first + gv.n_discard)
+            idx_days = (y.day > kwargs["n_discard"]) & (y.day <= kwargs["n_first"] + kwargs["n_discard"])
 
         if kwargs["day"] == "middle":
-            idx_days = (y.day > gv.n_first + gv.n_discard) & (
-                y.day <= gv.n_first + gv.n_middle + gv.n_discard
+            idx_days = (y.day > kwargs["n_first"] + kwargs["n_discard"]) & (
+                y.day <= kwargs["n_first"] + kwargs["n_middle"] + kwargs["n_discard"]
             )
         if kwargs["day"] == "last":
-            idx_days = y.day > (gv.n_first + gv.n_middle + gv.n_discard)
+            idx_days = y.day > (kwargs["n_first"] + kwargs["n_middle"] + kwargs["n_discard"])
             # idx_days = (y.day == 4) | (y.day == 6)
     else:
         print("single day")
