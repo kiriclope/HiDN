@@ -29,6 +29,12 @@ def circcvl(signal, windowSize=10, axis=-1):
     if axis != -1 and signal.ndim != 1:
         signal_copy = np.swapaxes(signal_copy, axis, -1)
 
+    # Save the nan positions before replacing them
+    nan_mask = np.isnan(signal_copy)
+    signal_copy[nan_mask] = np.interp(np.flatnonzero(nan_mask), 
+                                      np.flatnonzero(~nan_mask), 
+                                      signal_copy[~nan_mask])
+    
     ker = np.concatenate(
         (np.ones((windowSize,)), np.zeros((signal_copy.shape[-1] - windowSize,)))
     )
@@ -38,8 +44,11 @@ def circcvl(signal, windowSize=10, axis=-1):
             np.fft.fft(signal_copy, axis=-1) * np.fft.fft(ker, axis=-1), axis=-1
         )
     ) * (1.0 / float(windowSize))
+    
+    # Substitute the original nan positions back into the result
+    smooth_signal[nan_mask] = np.nan
 
     if axis != -1 and signal.ndim != 1:
         smooth_signal = np.swapaxes(smooth_signal, axis, -1)
-
+    
     return smooth_signal

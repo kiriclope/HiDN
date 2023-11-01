@@ -7,7 +7,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import BaggingClassifier
-from sklearn.feature_selection import SelectFdr, SelectFpr, SelectFwe, f_classif
+from sklearn.feature_selection import SelectPercentile, SelectKBest, SelectFdr, SelectFpr, SelectFwe, f_classif
 from sklearn.linear_model import LogisticRegressionCV, SGDClassifier
 from sklearn.model_selection import (
     GridSearchCV,
@@ -24,7 +24,39 @@ from dual_data.decode.SGDClassifierCV import SGDClassifierCV
 from dual_data.decode.LinearSVCCV import LinearSVCCV
 
 # from sklearn.pipeline import Pipeline
+class safeSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, method='fpr', alpha=0.05):
+        self.method = method
+        self.alpha = alpha
+        
+        if 'fpr' in method:
+            self.selector = SelectFpr(f_classif, alpha=alpha)
+        elif 'fdr' in method:
+            self.selector = SelectFdr(f_classif, alpha=alpha)
+        elif 'Fwe' in method:
+            self.selector = SelectFwe(f_classif, alpha=alpha)
+        elif 'kbest' in method:
+            self.selector = SelectKBest(f_classif, k=alpha)
+        elif 'perc' in method:
+            self.selector = SelectPercentile(f_classif, percentile=alpha)
+        
+        self.feature_indices_ = None
+        
+    def fit(self, X, y=None):
+        self.selector.fit(X, y)
+        return self
 
+    def transform(self, X):
+        X_t = self.selector.transform(X)
+        if X_t.shape[1] == 0:
+            self.feature_indices_ = [0]  # fallback to the first feature
+            return X[:, [0]]
+        else:
+            self.feature_indices_ = self.selector.get_support(indices=True)
+            return X_t
+    
+    def _get_support_mask(self):
+        return self.selector._get_support_mask()
 
 class CorrelationThreshold(BaseEstimator, TransformerMixin):
     def __init__(self, threshold=0.9):
@@ -158,7 +190,7 @@ def get_clf(**kwargs):
             warm_start=False,
             average=False,
         )
-
+    
     if kwargs["clf"] == "SGDCV":
         clf = SGDClassifierCV(
             cv=cv,
@@ -209,13 +241,16 @@ def get_clf(**kwargs):
         pipe.append(("vec", Vectorizer()))
 
     # prescreen
-    if kwargs["prescreen"] == "fpr":
-        pipe.append(("filter", SelectFpr(f_classif, alpha=kwargs["pval"])))
-    if kwargs["prescreen"] == "fdr":
-        pipe.append(("filter", SelectFdr(f_classif, alpha=kwargs["pval"])))
-    if kwargs["prescreen"] == "fwe":
-        pipe.append(("filter", SelectFwe(f_classif, alpha=kwargs["pval"])))
-
+    if kwargs["prescreen"] is not None:
+        pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
+    
+    # if kwargs["prescreen"] == "fpr":
+    #     pipe.append(("filter", SelectFpr(f_classif, alpha=kwargs["pval"])))
+    # if kwargs["prescreen"] == "fdr":
+    #     pipe.append(("filter", SelectFdr(f_classif, alpha=kwargs["pval"])))
+    # if kwargs["prescreen"] == "fwe":
+    #     pipe.append(("filter", SelectFwe(f_classif, alpha=kwargs["pval"])))
+    
     # dim red
     if kwargs["pca"]:
         pipe.append(("pca", PCA(n_components=kwargs["n_comp"])))

@@ -39,12 +39,16 @@ def get_coef_feat(X_days, y_days, **options):
         options["task"] = "Dual"
         options["epochs"] = ["MD"]
         options["overlap"] = "distractor"
+    elif options["features"] == "test":
+        options["task"] = "Dual"
+        options["epochs"] = ["ED"]
+        options["overlap"] = "test"
     
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X_S1_S2, **options)
     print("X_avg", X_avg.shape)
     coefs, model = get_coefs(model, X_avg, y_S1_S2, **options)
-
+    
     # coefs = coefs / np.linalg.norm(coefs)
     return coefs, model
 
@@ -93,7 +97,7 @@ def run_get_overlap(**kwargs):
     options = set_options(**kwargs)
     task = options["task"]
     trials = options["trials"]
-
+    
     eps = 1
     options["overlap"] = "distractor"
     if options["features"] == "sample":
@@ -114,12 +118,12 @@ def run_get_overlap(**kwargs):
     intercept = None
     
     options["task"] = task
-    options["features"] = "sample"
-    options["trials"] = trials
-
+    options["features"] = "test"
+    options["trials"] = ''
+    
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)
-
+    
     A, B, overlap = get_total_overlap(X, y, eps, coefs, intercept, model, RETURN_AB=1)
 
     overlap_ci = None
@@ -171,7 +175,7 @@ def plot_overlap(data, ci=None, **options):
             color=paldict[options["task"]],
         )
 
-    add_vlines()
+    add_vlines(mouse=options["mouse"])
     plt.xlim([0, 12])
     plt.xticks([0, 2, 4, 6, 8, 10, 12])
     plt.gca().xaxis.set_major_locator(ticker.MaxNLocator(4))

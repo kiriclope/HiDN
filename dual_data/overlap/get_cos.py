@@ -2,9 +2,7 @@
 import sys
 
 import matplotlib
-import matplotlib.lines as lines
 import matplotlib.pyplot as plt
-import matplotlib.transforms as transforms
 import numpy as np
 import seaborn as sns
 
@@ -12,9 +10,7 @@ from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.coefficients import get_coefs
-from dual_data.overlap.animated_bump import animated_bump
 from dual_data.preprocess.helpers import avg_epochs
-from dual_data.common.plot_utils import add_vlines, save_fig
 
 sns.set_context("poster")
 sns.set_style("ticks")
@@ -89,21 +85,26 @@ def run_get_cos(**kwargs):
 
     # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
     X_days, y_days = get_X_y_days(**options)
-    
+
+    print('in_fold', options['in_fold'])
     model = get_clf(**options)
 
     options["task"] = "Dual"
     options["features"] = "distractor"
+    options['epochs'] = ['MD']
+    
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    X_avg = avg_epochs(X_S1_S2, epochs=["MD"])
+    X_avg = avg_epochs(X_S1_S2, **options)
 
     dist_coefs, _ = get_coefs(model, X_avg, y_S1_S2, **options)
 
     options["task"] = "Dual"
     options["features"] = "sample"
+    options['epochs'] = ['ED']
+    
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    X_avg = avg_epochs(X_S1_S2, epochs=["ED"])
-
+    X_avg = avg_epochs(X_S1_S2, **options)
+    
     sample_coefs, _ = get_coefs(model, X_avg, y_S1_S2, **options)
 
     # plt.figure()
@@ -187,8 +188,8 @@ def plot_bump(X, y, trial, windowSize=10):
             origin="lower",
             cmap="jet",
             extent=[0, 14, 0, 360],
-            vmin=-.5,
-            vmax=1.,
+            # vmin=-2,
+            # vmax=2.,
             aspect="auto",
         )
 

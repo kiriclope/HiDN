@@ -11,17 +11,18 @@ from dual_data.common.plot_utils import add_vlines
 def plot_lick_rate(licks_counts, bin_edges, n_mice=1):
     # convert count of events to rate (Hz) by dividing by the total time in seconds
     bin_widths = np.diff(bin_edges)
-    rates = licks_counts / 64 / bin_widths / n_mice
-
+    rates = licks_counts / bin_widths / n_mice / 64
+    
     plt.plot(bin_edges[:-1], rates[0], "r")
     plt.plot(bin_edges[:-1], rates[1], "b")
     plt.plot(bin_edges[:-1], rates[2], "g")
     add_vlines()
     plt.xlabel("Time (s)")
     plt.ylabel("Lick Rate (Hz)")
-    plt.ylim([0, 5])
-    plt.xlim([0, 10])
-    plt.show()
+    # plt.ylim([0, 20])
+    # plt.ylim([0, 5])
+    # plt.xlim([0, 10])
+    # plt.show()
 
 
 def plot_licks_hist(licks_all, n_bins="auto", n_mice=1):
@@ -202,7 +203,7 @@ def get_licks_and_times(data, mouse="ACC_Prl"):
 
     # print("nogo", np.array(t_NoGo_on).shape, np.array(t_NoGo_off).shape)
     t_nogo = vstack_nan(t_NoGo_on, t_NoGo_off)
-
+    
     licks = (licks - t_sample[0][0]) / 1000
     t_dist = (t_dist - t_sample[0][0]) / 1000
     t_test = (t_test - t_sample[0][0]) / 1000
@@ -424,7 +425,7 @@ def get_licks_mouse(data, mouse, response="", trial_length=20, verbose=1):
     return licks_dpa, licks_go, licks_nogo
 
 
-def get_licks_mice(path, n_session=10, response="", trial_length=20):
+def get_licks_mice(path, n_session=10, response="", trial_length=20, ini=0):
     mice = np.sort(os.listdir(path))
     mice = [mouse for mouse in mice if "DPA" not in mouse]
 
@@ -436,14 +437,14 @@ def get_licks_mice(path, n_session=10, response="", trial_length=20):
         licks_dpa = []
         licks_go = []
         licks_nogo = []
-
+        
         print("mouse", mouse)
-
-        for i_session in range(n_session + 1):
+        # 
+        for i_session in range(ini, n_session + 1):
             # print(path + mouse + "/session_%d" % i_session)
-
+            
             data = loadmat(path + mouse + "/session_%d" % i_session)
-
+            
             dpa, go, nogo = get_licks_mouse(
                 data, path, response, trial_length, verbose=0
             )
@@ -451,12 +452,12 @@ def get_licks_mice(path, n_session=10, response="", trial_length=20):
             licks_dpa.append(dpa)
             licks_go.append(go)
             licks_nogo.append(nogo)
-
+            
         licks_dpa = hstack_with_padding(licks_dpa)
         licks_go = hstack_with_padding(licks_go)
         licks_nogo = hstack_with_padding(licks_nogo)
 
-        print("dpa", licks_dpa.shape, "go", licks_go.shape, "nogo", licks_nogo.shape)
+        # print("dpa", licks_dpa.shape, "go", licks_go.shape, "nogo", licks_nogo.shape)
 
         mice_dpa.append(licks_dpa)
         mice_go.append(licks_go)

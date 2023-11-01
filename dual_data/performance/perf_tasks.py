@@ -122,7 +122,12 @@ def run_perf_tasks(**kwargs):
     plt.ylabel(perf_type)
     plt.ylim([0.25, 1.25])
     plt.xticks(gv.days)
-    plt.yticks([0.25, 0.5, 0.75, 1])
+
+    if "rej" in perf_type:
+        plt.yticks([0., 0.25, 0.5, 0.75, 1])
+    else:
+        plt.yticks([0., 0.25, 0.5, 0.75, 1])
+        
     plt.xlim([0.8, day_list[-1] + 0.2])
     # plt.legend(loc='best', frameon=False)
 

@@ -13,9 +13,9 @@ def set_options(**kwargs):
     opts = dict()
 
     opts["path"] = "/home/leon/dual_task/dual_data/"
-
+    
     opts["mouse"] = "JawsM15"
-    opts["data_type"] = "dF"  # "raw" or "dF"
+    opts["data_type"] = "raw"  # "raw" or "dF"
     
     opts["n_days"] = 6  # PrL,ACC 6 or multi 10 this is updated later
     
@@ -171,10 +171,16 @@ def set_options(**kwargs):
     
     if "P" in opts["mouse"]:
         opts["n_days"] = 10  # PrL 6, ACC 5 or multi 10
-        opts["n_discard"] = 0
-        opts["n_first"] = 5  # 3 or 2
-        opts["n_middle"] = 0  # 0 or 2
+        opts["n_discard"] = 1
+        opts["n_first"] = 3  # 3 or 2
+        opts["n_middle"] = 3 # 0 or 2
 
+    if "17" in opts["mouse"]:
+        opts["n_days"] = 8  # PrL 6, ACC 5 or multi 10
+        opts["n_discard"] = 0
+        opts["n_first"] = 3  # 3 or 2
+        opts["n_middle"] = 3 # 0 or 2
+        
     
     if opts["day"] == "first":
         palette = sns.color_palette("muted")
@@ -183,7 +189,8 @@ def set_options(**kwargs):
 
     frame_rate = 6
     inv_frame = 0  # 1 / frame_rate
-    T_WINDOW = 0.25
+    T_WINDOW = 0.0
+    
     duration = 14  # 14, 19.2
     if "P" in opts["mouse"]:
         duration = 19.2

@@ -52,8 +52,31 @@ def create_svg_grid(image_files, grid_dims):
     display(SVG(filename="grid_image.svg"))
 
 
-def add_vlines(ax=None):
-    time_periods = [gv.t_STIM, gv.t_DIST, gv.t_TEST, gv.t_CUE]
+def add_vlines(ax=None, mouse=""):
+    t_BL = [0, 2]
+    t_STIM = [2 , 3]
+    t_ED = [3 , 4.5]
+    t_DIST = [4.5 , 5.5]
+    t_MD = [5.5 , 6.5]
+    t_CUE = [6.5 , 7]
+    t_RWD = [7 , 7.5]
+    t_LD = [7.5 , 9]
+    t_TEST = [9 , 10]
+    t_RWD2 = [11 , 12]
+    
+    if "P" in mouse:
+        t_BL = [0 , 2]
+        t_STIM = [2 , 3]
+        t_ED = [3 , 4]
+        t_DIST = [4 , 5]
+        t_MD = [5 , 6]
+        t_CUE = [6 , 7]
+        t_RWD = [7 , 8]
+        t_LD = [8 , 9]
+        t_TEST = [9 , 10]
+        t_RWD2 = [10 , 11]
+
+    time_periods = [t_STIM, t_DIST, t_TEST, t_CUE]
     colors = ["b", "b", "b", "g"]
     if ax is None:
         for period, color in zip(time_periods, colors):

@@ -7,21 +7,83 @@ import pandas as pd
 from scipy.io import loadmat
 
 from dual_data.common import constants as gv
-from dual_data.common import options
-from dual_data.preprocess.helpers import avg_epochs, preprocess_df
+from dual_data.preprocess.helpers import preprocess_df
 
 reload(gv)
 
+def get_X_y_day_new(idx_day, data, data_type="raw"):
+    
+    if "raw" in data_type:
+        X_days = np.rollaxis(data["Cdf_Trial"], 1, 0)
+    elif "FR" in data_type:
+        X_days = np.rollaxis(data["FR_Trial"], 1, 0)
+    else:
+        X_days = np.rollaxis(data["dff_TrialBase"], 1, 0)
+        
+    y_ = np.zeros((X_days.shape[0], 7))
+    y_days = pd.DataFrame(
+        y_, columns=["sample_odor", "dist_odor", "test_odor", "tasks", "response", "laser", "day"]
+    )
+    
+    y_days.loc[data["S1Trial"].flatten() - 1, 'sample_odor'] = 0
+    y_days.loc[data["S2Trial"].flatten() - 1, 'sample_odor'] = 1
+    y_days.loc[data["S3Trial"].flatten() - 1, 'sample_odor'] = 2
+    y_days.loc[data["S4Trial"].flatten() - 1, 'sample_odor'] = 3
+
+    y_days.loc[data["NDTrial"].flatten() - 1, 'dist_odor'] = 0
+    y_days.loc[data["D1Trial"].flatten() - 1, 'dist_odor'] = 1
+    y_days.loc[data["D2Trial"].flatten() - 1, 'dist_odor'] = 2
+
+    y_days.loc[data["NDTrial"].flatten() - 1, 'tasks'] = "DPA"
+    y_days.loc[data["D1Trial"].flatten() - 1, 'tasks'] = "DualGo"
+    y_days.loc[data["D2Trial"].flatten() - 1, 'tasks'] = "DualNoGo"
+    
+    y_days.loc[data["hitTrial"].flatten() - 1, 'response'] = "correct_hit"
+    y_days.loc[data["CRTrial"].flatten() - 1, 'response'] = "correct_rej"
+    y_days.loc[data["FATrial"].flatten() - 1, 'response'] = "incorrect_fa"
+    y_days.loc[data["missTrial"].flatten() - 1, 'response'] = "incorrect_miss"
+
+    y_days.loc[(y_days.response=="correct_hit") & (y_days.sample_odor==0), 'test_odor'] = 0
+    y_days.loc[(y_days.response=="incorrect_fa") & (y_days.sample_odor==0), 'test_odor'] = 1
+    y_days.loc[(y_days.response=="correct_rej") & (y_days.sample_odor==0), 'test_odor'] = 1
+    y_days.loc[(y_days.response=="incorrect_miss") & (y_days.sample_odor==0), 'test_odor'] = 0
+
+    y_days.loc[(y_days.response=="correct_hit") & (y_days.sample_odor==1), 'test_odor'] = 1
+    y_days.loc[(y_days.response=="incorrect_fa") & (y_days.sample_odor==1), 'test_odor'] = 0
+    y_days.loc[(y_days.response=="correct_rej") & (y_days.sample_odor==1), 'test_odor'] = 0
+    y_days.loc[(y_days.response=="incorrect_miss") & (y_days.sample_odor==1), 'test_odor'] = 1
+    
+    y_days.loc[(y_days.response=="correct_hit") & (y_days.sample_odor==2), 'test_odor'] = 0
+    y_days.loc[(y_days.response=="incorrect_fa") & (y_days.sample_odor==2), 'test_odor'] = 1
+    y_days.loc[(y_days.response=="correct_rej") & (y_days.sample_odor==2), 'test_odor'] = 1
+    y_days.loc[(y_days.response=="incorrect_miss") & (y_days.sample_odor==2), 'test_odor'] = 0
+
+    y_days.loc[(y_days.response=="correct_hit") & (y_days.sample_odor==3), 'test_odor'] = 1
+    y_days.loc[(y_days.response=="incorrect_fa") & (y_days.sample_odor==3), 'test_odor'] = 0
+    y_days.loc[(y_days.response=="correct_rej") & (y_days.sample_odor==3), 'test_odor'] = 0
+    y_days.loc[(y_days.response=="incorrect_miss") & (y_days.sample_odor==3), 'test_odor'] = 1
+    
+    try:
+        y_days.loc[data["laserOffTrial"].flatten() - 1, 'laser'] = 0
+        y_days.loc[data["laserOnTrial"].flatten() - 1, 'laser'] = 1
+    except:
+        pass
+
+
+    y_days['day'] = idx_day
+    
+    return X_days, y_days
 
 def get_X_y_days_multi(mouse=gv.mouse):
+    
     data = mat73.loadmat(
         "/home/leon/dual_task/dual_data/data/%s/dataProcessed.mat" % mouse
     )
     
     X_days = np.swapaxes(data["Cdf_Mice"], 0, 1)
-    y_ = np.zeros((X_days.shape[0], 6))
+    y_ = np.zeros((X_days.shape[0], 7))
     y_days = pd.DataFrame(
-        y_, columns=["sample_odor", "dist_odor", "tasks", "response", "laser", "day"]
+        y_, columns=["sample_odor", "dist_odor", "test_odor", "tasks", "response", "laser", "day"]
     )
     
     y_days.sample_odor[data["S1All"][0] - 1] = 0
@@ -40,10 +102,22 @@ def get_X_y_days_multi(mouse=gv.mouse):
     y_days.tasks[data["D2All"][0] - 1] = "DualNoGo"
     y_days.tasks[data["D3All"][0] - 1] = "DualGo"
     y_days.tasks[data["D4All"][0] - 1] = "DualNoGo"
-
+    
     y_days.response[data["AllCorrect"][0] - 1] = "correct"
     y_days.response[data["AllWrong"][0] - 1] = "incorrect"
 
+    y_days.test_odor[(y_days.response=="correct") & (y_days.sample_odor==0)] = 0
+    y_days.test_odor[(y_days.response=="incorrect") & (y_days.sample_odor==0)] = 1
+
+    y_days.test_odor[(y_days.response=="correct") & (y_days.sample_odor==1)] = 1
+    y_days.test_odor[(y_days.response=="incorrect") & (y_days.sample_odor==1)] = 0
+
+    y_days.test_odor[(y_days.response=="correct") & (y_days.sample_odor==2)] = 0
+    y_days.test_odor[(y_days.response=="incorrect") & (y_days.sample_odor==2)] = 1
+
+    y_days.test_odor[(y_days.response=="correct") & (y_days.sample_odor==3)] = 1
+    y_days.test_odor[(y_days.response=="incorrect") & (y_days.sample_odor==3)] = 0
+    
     try:
         y_days.laser[data["OffAll"][0] - 1] = 0
         y_days.laser[data["OnAll"][0] - 1] = 1
@@ -66,7 +140,7 @@ def create_df(y_raw, day=None):
 
     if day is None:
         y_df = pd.DataFrame(
-            y_.T, columns=["sample_odor", "test_odor", "response", "tasks", "laser"]
+            y_.T, columns=["sample_odor", "dist_odor", "test_odor", "response", "tasks", "laser"]
         )
     else:
         y_ = np.vstack((y_, day * np.ones(y_.shape[-1])))
@@ -74,13 +148,18 @@ def create_df(y_raw, day=None):
             y_.T,
             columns=["sample_odor", "test_odor", "response", "tasks", "laser", "day"],
         )
-
+        
     y_df.loc[y_df.sample_odor == 17, "sample_odor"] = 0
     y_df.loc[y_df.sample_odor == 18, "sample_odor"] = 1
 
+    # y_df.loc[y_df.tasks == 0, "dist_odor"] = np.nan
+    # y_df.loc[y_df.tasks == 13, "dist_odor"] = 0
+    # y_df.loc[y_df.tasks == 14, "dist_odor"] = 1
+    
     y_df.loc[y_df.test_odor == 11, "test_odor"] = 0
     y_df.loc[y_df.test_odor == 12, "test_odor"] = 1
 
+    
     y_df.loc[y_df.response == 1, "response"] = "correct_hit"
     y_df.loc[y_df.response == 2, "response"] = "incorrect_miss"
     y_df.loc[y_df.response == 3, "response"] = "incorrect_fa"
@@ -89,7 +168,8 @@ def create_df(y_raw, day=None):
     y_df.loc[y_df.tasks == 0, "tasks"] = "DPA"
     y_df.loc[y_df.tasks == 13, "tasks"] = "DualGo"
     y_df.loc[y_df.tasks == 14, "tasks"] = "DualNoGo"
-
+    
+    
     return y_df
 
 
@@ -103,14 +183,13 @@ def get_fluo_data(idx_day, **kwargs):
 
     if "ACC" in mouse:
         data = loadmat(path + "/" + mouse + "/SamedROI/" + mouse + "_all_days" + ".mat")
-    elif "PP" in mouse:
-        data = mat73.loadmat(
+    elif "P" in mouse:
+        data = loadmat(
             path
             + "/"
             + mouse
-            + "/SamedROI_10Days/"
-            + "Day0"
-            + str(idx_day)
+            + "/SamedROI_%.2dDays/" % n_days
+            + "Day%.2d" % idx_day
             + "/DFF_Data01.mat"
         )
     else:
@@ -125,23 +204,26 @@ def get_fluo_data(idx_day, **kwargs):
             + ".mat"
         )
 
-    if "raw" in data_type:
-        X_raw = np.rollaxis(data["Cdf_Mice"], 1, 0)
+    if "P" in mouse:
+        X_raw, y_raw = get_X_y_day_new(idx_day, data, data_type)
     else:
-        X_raw = np.rollaxis(data["dff_Mice"], 1, 0)
+        if "raw" in data_type:
+            X_raw = np.rollaxis(data["Cdf_Mice"], 1, 0)
+        else:
+            X_raw = np.rollaxis(data["dff_Mice"], 1, 0)
         
-    y_raw = data["Events"].transpose()
+        y_raw = data["Events"].transpose()
 
-    if "ACC" in mouse:
-        X_raw = X_raw.reshape(
-            (n_days, int(X_raw.shape[0] / n_days), X_raw.shape[1], X_raw.shape[2])
-        )
-        y_raw = y_raw.T.reshape(
-            (n_days, int(y_raw.T.shape[0] / n_days), y_raw.T.shape[1])
-        )
+        if "ACC" in mouse:
+            X_raw = X_raw.reshape(
+                (n_days, int(X_raw.shape[0] / n_days), X_raw.shape[1], X_raw.shape[2])
+            )
+            y_raw = y_raw.T.reshape(
+                (n_days, int(y_raw.T.shape[0] / n_days), y_raw.T.shape[1])
+            )
 
-        X_raw = X_raw[idx_day - 1]
-        y_raw = y_raw[idx_day - 1].T
+            X_raw = X_raw[idx_day - 1]
+            y_raw = y_raw[idx_day - 1].T
 
     print(
         "mouse",
@@ -157,7 +239,7 @@ def get_fluo_data(idx_day, **kwargs):
         "y",
         y_raw.shape,
     )
-
+    
     return X_raw, y_raw
 
 
@@ -253,9 +335,12 @@ def get_X_y_days(**kwargs):
             for day in days:
                 X, y = get_fluo_data(idx_day=day, **kwargs)
                 print("X", X.shape, "y", y.shape)
-
-                y_df = create_df(y, day=day)
-
+                
+                if "P" in mouse:
+                    y_df = y
+                else:
+                    y_df = create_df(y, day=day)
+                
                 X_days.append(X)
                 y_days.append(y_df)
 

@@ -3,24 +3,8 @@ import numpy as np
 
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
-from dual_data.decode.classifiers import get_clf
-from dual_data.decode.coefficients import get_coefs
-from dual_data.preprocess.helpers import avg_epochs, preprocess_X
-
-
-def get_total_overlap(X, y, eps, coefs):
-    overlap = np.zeros((X.shape[-1], X.shape[0]))
-
-    idx = np.where(y == 0)[0]
-
-    for i_epoch in range(X.shape[-1]):
-        overlap[i_epoch] = np.dot(coefs, X[..., i_epoch].T).T
-
-    A = -np.nanmean(overlap[:, idx], axis=1) / X.shape[1]
-    B = -np.nanmean(overlap[:, ~idx], axis=1) / X.shape[1]
-
-    return (A + eps * B) / 2
-
+from dual_data.preprocess.helpers import avg_epochs
+from dual_data.overlap.get_overlap import get_total_overlap, get_coef_feat
 
 def get_ci(res, conf=0.95):
     ostats = np.sort(res, axis=0)
@@ -39,24 +23,6 @@ def get_ci(res, conf=0.95):
     return ci
 
 
-def get_coef_feat(X_days, y_days, **options):
-    model = get_clf(**options)
-
-    if options["features"] == "sample":
-        options["task"] = "Dual"
-        options["epoch"] = ["ED"]
-    elif options["features"] == "distractor":
-        options["task"] = "Dual"
-        options["epoch"] = ["MD"]
-
-    X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    X_avg = avg_epochs(X_S1_S2, epochs=options["epoch"])
-    print("X_avg", X_avg.shape)
-    coefs, model = get_coefs(model, X_avg, y_S1_S2, **options)
-
-    return coefs
-
-
 def run_get_overlap_day(**kwargs):
     options = set_options(**kwargs)
     task = options["task"]
@@ -64,46 +30,44 @@ def run_get_overlap_day(**kwargs):
 
     eps = 1
     options["overlap"] = "distractor"
+    options["epochs"] = ["MD"]
     if options["features"] == "sample":
         eps = -1
         options["overlap"] = "sample"
-
+        options["epochs"] = ["ED"]
+    
     # X_days, y_days = get_X_y_days(options["mouse"], IF_RELOAD=options["reload"])
     X_days, y_days = get_X_y_days(**options)
 
-    # X_days = preprocess_X(
-    #     X_days,
-    #     scaler=options["scaler_BL"],
-    #     avg_mean=options["avg_mean_BL"],
-    #     avg_noise=options["avg_noise_BL"],
-    #     unit_var=options["unit_var_BL"],
-    # )
 
     n_days = len(y_days.day.unique())
     days = np.arange(1, n_days + 1)
-
-    cos_day = []
+    
+    overlap_day = []
     for day in days:
         options["day"] = day
-
+        
         options["features"] = "distractor"
-        coefs = get_coef_feat(X_days, y_days, **options)
+        options["epochs"] = ["MD"]
+        coefs, model = get_coef_feat(X_days, y_days, **options)
         print("coefs ", np.array(coefs).shape)
 
         options["task"] = task
         options["features"] = "sample"
+        options["epochs"] = ["ED"]
         options["trials"] = trials
-
+        
         X, y = get_X_y_S1_S2(X_days, y_days, **options)
-        X_avg = avg_epochs(X, epochs=["ED"])
-        overlap = get_total_overlap(X_avg[..., np.newaxis], y, eps, coefs)
-
-        cos_day.append(overlap)
+        X_avg = avg_epochs(X, **options)
+        overlap = get_total_overlap(X_avg[..., np.newaxis], y, eps, coefs, 0, model)
+        
+        print('day', options['day'], 'overlap', overlap)
+        overlap_day.append(overlap)
 
     # options["method"] = "bootstrap"
     # options["avg_coefs"] = False
 
-    # # cos_day = []
+    # # overlap_day = []
     # ci_day = []
     # for day in days:
     #     options["day"] = day
@@ -117,7 +81,7 @@ def run_get_overlap_day(**kwargs):
     #     print("coefs dist", np.array(c_dist).shape)
 
     #     # cos = 1 - cosine(np.mean(c_sample, 0), np.mean(c_dist, 0))
-    #     # cos_day.append(np.arccos(np.clip(cos, -1.0, 1.0)) * 180 / np.pi)
+    #     # overlap_day.append(np.arccos(np.clip(cos, -1.0, 1.0)) * 180 / np.pi)
 
     #     cos_boot = []
     #     for boot in range(c_sample.shape[0]):
@@ -129,22 +93,22 @@ def run_get_overlap_day(**kwargs):
     #     ci_day.append(get_ci(cos_boot)[0])
 
     # ci_day = np.array(ci_day)
-
-    plt.plot(days, cos_day)
-    plt.xlabel("Days")
+    
+    plt.plot(days, overlap_day)
+    plt.xlabel("Day")
     plt.ylabel("Dist. Overlap")
-
+    plt.xticks([1, 2, 3, 4 , 5, 6])
     # plt.fill_between(
     #     days,
-    #     cos_day - ci_day[:, 0],
-    #     cos_day + ci_day[:, 1],
+    #     overlap_day - ci_day[:, 0],
+    #     overlap_day + ci_day[:, 1],
     #     alpha=0.25,
     #     color="k",
     # )
 
     # plt.plot([days[0], days[-1]], [90, 90], "k--")
-    plt.show()
-
+    
+    return overlap_day
 
 if __name__ == "__main__":
-    run_get_cos_day()
+    run_get_overlap_day()
