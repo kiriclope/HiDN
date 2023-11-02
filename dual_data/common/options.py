@@ -42,6 +42,9 @@ def set_options(**kwargs):
     opts["show_AB"] = False
     opts["laser"] = 0
 
+    opts["epochs"] = ["ED", "MD", "LD"]
+    opts["AVG_EPOCHS"] = 1
+    
     ################################
     # perm/boots param
     ################################
@@ -240,7 +243,7 @@ def set_options(**kwargs):
     opts["bins_TEST"] = opts["bins"][
         int((t_TEST[0] + T_WINDOW) * frame_rate) : int((t_TEST[1]) * frame_rate)
     ]
-
+    
     opts["bins_CHOICE"] = opts["bins"][
         int((t_TEST[1] + T_WINDOW) * frame_rate) : int(t_RWD2[0] * frame_rate)
     ]

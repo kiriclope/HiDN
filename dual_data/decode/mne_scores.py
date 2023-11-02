@@ -20,6 +20,7 @@ import dual_data.stats.progressbar as pgb
 from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
 from dual_data.common.options import set_options
 from dual_data.common.plot_utils import add_vlines, save_fig
+from dual_data.preprocess.helpers import avg_epochs
 from dual_data.decode.classifiers import get_clf
 from dual_data.decode.my_mne import my_cross_val_multiscore
 
@@ -155,6 +156,10 @@ def run_mne_scores(**kwargs):
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)
 
+    if options["AVG_EPOCHS"]:
+        print(options["epochs"])
+        X = avg_epochs(X, **options)
+        print('X', X.shape)
     # options['task'] = task
     # X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
 
@@ -171,9 +176,9 @@ def run_mne_scores(**kwargs):
 
     print("cv", cv)
     scoring = options["outer_score"]
-
+    
     estimator = SlidingEstimator(model, n_jobs=-1, scoring=scoring, verbose=False)
-
+    
     start_time = time.time()
     scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
 
@@ -209,7 +214,7 @@ def run_mne_scores(**kwargs):
     title = options["task"]
 
     plot_scores_time(figname, title, scores, ci_scores, options["task"], options["day"])
-
+    return scores
     # other bootstrap implementation using bagging
     # options["method"] = "bootstrap"
     # options["n_jobs"] = None

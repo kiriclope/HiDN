@@ -12,12 +12,17 @@ from dual_data.stats.bootstrap import my_boots_ci
 
 def get_labels_task(y, task, perf_type, SAMPLE="all", IF_LASER=0):
     idx = (y.tasks == task) & (y.laser == IF_LASER)
+    
+    if SAMPLE == "A":
+        idx &= y.sample_odor == 0
+    elif SAMPLE == "B":
+        idx &= y.sample_odor == 1
 
-    # if SAMPLE == "A":
-    #     idx &= y.sample_odor == 0
-    # elif SAMPLE == "B":
-    #     idx &= y.sample_odor == 1
-
+    if SAMPLE == "C":
+        idx &= y.test_odor == 0
+    elif SAMPLE == "D":
+        idx &= y.test_odor == 1
+        
     if ("hit" in perf_type) or ("miss" in perf_type):
         idx_paired = ((y.sample_odor == 0) & (y.test_odor == 0)) | (
             (y.sample_odor == 1) & (y.test_odor == 1)
@@ -33,14 +38,14 @@ def get_labels_task(y, task, perf_type, SAMPLE="all", IF_LASER=0):
     return idx
 
 
-def perf_tasks_days(y_days, perf_type="correct_hit", SAMPLE="all", IF_LASER=0):
+def perf_tasks_days(tasks, y_days, perf_type="correct_hit", SAMPLE="all", IF_LASER=0):
     perf_task = []
     ci_task = []
 
     n_days = len(y_days.day.unique())
     # print(y_days.head())
 
-    for task in ["DPA", "DualGo", "DualNoGo"]:
+    for task in tasks:
         perf_day = []
         ci_day = []
 
@@ -81,42 +86,49 @@ def run_perf_tasks(**kwargs):
     perf_type = options["perf_type"]
     sample = options["sample"]
     laser = options["laser"]
-
-    perf_off, ci_off = perf_tasks_days(y_days, perf_type, SAMPLE=sample, IF_LASER=laser)
+    tasks = options["tasks"]
+    perf_off, ci_off = perf_tasks_days(tasks, y_days, perf_type, SAMPLE=sample, IF_LASER=laser)
     # perf_on, ci_on = perf_tasks_days(y_days, perf_type, SAMPLE=sample, IF_LASER=1)
-
+    
     n_days = len(y_days.day.unique())
     day_list = np.arange(1, n_days + 1)
 
     figname = options["mouse"] + "_behavior_tasks_" + perf_type
     fig = plt.figure(figname)
 
-    plt.plot(day_list, perf_off[0], "-o", color=gv.pal[0], ms=1.5, label="DPA")
-    plt.plot(day_list + 0.1, perf_off[1], "-o", color=gv.pal[1], ms=1.5, label="DualGo")
-    plt.plot(
-        day_list + 0.2, perf_off[2], "-o", color=gv.pal[2], ms=1.5, label="DualNoGo"
-    )
+    for i in range(len(tasks)):
+        if tasks[i] == "DPA":
+            plt.plot(day_list, perf_off[i], "-o", color=gv.pal[i], ms=1.5, label="DPA")
+            plt.errorbar(day_list, perf_off[i], yerr=ci_off[i].T, fmt="none", alpha=1, color=gv.pal[0])
+        elif tasks[i] == "DualGo":
+            plt.plot(day_list + 0.1, perf_off[i], "-o", color=gv.pal[1], ms=1.5, label="DualGo")
+            plt.errorbar(
+                day_list + 0.1,
+                perf_off[i],
+                yerr=ci_off[i].T,
+                fmt="none",
+                alpha=1,
+                color=gv.pal[1],
+            )
+        elif tasks[i] == "DualNoGo":
+            plt.plot(
+                day_list + 0.2, perf_off[i], "-o", color=gv.pal[2], ms=1.5, label="DualNoGo"
+            )
+            plt.errorbar(
+                day_list + 0.2,
+                perf_off[i],
+                yerr=ci_off[i].T,
+                fmt="none",
+                alpha=1,
+                color=gv.pal[2],
+            )
+        else:
+            plt.plot(day_list, perf_off[i], "-o", color='k', ms=1.5, label="all")
+            plt.errorbar(
+                day_list, perf_off[i], yerr=ci_off[i].T, fmt="none", alpha=1, color=gv.pal[i]
+            )
+            
     plt.plot([1, day_list[-1]], [0.5, 0.5], "--k", alpha=0.5)
-
-    plt.errorbar(
-        day_list, perf_off[0], yerr=ci_off[0].T, fmt="none", alpha=1, color=gv.pal[0]
-    )
-    plt.errorbar(
-        day_list + 0.1,
-        perf_off[1],
-        yerr=ci_off[1].T,
-        fmt="none",
-        alpha=1,
-        color=gv.pal[1],
-    )
-    plt.errorbar(
-        day_list + 0.2,
-        perf_off[2],
-        yerr=ci_off[2].T,
-        fmt="none",
-        alpha=1,
-        color=gv.pal[2],
-    )
 
     plt.xlabel("Day")
     plt.ylabel(perf_type)

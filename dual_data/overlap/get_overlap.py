@@ -41,7 +41,7 @@ def get_coef_feat(X_days, y_days, **options):
         options["overlap"] = "distractor"
     elif options["features"] == "test":
         options["task"] = "Dual"
-        options["epochs"] = ["ED"]
+        options["epochs"] = ["CHOICE"]
         options["overlap"] = "test"
     
     X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
