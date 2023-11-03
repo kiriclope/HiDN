@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -146,6 +144,7 @@ def run_perf_tasks(**kwargs):
     pkl_save(fig, figname, path=gv.figdir)
     save_fig(fig, figname, path=gv.figdir)
 
+    return perf_off
 
 if __name__ == "__main__":
     run_perf_tasks()

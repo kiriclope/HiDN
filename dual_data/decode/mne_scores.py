@@ -145,7 +145,7 @@ def run_mne_scores(**kwargs):
         options["day"] = int(options["day"])
     except ValueError:
         pass
-
+    
     # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
     X_days, y_days = get_X_y_days(**options)
 
@@ -162,7 +162,7 @@ def run_mne_scores(**kwargs):
         print('X', X.shape)
     # options['task'] = task
     # X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
-
+    
     cv = options["n_out"]
     if options["out_fold"] == "loo":
         cv = LeaveOneOut()
