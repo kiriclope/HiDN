@@ -325,7 +325,7 @@ def get_X_y_days(**kwargs):
 
     if kwargs["reload"] == 1:
         print("reading raw data")
-
+        
         if ("AP" in mouse):
             X_days, y_days = get_X_y_days_multi(mouse)            
         else:
@@ -368,7 +368,7 @@ def get_X_y_days(**kwargs):
         print("##########################################")
 
         X_days = preprocess_df(X_days, y_days, **kwargs)
-
+    
     return X_days, y_days
 
 
@@ -601,7 +601,9 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_laser = y.laser == 1
     elif kwargs["laser"] == 0:
         idx_laser = y.laser == 0
-
+    elif kwargs["laser"] == -1:
+        idx_laser = True
+    
     X_S1 = X[idx_S1 & idx_trials & idx_days & idx_laser & idx_tasks]
     X_S2 = X[idx_S2 & idx_trials & idx_days & idx_laser & idx_tasks]
 
@@ -651,5 +653,5 @@ def get_X_y_S1_S2(X, y, **kwargs):
         )
     else:
         y_S1_S2 = np.hstack((-np.ones(X_S1.shape[0]), np.ones(X_S2.shape[0])))
-
+    
     return X_S1_S2, y_S1_S2

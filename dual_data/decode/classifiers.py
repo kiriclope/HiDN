@@ -7,7 +7,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import BaggingClassifier
-from sklearn.feature_selection import SelectPercentile, SelectKBest, SelectFdr, SelectFpr, SelectFwe, f_classif
+from sklearn.feature_selection import SelectPercentile, SelectKBest, SelectFdr, SelectFpr, SelectFwe, f_classif, VarianceThreshold
 from sklearn.linear_model import LogisticRegressionCV, SGDClassifier
 from sklearn.model_selection import (
     GridSearchCV,
@@ -38,7 +38,9 @@ class safeSelector(BaseEstimator, TransformerMixin):
         elif 'kbest' in method:
             self.selector = SelectKBest(f_classif, k=alpha)
         elif 'perc' in method:
-            self.selector = SelectPercentile(f_classif, percentile=alpha)
+            self.selector = SelectPercentile(f_classif, percentile=alpha * 100)
+        elif 'var' in method:
+            self.selector = VarianceThreshold(threshold=alpha)
         
         self.feature_indices_ = None
         

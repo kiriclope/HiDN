@@ -18,7 +18,7 @@ path = "/home/leon/dual_task/dual_data/"
 # path = "/homecentral/alexandre.mahrach/bebopalula/dual_data/"
 
 global mouse, mice
-mouse = "Jaw"
+mouse = "J"
 mice = [
     # "C57_2_DualTask",
     "ChRM04",
@@ -81,7 +81,7 @@ frame_rate = 6
 inv_frame = 0  # 1 / frame_rate
 duration = 14  # 14, 19.2
 if "P" in mouse:
-    duration = 19.2
+    duration = 14
 
 time = np.linspace(0, duration, int(duration * frame_rate))
 
@@ -110,7 +110,7 @@ if "P" in mouse:
     t_LD = [8 + inv_frame, 9]
     t_TEST = [9 + inv_frame, 10]
     t_RWD2 = [10 + inv_frame, 11]
-
+    
     # t_BL = [0 + inv_frame, 2 + inv_frame]
     # t_STIM = [2 + inv_frame, 3 + inv_frame]
     # t_ED = [3 + inv_frame, 4 + inv_frame]

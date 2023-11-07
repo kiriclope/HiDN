@@ -7,7 +7,6 @@ from dual_data.common import constants as gv
 
 # from scipy.signal import savgol_filter, detrend
 
-
 def minmax_X_y(X, y):
     print("X", X.shape, "y", y.shape)
     X1 = X[y == 1]

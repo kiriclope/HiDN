@@ -15,12 +15,12 @@ def get_labels_task(y, task, perf_type, SAMPLE="all", IF_LASER=0):
         idx &= y.sample_odor == 0
     elif SAMPLE == "B":
         idx &= y.sample_odor == 1
-
+    
     if SAMPLE == "C":
         idx &= y.test_odor == 0
     elif SAMPLE == "D":
         idx &= y.test_odor == 1
-        
+    
     if ("hit" in perf_type) or ("miss" in perf_type):
         idx_paired = ((y.sample_odor == 0) & (y.test_odor == 0)) | (
             (y.sample_odor == 1) & (y.test_odor == 1)
@@ -62,6 +62,10 @@ def perf_tasks_days(tasks, y_days, perf_type="correct_hit", SAMPLE="all", IF_LAS
 
             perf_day.append(np.mean(idx))
             _, ci = my_boots_ci(idx, np.mean, verbose=0, n_samples=1000)
+                
+            # perf_day.append(np.sum(idx))
+            # _, ci = my_boots_ci(idx, np.sum, verbose=0, n_samples=1000)
+            
             ci_day.append(ci[0])
 
         perf_task.append(perf_day)
@@ -140,7 +144,7 @@ def run_perf_tasks(**kwargs):
         
     plt.xlim([0.8, day_list[-1] + 0.2])
     # plt.legend(loc='best', frameon=False)
-
+    
     pkl_save(fig, figname, path=gv.figdir)
     save_fig(fig, figname, path=gv.figdir)
 

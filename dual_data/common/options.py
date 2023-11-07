@@ -183,7 +183,6 @@ def set_options(**kwargs):
         opts["n_discard"] = 0
         opts["n_first"] = 3  # 3 or 2
         opts["n_middle"] = 3 # 0 or 2
-        
     
     if opts["day"] == "first":
         palette = sns.color_palette("muted")
@@ -194,11 +193,11 @@ def set_options(**kwargs):
     inv_frame = 0  # 1 / frame_rate
     T_WINDOW = 0.0
     
-    duration = 14  # 14, 19.2
+    opts['duration'] = 14  # 14, 19.2
     if "P" in opts["mouse"]:
-        duration = 19.2
-        
-    time = np.linspace(0, duration, int(duration * frame_rate))
+        opts['duration'] = 14
+    
+    time = np.linspace(0, opts['duration'], int( opts['duration'] * frame_rate))
     opts["bins"] = np.arange(0, len(time))
     
     t_BL = [0, 2]
@@ -222,7 +221,7 @@ def set_options(**kwargs):
         t_RWD = [7 + inv_frame, 8]
         t_LD = [8 + inv_frame, 9]
         t_TEST = [9 + inv_frame, 10]
-        t_RWD2 = [10 + inv_frame, 11]
+        t_RWD2 = [11 + inv_frame, 12]
     
     opts["bins_BL"] = opts["bins"][int(t_BL[0] * frame_rate) : int(t_BL[1] * frame_rate)]
     

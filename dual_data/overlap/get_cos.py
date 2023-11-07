@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import sys
 
 import matplotlib
@@ -78,6 +77,7 @@ def cos_between(v1, v2):
 def run_get_cos(**kwargs):
     options = set_options(**kwargs)
     task = options["task"]
+    trials = options['trials']
     try:
         options["day"] = int(options["day"])
     except:
@@ -92,21 +92,28 @@ def run_get_cos(**kwargs):
     options["task"] = "Dual"
     options["features"] = "distractor"
     options['epochs'] = ['MD']
+    options['trials'] = 'correct'
     
-    X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    X_avg = avg_epochs(X_S1_S2, **options)
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    X_avg = avg_epochs(X, **options)
+    print('Distractor: X', X_avg.shape, 'y', y.shape)
+    
+    dist_coefs, _ = get_coefs(model, X_avg, y, **options)
 
-    dist_coefs, _ = get_coefs(model, X_avg, y_S1_S2, **options)
-
+    print('non_zeros', np.sum(dist_coefs>.0001))
+    
     options["task"] = "Dual"
     options["features"] = "sample"
     options['epochs'] = ['ED']
+    options['trials'] = 'correct'
     
-    X_S1_S2, y_S1_S2 = get_X_y_S1_S2(X_days, y_days, **options)
-    X_avg = avg_epochs(X_S1_S2, **options)
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    X_avg = avg_epochs(X, **options)
+    print('Sample: X', X_avg.shape, 'y', y.shape)
     
-    sample_coefs, _ = get_coefs(model, X_avg, y_S1_S2, **options)
-
+    sample_coefs, _ = get_coefs(model, X_avg, y, **options)
+    print('non_zeros', np.sum(sample_coefs>.0001))
+    
     # plt.figure()
     # plt.hist(dist_coefs, color="b", bins="auto", histtype="step")
     # plt.hist(sample_coefs, color="r", bins="auto", histtype="step")
@@ -118,33 +125,49 @@ def run_get_cos(**kwargs):
     # idx = idx_sample & idx_dist
     
     idx = np.arange(X_avg.shape[1])
-    print("non zeros", idx.shape)
+    # print("non zeros", idx.shape)
     
     # theta = np.arctan2(unit_vector(dist_coefs[idx]), unit_vector(sample_coefs[idx]))
     e1 = unit_vector(sample_coefs)
     e2 = unit_vector(dist_coefs)
     # e1, e2 = gram_schmidt(sample_coefs[idx], dist_coefs[idx])
     theta = np.arctan2(e2, e1)
-
+    
     # T = np.column_stack((e1, e2))
-
+    
     index_order = theta.argsort()
     # print(index_order.shape, X.shape)
     
-    options["task"] = task
-    # options['balance'] = False
-    X_all, y_all = get_X_y_S1_S2(X_days, y_days, **options)
-    X_all = X_all[:, index_order, :]
+    options['trials'] = trials
+
+    X_task = []
+    y_task = []
+
+    X_day_task = []
+    y_day_task = []
     
-    X_day = []
-    y_day = []    
-    for day in range(1, options['n_days'] + 1):
-        options['day'] = day
+    for task in ['DPA', 'DualGo', 'DualNoGo']:
+        options["task"] = task    
+        
         X, y = get_X_y_S1_S2(X_days, y_days, **options)
         X = X[:, index_order, :]
+
+        X_task.append(X)
+        y_task.append(y)
         
-        X_day.append(X)
-        y_day.append(y)
+        X_day = []
+        y_day = []
+        
+        for day in range(1, options['n_days'] + 1):
+            options['day'] = day
+            X, y = get_X_y_S1_S2(X_days, y_days, **options)
+            X = X[:, index_order, :]
+        
+            X_day.append(X)
+            y_day.append(y)
+
+        X_day_task.append(X)
+        y_day_task.append(y)
     
     # vec = np.ones(X.shape[1])
     # new_vec = np.dot(T.T, vec)
@@ -160,11 +183,11 @@ def run_get_cos(**kwargs):
     # X = X[:, index_order, :]
     # print(X.shape)
     print("Done")
-    return X_day, y_day, X_all, y_all, theta
+    return X_day_task, y_day_task, X_task, y_task, theta
 
 
 def plot_bump(X, y, trial, windowSize=10):
-
+    
     fig, ax = plt.subplots(1, 2, figsize= [1.5*width, width * golden_ratio])
     sample = [-1, 1]
     for i in range(2):
@@ -183,7 +206,8 @@ def plot_bump(X, y, trial, windowSize=10):
         # animated_bump(X_scaled)
 
         im = ax[i].imshow(
-            np.roll(X_scaled, 0, axis=0),
+            X_scaled,
+            # np.roll(X_scaled, 0, axis=0),
             interpolation="lanczos",
             origin="lower",
             cmap="jet",
@@ -192,7 +216,7 @@ def plot_bump(X, y, trial, windowSize=10):
             # vmax=2.,
             aspect="auto",
         )
-
+        
         ax[i].set_xlabel("Time (s)")
         ax[i].set_ylabel("Pref. Location (°)")
         ax[i].set_yticks([0, 90, 180, 270, 360])

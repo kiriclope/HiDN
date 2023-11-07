@@ -25,10 +25,10 @@ def decode_bump(signal, axis=-1, windowSize=10, SMOOTH=False):
 
 def circcvl(signal, windowSize=10, axis=-1):
     signal_copy = signal.copy()
-
+    
     if axis != -1 and signal.ndim != 1:
         signal_copy = np.swapaxes(signal_copy, axis, -1)
-
+    
     # Save the nan positions before replacing them
     nan_mask = np.isnan(signal_copy)
     signal_copy[nan_mask] = np.interp(np.flatnonzero(nan_mask), 
