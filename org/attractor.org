@@ -8,7 +8,7 @@
   %autoreload 2
   %reload_ext autoreload
 
-  %run /home/leon/models/lif_cpp/notebooks/setup.py
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
   %matplotlib inline
   %config InlineBackend.figure_format = 'png'
 #+end_src
@@ -21,20 +21,20 @@
 
 * Imports
 #+begin_src ipython
-      import sys
-      sys.path.insert(0, '../')
+  import sys
+  sys.path.insert(0, '../')
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
 
-      import numpy as np
-      import matplotlib.pyplot as plt
-      from scipy.stats import circmean
-  
-      from dual_data.common.fig_grid import create_grid
-      from dual_data.overlap.get_cos import run_get_cos, plot_bump
-      from dual_data.attractor.energy import run_energy, plot_energy 
-      from dual_data.stats.bootstrap import my_boots_ci
-      from dual_data.decode.bump import decode_bump, circcvl  
-      from dual_data.preprocess.helpers import preprocess_X
-      from dual_data.common.options import set_options
+  from dual_data.common.fig_grid import create_grid
+  from dual_data.overlap.get_cos import run_get_cos, plot_bump
+  from dual_data.attractor.energy import run_energy, plot_energy 
+  from dual_data.stats.bootstrap import my_boots_ci
+  from dual_data.decode.bump import decode_bump, circcvl  
+  from dual_data.preprocess.helpers import preprocess_X
+  from dual_data.common.options import set_options
 #+end_src
 
 #+RESULTS:
@@ -46,15 +46,19 @@
   days = ['first', 'last']
   
   kwargs = dict()
-  kwargs = {'prescreen': None, 'pval': .5, 'trials': '', 'balance': True, 'laser':0,
-            'method': 'bootstrap', 'bolasso_pval':0.05,
+  kwargs = {'prescreen': None, 'pval': 0.05, 'trials': '', 'balance': 'under', 'laser':0,
+            'method': 'bootstrap',
+            'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
             'bootstrap':False, 'n_boots': 1000,
             'preprocess': True, 'scaler_BL':'robust',
             'avg_noise': True, 'unit_var_BL':False,
-            'clf': 'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l1',
+            'clf': 'log_loss', 'scaler': None,
+            'tol':0.0001, 'penalty':'l1',
+            'class_weight': None,
             'out_fold': 'stratified', 'random_state': None,
             'in_fold': 'stratified', 'n_in': 5,
-            'n_repeats': 20,
+            'n_repeats': 10,
+            'n_lambda': 10,
             }
 
   time = np.linspace(0, 14, int(6 * 14))
@@ -63,24 +67,23 @@
 #+RESULTS:
 
 ** Single mouse
+
 #+begin_src ipython
   mouse = 'JawsM15'
-  task= 'DPA'
+  kwargs['reload']= False
+  kwargs['data_type'] = 'raw'
 #+end_src
 
 #+RESULTS:
 
 *** Locations on the Ring
 #+begin_src ipython  
-  kwargs['reload']= False
-  kwargs['data_type'] = 'raw'
-
   day = 'first'
-  X_df, y_df, X_first, y_first, theta_first = run_get_cos(mouse=mouse, day=day, task=task, **kwargs)
+  X_df, y_df, X_first, y_first, theta_first = run_get_cos(mouse=mouse, day=day, **kwargs)
   
   day = 'last'
   kwargs['reload']= False 
-  X_dl, y_dl, X_last, y_last, theta_last = run_get_cos(mouse=mouse, day=day, task=task, **kwargs)
+  X_dl, y_dl, X_last, y_last, theta_last = run_get_cos(mouse=mouse, day=day, **kwargs)
 #+end_src
 
 #+RESULTS:
@@ -92,149 +95,126 @@
   ##########################################
   in_fold stratified
   ##########################################
-  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  MODEL: RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (55, 693, 84) X_S2 (70, 693, 84)
-  n_max 55
-  Distractor: X (110, 693) y (110,)
-  non_zeros 330
+  Distractor: X (125, 693) y (125,)
+  non_zeros 344
   ##########################################
   DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (60, 693, 84) X_S2 (65, 693, 84)
-  n_max 60
-  Sample: X (120, 693) y (120,)
-  non_zeros 332
+  Sample: X (125, 693) y (125,)
+  non_zeros 338
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  n_max 48
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   Done
   loading files from /home/leon/dual_task/dual_data/data/JawsM15
   X_days (1152, 693, 84) y_days (1152, 6)
@@ -243,171 +223,148 @@
   ##########################################
   in_fold stratified
   ##########################################
-  MODEL: SCALER None IMBALANCE False PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  MODEL: RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap FOLDS stratified CLF log_loss
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (78, 693, 84) X_S2 (82, 693, 84)
-  n_max 78
-  Distractor: X (156, 693) y (156,)
-  non_zeros 337
+  Distractor: X (160, 693) y (160,)
+  non_zeros 343
   ##########################################
   DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (79, 693, 84) X_S2 (81, 693, 84)
-  n_max 79
-  Sample: X (158, 693) y (158,)
-  non_zeros 320
+  Sample: X (160, 693) y (160,)
+  non_zeros 315
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  n_max 48
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   ##########################################
   DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
   ##########################################
   single day
   X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-  n_max 16
   Done
 #+end_example
 
 *** Plot Bumps
 
-#+begin_src ipython  
+#+begin_src ipython
   X_norm = X_first[1]
   # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
   plot_bump(X_norm, y_first[1], 'all', int(X_first[0].shape[1] * .1))
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/cd088c41729ab78abc785e167c26c3650e4fb99b.png]]
+[[file:./.ob-jupyter/31cb6d56685948f6bfcccb2e6e73df074facdde6.png]]
 
 #+begin_src ipython
-  X_norm = X_last[1]
+  X_norm = X_last[2]
   # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
-  plot_bump(X_norm, y_last[1], 'all', int(X_last[0].shape[1] * .1))
+  plot_bump(X_norm, y_last[2], 'all', int(X_last[0].shape[1] * .1))
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/e024e6bb608a3ee96acc75b6dcad028d75603d9f.png]]
+[[file:./.ob-jupyter/0807185a930e711e10072ad98699b52daec6043c.png]]
  
 *** Save Data
 #+begin_src ipython
@@ -426,6 +383,19 @@
 #+end_src
 
 #+RESULTS:
+:RESULTS:
+# [goto error]
+: [0;31m---------------------------------------------------------------------------[0m
+: [0;31mNameError[0m                                 Traceback (most recent call last)
+: Cell [0;32mIn[201], line 3[0m
+: [1;32m      1[0m [38;5;28;01mimport[39;00m [38;5;21;01mpickle[39;00m [38;5;28;01mas[39;00m [38;5;21;01mpkl[39;00m
+: [1;32m      2[0m filename [38;5;241m=[39m [38;5;124m"[39m[38;5;124m../data/[39m[38;5;124m"[39m [38;5;241m+[39m mouse [38;5;241m+[39m [38;5;124m"[39m[38;5;124m/X_bump_first_[39m[38;5;124m"[39m [38;5;241m+[39m kwargs[[38;5;124m'[39m[38;5;124mpenalty[39m[38;5;124m'[39m] [38;5;241m+[39m [38;5;124m"[39m[38;5;124m.pkl[39m[38;5;124m"[39m
+: [0;32m----> 3[0m pkl[38;5;241m.[39mdump([43mX_first[49m, [38;5;28mopen[39m(filename [38;5;241m+[39m [38;5;124m"[39m[38;5;124m.pkl[39m[38;5;124m"[39m, [38;5;124m"[39m[38;5;124mwb[39m[38;5;124m"[39m))
+: [1;32m      5[0m filename [38;5;241m=[39m [38;5;124m"[39m[38;5;124m../data/[39m[38;5;124m"[39m [38;5;241m+[39m mouse [38;5;241m+[39m [38;5;124m"[39m[38;5;124m/y_bump_first_[39m[38;5;124m"[39m [38;5;241m+[39m kwargs[[38;5;124m'[39m[38;5;124mpenalty[39m[38;5;124m'[39m] [38;5;241m+[39m [38;5;124m"[39m[38;5;124m.pkl[39m[38;5;124m"[39m
+: [1;32m      6[0m pkl[38;5;241m.[39mdump(y_first, [38;5;28mopen[39m(filename [38;5;241m+[39m [38;5;124m"[39m[38;5;124m.pkl[39m[38;5;124m"[39m, [38;5;124m"[39m[38;5;124mwb[39m[38;5;124m"[39m))
+: 
+: [0;31mNameError[0m: name 'X_first' is not defined
+:END:
 *** Load Data
 #+begin_src ipython
   filename = "../data/" + mouse + "/X_bump_first_" + kwargs['penalty'] + ".pkl"
@@ -445,31 +415,27 @@
 
 * Energy Landscape
 #+begin_src ipython
-  opts = set_options(mouse=mouse)
-  bins = np.concatenate( (opts['bins_ED'], opts['bins_LD']))
-#+end_src
+  opts = set_options(mouse=mouse, T_WINDOW=0.0)
+  
+  #bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD'], opts['bins_CHOICE']))
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD']))
+  # bins = np.concatenate( (opts['bins_MD'], opts['bins_LD']))
+ #+end_src
 
 #+RESULTS:
 
 ** Parameters
 #+begin_src ipython
-  task = 'all'
-  init = 18
-  last = 26
+  task = 13
 
-  # task = 0
-  #init = 18
-  #last = 53
-
-  print('epoch', time[init], time[last])
-
-  print('max num_bins', (last - init - 1))
-
-  max_num_bins = last - init - 1
-  n_bins = 52
-  num_bins = np.min((n_bins, max_num_bins))
+  # n_bins = 200
+  # max_num_bins = len(bins)
+  # num_bins = np.min((n_bins, max_num_bins))
 
   num_bins = int(0.25 * X_first[0].shape[1])
+  num_bins = 200
   print('num_bins', num_bins)
 
   window = 0.1
@@ -483,15 +449,15 @@
 #+end_src
 
 #+RESULTS:
-: epoch 3.0361445783132526 4.385542168674698
-: max num_bins 7
-: num_bins 173
+: num_bins 200
 : window 0.1
 
 ** Compute Energy
 #+begin_src ipython
   if task=='all':
       X = np.vstack(X_first)
+  elif task==13:
+      X = np.vstack((X_first[0], X_first[-1]))
   else:
       X = X_first[task]
 
@@ -515,6 +481,8 @@
 #+begin_src ipython
   if task=='all':
       X = np.vstack(X_last)
+  elif task==13:
+      X = np.vstack((X_last[0], X_last[-1]))
   else:
       X = X_last[task]
 
@@ -522,7 +490,7 @@
       X = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
 
   X = X[..., bins]
-
+  
   ci_last = None
   energy_last = run_energy(X, num_bins, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
   if IF_BOOT:
@@ -547,9 +515,107 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/6fdc64c1a9f412872794fbf1614849c2d14135be.png]]
+[[file:./.ob-jupyter/54c4b8b20440b6591b971c2e4fde42804ffa10d3.png]]
 
+* model
 
+#+begin_src ipython
+  REPO_ROOT = "/home/leon/models/NeuroTorch"
+
+  def get_rates_ini_phi(name, ini_list, phi_list):
+    rates_list = []
+    for ini in ini_list:
+      for phi in phi_list:
+        rates = np.load(REPO_ROOT + '/data/simul/%s_ini_%d_phi_%d.npy' % (name, ini, phi))
+        rates_list.append(rates)
+
+    rates_list = np.array(rates_list).reshape(len(ini_list), len(phi_list), rates.shape[0], rates.shape[1])
+    print(rates_list.shape)
+    return rates_list  
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  ini_list = np.arange(0, 10)
+  # phi_list = np.linspace(0, 315, 8)
+  phi_list = [0, 180]
+
+  rates = get_rates_ini_phi('lowR_ortho', ini_list, phi_list)
+  rates_heter = get_rates_ini_phi('heter_10', ini_list, phi_list)
+#+end_src
+
+#+RESULTS:
+: (10, 2, 15, 10000)
+: (10, 2, 8499, 1000)
+
+#+begin_src ipython
+  X = np.vstack(rates)
+  X = np.swapaxes(X, 1, -1)
+  X = X[:, :7500]
+  print(X.shape)
+#+end_src
+
+#+RESULTS:
+: (20, 7500, 15)
+
+#+begin_src ipython
+  X_heter = np.vstack(rates_heter)
+  X_heter = np.swapaxes(X_heter, 1, -1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  _, phase = decode_bump(X, axis=1)
+  print(phase.shape)
+#+end_src
+
+#+RESULTS:
+: (20, 15)
+
+#+begin_src ipython
+  for i in range(10):
+      plt.plot(phase[i] * 180 / np.pi, alpha=.2)
+      plt.plot(phase[-i] * 180 / np.pi, alpha=.2)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/03e8fbf5fb7a44a07f6644f71d3c036d354e36c7.png]]
+
+#+begin_src ipython
+  num_bins = 200
+  window = 0
+  energy1 = run_energy(X[..., :2500], num_bins, window)
+  energy2 = run_energy(X_heter[..., :2500], num_bins, window)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  fig, ax = plt.subplots()
+  SMOOTH = 1
+  window = .1
+
+  plot_energy(energy2,  ax=ax, window=window,
+              SMOOTH=SMOOTH, color='b')
+  
+  plot_energy(energy1,  ax=ax, window=window,
+              SMOOTH=SMOOTH, color='r')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/1bfd1a87206d4ece183ce90e480fb45cd0cc47d2.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** random
 #+begin_src ipython
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
   
@@ -569,6 +635,20 @@
 
 #+end_src
 
+#+RESULTS:
+:RESULTS:
+: ['../figs/landscapeChRM04_behavior_tasks_correct.svg', '../figs/landscapeJawsM15_behavior_tasks_correct.svg', '../figs/landscapeJawsM18_behavior_tasks_correct.svg', '../figs/landscapeACCM03_behavior_tasks_correct.svg', '../figs/landscapeACCM04_behavior_tasks_correct.svg']
+# [goto error]
+: [0;31m---------------------------------------------------------------------------[0m
+: [0;31mNameError[0m                                 Traceback (most recent call last)
+: Cell [0;32mIn[150], line 13[0m
+: [1;32m     11[0m height [38;5;241m=[39m width [38;5;241m*[39m golden_ratio [38;5;241m*[39m [38;5;241m1.4[39m
+: [1;32m     12[0m figsize [38;5;241m=[39m [width, height]
+: [0;32m---> 13[0m [43mmatplotlib[49m[38;5;241m.[39mrcParams[[38;5;124m'[39m[38;5;124mlines.markersize[39m[38;5;124m'[39m] [38;5;241m=[39m [38;5;241m5.5[39m
+: [1;32m     15[0m create_grid(figlist, [38;5;124m"[39m[38;5;124m../figs/performance_all_mice.svg[39m[38;5;124m"[39m, dim[38;5;241m=[39m[[38;5;241m4[39m,[38;5;241m3[39m], fontsize[38;5;241m=[39m[38;5;241m22[39m)
+: 
+: [0;31mNameError[0m: name 'matplotlib' is not defined
+:END:
 
 #+begin_src ipython
   def find_extrema(values, window, bins):

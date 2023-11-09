@@ -67,6 +67,7 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
     if verbose:
         print('phase', phase.shape, phase.min() * 180 / np.pi, phase.max() * 180 / np.pi)
 
+    # bins = np.linspace(-np.pi, np.pi, num_bins-1, endpoint=False)
     bins = np.linspace(0, 2.0 * np.pi, num_bins-1, endpoint=False)
     if verbose:
         print('bins', bins)
@@ -76,7 +77,7 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
         print('X_bins', X_discrete.shape)
     
     # Initialize transition matrix
-    matrix = np.zeros((num_bins, num_bins)) 
+    matrix = np.zeros((num_bins, num_bins))
     
     # Compute transitions
     for i in range(X_discrete.shape[0]): # trials
@@ -85,19 +86,23 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
             # matrix[X_discrete[i, j+1], X_discrete[i, j]] += 1
     
     # Normalize transition matrix (to make it stochastic)
-    row_sum = matrix.sum(axis=1)
-    # matrix = matrix / row_sum[:, np.newaxis]
+    col_sum = matrix.sum(axis=1)
     
     for i in range(matrix.shape[0]):
-        for j in range(matrix.shape[1]):
-            if row_sum[i] > 0 :
-                matrix[i][j] = matrix[i][j] / float(row_sum[i])
+        if col_sum[i] == 0:
+            if i == matrix.shape[0]:
+                matrix[i] = (matrix[i-1] + matrix[0]) / 2.0
             else:
-                matrix[i][j] = 0.0
-                # matrix[i][j] = 1.0 / float(num_bins)
-                if i == j:
-                    matrix[i][j] = 1.0
-                
+                matrix[i] = (matrix[i-1] + matrix[i+1]) / 2.0
+    
+    col_sum = matrix.sum(axis=1)
+    matrix = matrix / col_sum[:, np.newaxis]
+    
+    # row_sum = matrix.sum(axis=0)
+    # print('row_sum', np.where(row_sum==0)[0], row_sum[0])
+    # col_sum = matrix.sum(axis=1)
+    # print('col_sum', np.where(col_sum==0)[0], col_sum[0])
+    
     # matrix[:, 0] = matrix[:, -1]
     
     return matrix
@@ -117,17 +122,16 @@ def compute_steady_state(p_transition, VERBOSE=0):
 
 def compute_energy_landscape(steady_state, window):
     # Compute the energy landscape as the negative log of the steady state distribution
-    # energy = -np.log(steady_state)
-
     Z = np.sum(steady_state)
+    energy = -np.log(steady_state) + np.log(Z)
     
-    energy = np.zeros(steady_state.shape) * np.nan
-    for i in range(steady_state.shape[0]):
-        energy[i] = np.log(Z)
-        if steady_state[i] > 0:
-            energy[i] += -np.log(steady_state[i])
+    # energy = np.zeros(steady_state.shape) * np.nan
+    # for i in range(steady_state.shape[0]):
+    #     energy[i] = np.log(Z)
+    #     if steady_state[i] > 0:
+    #         energy[i] += -np.log(steady_state[i])
     
-    windowSize = int(window * energy.shape[0])
+    # windowSize = int(window * energy.shape[0])
     # energy = circcvl(energy, windowSize=windowSize)
     
     # Emin = np.nanmin(energy)
@@ -145,7 +149,7 @@ def compute_energy_landscape(steady_state, window):
 def run_energy(X, num_bins, window, IF_HMM=0, VERBOSE=0, n_iter=100, IF_SYNT=0, bias=0.5, IF_NORM=0):
             
     _, phase = decode_bump(X, axis=1)
-    phase %= (2.0 * np.pi)
+    phase += np.pi
     
     if IF_HMM:
         transition_matrix = compute_transition_matrix_hmm(phase, num_bins=num_bins, n_iter=n_iter)
@@ -198,7 +202,7 @@ def plot_energy(energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
             theta,
             (energy - ci[:, 0]) * 100,
             (energy + ci[:, 1]) * 100,
-            alpha=0.2, color=color
+            alpha=0.1, color=color
         )
     
     ax.set_ylabel('Energy (a.u.)')

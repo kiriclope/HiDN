@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
-from imblearn.over_sampling import SVMSMOTE
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.over_sampling import SVMSMOTE, RandomOverSampler
 from imblearn.pipeline import Pipeline
 from scipy.spatial.distance import correlation
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -221,7 +222,16 @@ def get_clf(**kwargs):
         )
 
     pipe = []
-
+    
+    # resampling data
+    if kwargs['balance'] == 'under':
+        pipe.append(("sampler", RandomUnderSampler(random_state=kwargs['random_state']))) 
+    elif kwargs['balance'] == 'over':
+        pipe.append(("sampler", RandomOverSampler(random_state=kwargs['random_state']))) 
+    elif kwargs['balance'] == 'aug':
+        # data augmantation
+        pipe.append(("sampler", SVMSMOTE(random_state=kwargs["random_state"])))
+        
     # scaling
     if kwargs["scaler"] == "custom":
         pipe.append(("scaler", CustomScaler()))
@@ -259,10 +269,6 @@ def get_clf(**kwargs):
     if kwargs["corr"]:
         pipe.append(("corr", CorrelationThreshold(threshold=kwargs["threshold"])))
 
-    # data augmantation
-    if kwargs["imbalance"]:
-        pipe.append(("bal", SVMSMOTE(random_state=kwargs["random_state"])))
-
     pipe.append(("clf", clf))
     pipe = Pipeline(pipe)
 
@@ -298,10 +304,10 @@ def get_clf(**kwargs):
     print("##########################################")
     print(
         "MODEL:",
+        "RESAMPLE",
+        kwargs["balance"],
         "SCALER",
         kwargs["scaler"],
-        "IMBALANCE",
-        kwargs["imbalance"],
         "PRESCREEN",
         kwargs["prescreen"],
         "PCA",

@@ -41,7 +41,7 @@ def set_options(**kwargs):
     opts["overlap"] = "sample"
     opts["show_AB"] = False
     opts["laser"] = 0
-
+    
     opts["epochs"] = ["ED", "MD", "LD"]
     opts["AVG_EPOCHS"] = 1
     
@@ -82,9 +82,8 @@ def set_options(**kwargs):
     opts["n_aug"] = 1
 
     # adjust imbalance in trial types
-    opts["balance"] = False
-    opts["imbalance"] = False
-
+    opts["balance"] = 'under' # under, over, aug
+    
     ################################
     # classification parameters
     ################################
@@ -97,8 +96,8 @@ def set_options(**kwargs):
 
     # intercept
     opts["fit_intercept"] = True  # always set to true
-    opts["intercept_scaling"] = 1  # unstable if too large
-
+    opts["intercept_scaling"] = 100  # unstable if too large
+    
     # penalty
     opts["penalty"] = "l1"  # "l1", "l2" or elasticnet
     opts["alpha"] = 0.5  # between 0 and 1
@@ -156,14 +155,14 @@ def set_options(**kwargs):
     opts["multiclass"] = False
 
     # gridsearch params
-    opts["n_lambda"] = 20
+    opts["n_lambda"] = 50
     opts["n_alpha"] = 10
-
+    
     opts.update(kwargs)
-
+    
     opts["Cs"] = np.logspace(-4, 4, opts["n_lambda"])
     opts["alphas"] = np.linspace(0, 1, opts["n_alpha"])
-
+    
     opts["data_path"] = opts["path"] + "data/"
     opts["fig_path"] = opts["path"] + "figs/"
 

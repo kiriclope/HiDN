@@ -19,7 +19,7 @@ def decode_bump(signal, axis=-1, windowSize=10, SMOOTH=False):
 
     m1 = 2.0 * np.absolute(dft) / length
     phi = np.arctan2(dft.imag, dft.real) # % (2.0 * np.pi)
-
+    
     return m1, phi
 
 

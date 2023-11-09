@@ -93,7 +93,7 @@ def run_get_cos(**kwargs):
     options["features"] = "distractor"
     options['epochs'] = ['MD']
     options['trials'] = 'correct'
-    
+
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X, **options)
     print('Distractor: X', X_avg.shape, 'y', y.shape)
