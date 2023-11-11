@@ -190,7 +190,7 @@ def set_options(**kwargs):
 
     frame_rate = 6
     inv_frame = 0  # 1 / frame_rate
-    T_WINDOW = 0.0
+    T_WINDOW = 0.5
     
     opts['duration'] = 14  # 14, 19.2
     if "P" in opts["mouse"]:
