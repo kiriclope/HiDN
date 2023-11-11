@@ -33,10 +33,12 @@ def get_coef_feat(X_days, y_days, **options):
         options["task"] = "all"
         options["epochs"] = ["ED"]
         options["overlap"] = "sample"
+        
     elif options["features"] == "distractor":
         options["task"] = "Dual"
         options["epochs"] = ["MD"]
         options["overlap"] = "distractor"
+        
     elif options["features"] == "test":
         options["task"] = "Dual"
         options["epochs"] = ["CHOICE"]
@@ -107,6 +109,7 @@ def run_get_overlap(**kwargs):
     except:
         pass
     
+    options['trials'] = 'correct'
     X_days, y_days = get_X_y_days(**options)
     coefs, model = get_coef_feat(X_days, y_days, **options)
     
@@ -115,7 +118,7 @@ def run_get_overlap(**kwargs):
     
     options["task"] = task
     options["features"] = "sample"
-    options["trials"] = ''
+    options["trials"] = trials
     
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     print("X", X.shape, "y", y.shape)

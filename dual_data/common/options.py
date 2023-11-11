@@ -69,7 +69,7 @@ def set_options(**kwargs):
     opts["scaler_BL"] = "robust"  # standard, robust, center
     opts["center_BL"] = None
     opts["scale_BL"] = None
-    opts["avg_mean_BL"] = 0
+    opts["avg_mean_BL"] = False
     opts["avg_noise_BL"] = True
     opts["unit_var_BL"] = False
 
@@ -93,27 +93,27 @@ def set_options(**kwargs):
     # precision
     opts["tol"] = 1e-3
     opts["max_iter"] = 5000
-
+    
     # intercept
     opts["fit_intercept"] = True  # always set to true
-    opts["intercept_scaling"] = 100  # unstable if too large
+    opts["intercept_scaling"] = 1  # unstable if too large
     
     # penalty
     opts["penalty"] = "l1"  # "l1", "l2" or elasticnet
     opts["alpha"] = 0.5  # between 0 and 1
     opts["bolasso_penalty"] = "l2"
     opts["solver"] = "liblinear"  # liblinear or saga
-    opts["class_weight"] = "balanced"  # "balanced"  # 'balanced' or None
+    opts["class_weight"] = None  # "balanced"  # 'balanced' or None
     opts["refit"] = True  # default true
     opts["multi_class"] = "auto"  # 'auto' or 'multinomial'
-
+    
     # shrinkage for LDA
     opts["shrinkage"] = "auto"
 
     # standardization
     opts["scaler"] = None  # 'standard', 'robust', 'center', None
     opts["unit_var"] = False
-
+    
     # params for SGD
     opts["learning_rate"] = "optimal"  # optimal, adaptative
     opts["l1_ratio"] = 0.15
@@ -160,7 +160,7 @@ def set_options(**kwargs):
     
     opts.update(kwargs)
     
-    opts["Cs"] = np.logspace(-4, 4, opts["n_lambda"])
+    opts["Cs"] = np.logspace(-2, 2, opts["n_lambda"])
     opts["alphas"] = np.linspace(0, 1, opts["n_alpha"])
     
     opts["data_path"] = opts["path"] + "data/"
@@ -228,6 +228,8 @@ def set_options(**kwargs):
     
     opts["bins_ED"] = opts["bins"][int((t_ED[0] + T_WINDOW) * frame_rate) : int((t_ED[1]) * frame_rate)]
 
+    opts["bins_STIM_ED"] = opts["bins"][int((t_STIM[0] + T_WINDOW) * frame_rate) : int((t_ED[1]) * frame_rate)]
+    
     opts["bins_DIST"] = opts["bins"][int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * frame_rate)]
 
     opts["bins_MD"]= opts["bins"][int((t_MD[0] + T_WINDOW) * frame_rate) : int((t_MD[1]) * frame_rate)]

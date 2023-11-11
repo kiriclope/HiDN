@@ -39,19 +39,24 @@ def run_get_overlap_day(**kwargs):
     # X_days, y_days = get_X_y_days(options["mouse"], IF_RELOAD=options["reload"])
     X_days, y_days = get_X_y_days(**options)
 
-
     n_days = len(y_days.day.unique())
     days = np.arange(1, n_days + 1)
     
     overlap_day = []
     for day in days:
+
         options["day"] = day
+        # if day <=3:
+        #     options["day"] = 'first'
+        # else:
+        #     options["day"] = 'last'
         
+        options['trials'] = ""
         options["features"] = "distractor"
-        options["epochs"] = ["MD"]
         coefs, model = get_coef_feat(X_days, y_days, **options)
         print("coefs ", np.array(coefs).shape)
-
+        
+        options["day"] = day
         options["task"] = task
         options["features"] = "sample"
         options["epochs"] = ["ED"]
@@ -71,7 +76,7 @@ def run_get_overlap_day(**kwargs):
     # ci_day = []
     # for day in days:
     #     options["day"] = day
-
+    
     #     options["features"] = "sample"
     #     c_sample = get_coef_feat(X_days, y_days, **options)
     #     print("coefs sample", np.array(c_sample).shape)
@@ -94,10 +99,10 @@ def run_get_overlap_day(**kwargs):
 
     # ci_day = np.array(ci_day)
     
-    plt.plot(days, overlap_day)
-    plt.xlabel("Day")
-    plt.ylabel("Dist. Overlap")
-    plt.xticks([1, 2, 3, 4 , 5, 6])
+    # plt.plot(days, overlap_day)
+    # plt.xlabel("Day")
+    # plt.ylabel("Dist. Overlap")
+    # plt.xticks([1, 2, 3, 4 , 5, 6])
     # plt.fill_between(
     #     days,
     #     overlap_day - ci_day[:, 0],
@@ -105,7 +110,7 @@ def run_get_overlap_day(**kwargs):
     #     alpha=0.25,
     #     color="k",
     # )
-
+    
     # plt.plot([days[0], days[-1]], [90, 90], "k--")
     
     return overlap_day
