@@ -99,8 +99,8 @@ def get_X_y_days_multi(mouse=gv.mouse):
 
     y_days.tasks[data["NDAll"][0] - 1] = "DPA"
     y_days.tasks[data["D1All"][0] - 1] = "DualGo"
-    y_days.tasks[data["D2All"][0] - 1] = "DualNoGo"
-    y_days.tasks[data["D3All"][0] - 1] = "DualGo"
+    y_days.tasks[data["D2All"][0] - 1] = "DualGo"
+    y_days.tasks[data["D3All"][0] - 1] = "DualNoGo"
     y_days.tasks[data["D4All"][0] - 1] = "DualNoGo"
     
     y_days.response[data["AllCorrect"][0] - 1] = "correct"

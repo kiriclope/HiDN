@@ -175,8 +175,8 @@ def plot_overlap(data, ci=None, **options):
         )
 
     add_vlines(mouse=options["mouse"])
-    # plt.xlim([0, 12])
-    # plt.xticks([0, 2, 4, 6, 8, 10, 12])
+    plt.xlim([0, 12])
+    plt.xticks([0, 2, 4, 6, 8, 10, 12])
     plt.gca().xaxis.set_major_locator(ticker.MaxNLocator(4))
     plt.gca().yaxis.set_major_locator(ticker.MaxNLocator(4))
     

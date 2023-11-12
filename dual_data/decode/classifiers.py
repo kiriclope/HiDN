@@ -25,6 +25,42 @@ from dual_data.decode.SGDClassifierCV import SGDClassifierCV
 from dual_data.decode.LinearSVCCV import LinearSVCCV
 
 # from sklearn.pipeline import Pipeline
+from scipy.stats import pearsonr
+
+
+class PearsonCorrSelector(BaseEstimator, TransformerMixin):
+    def __init__(self, alpha=0.05, correction_method='bonferroni'):
+        self.alpha = alpha
+        self.support_ = None
+        self.correction_method = correction_method
+
+    def fit(self, X, y):
+        p_values = np.array([pearsonr(X[:, i], y)[1] for i in range(X.shape[1])])
+        if self.correction_method == 'bonferroni':
+            # Bonferroni correction
+            corrected_alpha = self.alpha / len(p_values)
+        elif self.correction_method is None:
+            # No correction
+            corrected_alpha = self.alpha
+        else:
+            raise ValueError("Unsupported correction method provided: {}".format(self.correction_method))
+        
+        self.support_ = p_values <= corrected_alpha
+        return self
+
+    def transform(self, X):
+        return X[:, self.support_]
+
+    def _get_support_mask(self):
+        if self.support_ is None:
+            raise ValueError("The fit method has not been called yet.")
+        return self.support_
+
+    def get_support(self, indices=False):
+        if indices:
+            return np.where(self._get_support_mask())[0]
+        return self._get_support_mask()
+
 class safeSelector(BaseEstimator, TransformerMixin):
     def __init__(self, method='fpr', alpha=0.05):
         self.method = method
@@ -42,7 +78,9 @@ class safeSelector(BaseEstimator, TransformerMixin):
             self.selector = SelectPercentile(f_classif, percentile=alpha * 100)
         elif 'var' in method:
             self.selector = VarianceThreshold(threshold=alpha)
-        
+        elif 'corr' in method:
+            self.selector = PearsonCorrSelector(alpha=alpha)
+            
         self.feature_indices_ = None
         
     def fit(self, X, y=None):

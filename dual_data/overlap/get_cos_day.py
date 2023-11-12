@@ -10,6 +10,7 @@ from dual_data.decode.coefficients import get_coefs
 from dual_data.preprocess.helpers import avg_epochs
 from dual_data.overlap.get_overlap import get_coef_feat
 
+
 def get_ci(res, conf=0.95):
     ostats = np.sort(res, axis=0)
     mean = np.mean(ostats, axis=0)
