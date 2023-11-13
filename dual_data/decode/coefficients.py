@@ -72,19 +72,32 @@ def get_coefs(model, X, y, **options):
         coefs = model.coef_
 
     elif options["prescreen"]:
-        pval = model.named_steps["filter"].pvalues_
-        idx = pval <= options["pval"]
-
-        if options["multiclass"] or options["multilabel"]:
+        if options["multilabel"] or options["multiclass"]:
             coefs = np.zeros((4, X.shape[1]))
-            coef = model.named_steps["clf"].coef_
-            # print("coef", coef.shape)
-
-            coefs[:, idx] = coef
         else:
             coefs = np.zeros(X.shape[1])
+
+        mask = model.named_steps["filter"]._get_support_mask()
+        # pval = model.named_steps["filter"].pvalues_
+        # idx = pval <= options["pval"]
+        if options["multilabel"] or options["multiclass"]:
+            coef = model.named_steps["clf"].coef_
+            # print("coef", coef.shape)
+            coefs[:, mask] = coef.T
+        else:
             coef = model.named_steps["clf"].coef_[0]
-            coefs[idx] = coef
+            coefs[mask] = coef
+
+        # if options["multiclass"] or options["multilabel"]:
+        #     coefs = np.zeros((4, X.shape[1]))
+        #     coef = model.named_steps["clf"].coef_
+        #     # print("coef", coef.shape)
+
+        #     coefs[:, idx] = coef
+        # else:
+        #     coefs = np.zeros(X.shape[1])
+        #     coef = model.named_steps["clf"].coef_[0]
+        #     coefs[idx] = coef
 
         if options["scaler"] is not None:
             coefs = rescale_coefs(model, coefs)

@@ -5,6 +5,37 @@ from discreteMarkovChain import markovChain
 from dual_data.decode.bump import decode_bump, circcvl  
 from dual_data.preprocess.helpers import standard_scaler_BL, preprocess_X
 
+
+def replace_zero_cols(matrix):
+    nrows, ncols = matrix.shape
+    for col in range(ncols):
+        if np.all(matrix[:, col] == 0):  # Check for zero column
+            # Find the non-zero neighbor columns indices to the left and right
+            left = col - 1
+            while left >= 0 and np.all(matrix[:, left] == 0):
+                left -= 1
+            right = col + 1
+            while right < ncols and np.all(matrix[:, right] == 0):
+                right += 1
+
+            if left >= 0 and right < ncols:
+                # Both neighbors found, take the average
+                avg_col = (matrix[:, left] + matrix[:, right]) / 2
+            elif left >= 0:
+                # Only left neighbor found
+                avg_col = matrix[:, left]
+            elif right < ncols:
+                # Only right neighbor found
+                avg_col = matrix[:, right]
+            else:
+                raise ValueError("No non-zero neighbors found for column {0}".format(col))
+
+            # Replace the zero column with the average of the neighbors
+            matrix[:, col] = avg_col
+
+    return matrix
+
+
 def gaussian(x, mu, sig):
     return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
 
@@ -66,7 +97,7 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
 
     if verbose:
         print('phase', phase.shape, phase.min() * 180 / np.pi, phase.max() * 180 / np.pi)
-
+        
     # bins = np.linspace(-np.pi, np.pi, num_bins-1, endpoint=False)
     bins = np.linspace(0, 2.0 * np.pi, num_bins-1, endpoint=False)
     if verbose:
@@ -90,11 +121,13 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
     
     for i in range(matrix.shape[0]):
         if col_sum[i] == 0:
-            if i == matrix.shape[0]:
+            if i == matrix.shape[0]-1:
                 matrix[i] = (matrix[i-1] + matrix[0]) / 2.0
-            else:
+            elif i<matrix.shape[0]-1:
                 matrix[i] = (matrix[i-1] + matrix[i+1]) / 2.0
     
+    # matrix = replace_zero_cols(matrix)
+                
     col_sum = matrix.sum(axis=1)
     matrix = matrix / col_sum[:, np.newaxis]
     

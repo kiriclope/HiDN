@@ -22,7 +22,7 @@ def set_options(**kwargs):
     opts["reload"] = False
     opts["n_jobs"] = int(0.90 * multiprocessing.cpu_count())
     opts["verbose"] = 0
-
+    
     ################################
     # behavior param
     ################################
@@ -122,7 +122,7 @@ def set_options(**kwargs):
     # Dimensionality reduction
     ################################
     # prescreening
-    opts["prescreen"] = None  # fpr, fdr, fwe or None
+    opts["prescreen"] = 'fpr'  # fpr, fdr, fwe or None
     opts["pval"] = 0.05
     opts["bolasso_pval"] = 0.05
 
@@ -229,6 +229,10 @@ def set_options(**kwargs):
     opts["bins_ED"] = opts["bins"][int((t_ED[0] + T_WINDOW) * frame_rate) : int((t_ED[1]) * frame_rate)]
 
     opts["bins_STIM_ED"] = opts["bins"][int((t_STIM[0] + T_WINDOW) * frame_rate) : int((t_ED[1]) * frame_rate)]
+
+    opts["bins_DELAY"] = opts["bins"][int((t_ED[0] + T_WINDOW) * frame_rate) : int((t_TEST[0]) * frame_rate)]
+
+    opts["bins_PRE_DIST"] = opts["bins"][int((t_BL[0] + T_WINDOW) * frame_rate) : int((t_DIST[0]) * frame_rate)]
     
     opts["bins_DIST"] = opts["bins"][int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * frame_rate)]
 

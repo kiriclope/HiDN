@@ -18,6 +18,13 @@
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
+ESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+: 2d7349e9-9e78-4be0-b7be-a0f3a3be2b42
+:END:
 :END:
 
 * Imports
@@ -37,6 +44,8 @@
   from dual_data.decode.bump import decode_bump, circcvl  
   from dual_data.preprocess.helpers import preprocess_X
   from dual_data.common.options import set_options
+  from dual_data.common.plot_utils import add_vlines
+  
 #+end_src
 
 #+RESULTS:
@@ -46,19 +55,19 @@
 #+begin_src ipython
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   days = ['first', 'last']
-  
+
   kwargs = dict()
-  kwargs = {'prescreen': 'corr', 'pval': 0.05, 'trials': 'correct', 'balance': 'under', 'laser':0,
+  kwargs = {'prescreen': 'fpr', 'pval': 0.05, 'trials': '', 'balance': 'under', 'laser':0,
             'method': 'bootstrap',
             'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
             'bootstrap':False, 'n_boots': 1000,
             'preprocess': True, 'scaler_BL':'robust',
             'avg_noise': True, 'unit_var_BL':False,
             'clf': 'log_loss', 'scaler': None,
-            'tol':0.001, 'penalty':'l2',
-            'class_weight': None,
-            'out_fold': 'stratified', 'random_state': None,
-            'in_fold': 'stratified', 'n_in': 5,
+            'tol':0.001, 'penalty': 'l2',
+            'shrinkage': 'auto',
+            'class_weight': None, 'random_state': None,
+            'in_fold': 'stratified', 'n_in': 10,
             'n_repeats': 10,
             'n_lambda': 20,
             }
@@ -69,7 +78,7 @@
 ** Single mouse
 
 #+begin_src ipython
-  mouse = 'ACCM03'
+  kwargs['mouse'] = 'ACCM03'
   kwargs['reload']= False
   kwargs['data_type'] = 'raw'
 #+end_src
@@ -79,11 +88,11 @@
 *** Locations on the Ring
 #+begin_src ipython  
   day = 'first'
-  X_df, y_df, X_first, y_first, theta_first = run_get_cos(mouse=mouse, day=day, **kwargs)
-  
+  X_first, y_first, coefs_first = run_get_cos(day=day, **kwargs)
+
   day = 'last'
   kwargs['reload']= False 
-  X_dl, y_dl, X_last, y_last, theta_last = run_get_cos(mouse=mouse, day=day, **kwargs)
+  X_last, y_last, coefs_last = run_get_cos(day=day, **kwargs)
 #+end_src
 
 #+RESULTS:
@@ -94,309 +103,170 @@
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   ##########################################
-  MODEL: RESAMPLE under SCALER None PRESCREEN corr PCA False METHOD bootstrap FOLDS stratified CLF log_loss
-  ##########################################
-  DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (148, 361, 84) X_S2 (143, 361, 84)
-  coefs sample (361,)
-  non_zeros 210
-  ##########################################
-  MODEL: RESAMPLE under SCALER None PRESCREEN corr PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (82, 361, 84) X_S2 (104, 361, 84)
   coefs dist (361,)
-  non_zeros 171
+  non_zeros 169
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS first LASER 0
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days 0 3 0
-  X_S1 (82, 361, 84) X_S2 (104, 361, 84)
+  X_S1 (148, 361, 84) X_S2 (143, 361, 84)
+  coefs sample (361,)
+  non_zeros 212
+  idx (361,) c_sample (361,)
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 1 LASER 0
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
   ##########################################
-  single day
-  X_S1 (25, 361, 84) X_S2 (30, 361, 84)
+  multiple days 0 3 0
+  X_S1 (80, 361, 84) X_S2 (80, 361, 84)
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 2 LASER 0
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
   ##########################################
-  single day
-  X_S1 (28, 361, 84) X_S2 (30, 361, 84)
+  multiple days 0 3 0
+  X_S1 (80, 361, 84) X_S2 (80, 361, 84)
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 3 LASER 0
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
   ##########################################
-  single day
-  X_S1 (29, 361, 84) X_S2 (44, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 4 LASER 0
-  ##########################################
-  single day
-  X_S1 (38, 361, 84) X_S2 (48, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 5 LASER 0
-  ##########################################
-  single day
-  X_S1 (46, 361, 84) X_S2 (51, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 1 LASER 0
-  ##########################################
-  single day
-  X_S1 (25, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 2 LASER 0
-  ##########################################
-  single day
-  X_S1 (28, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 3 LASER 0
-  ##########################################
-  single day
-  X_S1 (29, 361, 84) X_S2 (44, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 4 LASER 0
-  ##########################################
-  single day
-  X_S1 (38, 361, 84) X_S2 (48, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 5 LASER 0
-  ##########################################
-  single day
-  X_S1 (46, 361, 84) X_S2 (51, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 1 LASER 0
-  ##########################################
-  single day
-  X_S1 (25, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 2 LASER 0
-  ##########################################
-  single day
-  X_S1 (28, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 3 LASER 0
-  ##########################################
-  single day
-  X_S1 (29, 361, 84) X_S2 (44, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 4 LASER 0
-  ##########################################
-  single day
-  X_S1 (38, 361, 84) X_S2 (48, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 5 LASER 0
-  ##########################################
-  single day
-  X_S1 (46, 361, 84) X_S2 (51, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
+  multiple days 0 3 0
+  X_S1 (80, 361, 84) X_S2 (80, 361, 84)
   Done
+  (2, 361)
   loading files from /home/leon/dual_task/dual_data/data/ACCM03
   X_days (960, 361, 84) y_days (960, 6)
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   ##########################################
-  MODEL: RESAMPLE under SCALER None PRESCREEN corr PCA False METHOD bootstrap FOLDS stratified CLF log_loss
-  ##########################################
-  DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (216, 361, 84) X_S2 (214, 361, 84)
-  coefs sample (361,)
-  non_zeros 192
-  ##########################################
-  MODEL: RESAMPLE under SCALER None PRESCREEN corr PCA False METHOD bootstrap FOLDS stratified CLF log_loss
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (134, 361, 84) X_S2 (146, 361, 84)
   coefs dist (361,)
-  non_zeros 173
+  non_zeros 169
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS last LASER 0
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
   ##########################################
   multiple days 0 3 0
-  X_S1 (134, 361, 84) X_S2 (146, 361, 84)
+  X_S1 (216, 361, 84) X_S2 (214, 361, 84)
+  coefs sample (361,)
+  non_zeros 186
+  idx (361,) c_sample (361,)
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 1 LASER 0
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
   ##########################################
-  single day
-  X_S1 (25, 361, 84) X_S2 (30, 361, 84)
+  multiple days 0 3 0
+  X_S1 (80, 361, 84) X_S2 (80, 361, 84)
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 2 LASER 0
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
   ##########################################
-  single day
-  X_S1 (28, 361, 84) X_S2 (30, 361, 84)
+  multiple days 0 3 0
+  X_S1 (80, 361, 84) X_S2 (80, 361, 84)
   ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 3 LASER 0
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
   ##########################################
-  single day
-  X_S1 (29, 361, 84) X_S2 (44, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 4 LASER 0
-  ##########################################
-  single day
-  X_S1 (38, 361, 84) X_S2 (48, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 5 LASER 0
-  ##########################################
-  single day
-  X_S1 (46, 361, 84) X_S2 (51, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 1 LASER 0
-  ##########################################
-  single day
-  X_S1 (25, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 2 LASER 0
-  ##########################################
-  single day
-  X_S1 (28, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 3 LASER 0
-  ##########################################
-  single day
-  X_S1 (29, 361, 84) X_S2 (44, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 4 LASER 0
-  ##########################################
-  single day
-  X_S1 (38, 361, 84) X_S2 (48, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 5 LASER 0
-  ##########################################
-  single day
-  X_S1 (46, 361, 84) X_S2 (51, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 1 LASER 0
-  ##########################################
-  single day
-  X_S1 (25, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 2 LASER 0
-  ##########################################
-  single day
-  X_S1 (28, 361, 84) X_S2 (30, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 3 LASER 0
-  ##########################################
-  single day
-  X_S1 (29, 361, 84) X_S2 (44, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 4 LASER 0
-  ##########################################
-  single day
-  X_S1 (38, 361, 84) X_S2 (48, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 5 LASER 0
-  ##########################################
-  single day
-  X_S1 (46, 361, 84) X_S2 (51, 361, 84)
-  ##########################################
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 6 LASER 0
-  ##########################################
-  single day
-  X_S1 (50, 361, 84) X_S2 (47, 361, 84)
+  multiple days 0 3 0
+  X_S1 (80, 361, 84) X_S2 (80, 361, 84)
   Done
+  (2, 361)
 #+end_example
 
+#+begin_src ipython
+  print(X_first[2].shape)
+#+end_src
+
+#+RESULTS:
+: (160, 361, 84)
+
 *** Plot Bumps
-
 #+begin_src ipython
-  X_norm = X_first[1]
-  # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
-  plot_bump(X_norm, y_first[1], 'all', int(X_first[0].shape[1] * .1))
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Ellipse
+
+    width = np.std(coefs_last[0]) * 100.0
+    height = np.std(coefs_last[1]) * 100.0
+
+    max = np.max((width, height))
+
+    print(width, height)
+    # Example parameters for the ellipse: center at (1, 2), width 4, height 2, and angle of rotation 45 degrees
+    ellipse = Ellipse(xy=(1, 2), width=width, height=height, angle=45, edgecolor='r', fc='None', lw=5)
+    fig, ax = plt.subplots()
+
+    # Add the ellipse to the axes
+    ax.add_patch(ellipse)
+    ax.set_xlim(-1, 3)
+    ax.set_ylim(0, 4)
+
+    # ax.set_xlim([-max, max])
+    # ax.set_ylim([-max, max])
+    plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/514f6b19acc2cc7bda89903a027e6ca8ea73f4f2.png]]
+:RESULTS:
+: 2.360220926228741 1.9572298893980489
+[[file:./.ob-jupyter/6acee6be563df85ac9f0fbc784e6f1f2b3e84548.png]]
+:END:
 
 #+begin_src ipython
-  X_norm = X_last[2]
+  task = 0
+  X_norm = X_first[task]
   # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
-  plot_bump(X_norm, y_last[2], 'all', int(X_last[0].shape[1] * .1))
+  plot_bump(X_norm, y_first[task], 'all', int(X_first[task].shape[1] * .1))
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/c6428eeb3bb706bd67eaa25b7d7c2eb4170a7d76.png]]
- 
+[[file:./.ob-jupyter/d37bdd1dd88c3340bbbd152e9017f394611ca1ad.png]]
+
+#+begin_src ipython
+  X_norm = X_last[task]
+  # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
+  plot_bump(X_norm, y_last[task], 'all', int(X_last[task].shape[1] * .1))
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/129af9929c54f8ca8dc19949e32e5f25bb1acac4.png]]
+
 *** Save Data
 #+begin_src ipython
   import pickle as pkl
-  filename = "../data/" + mouse + "/X_bump_first_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/X_bump_first_" + kwargs['penalty'] + ".pkl"
   pkl.dump(X_first, open(filename + ".pkl", "wb"))
 
-  filename = "../data/" + mouse + "/y_bump_first_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/y_bump_first_" + kwargs['penalty'] + ".pkl"
   pkl.dump(y_first, open(filename + ".pkl", "wb"))
 
-  filename = "../data/" + mouse + "/X_bump_last_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/X_bump_last_" + kwargs['penalty'] + ".pkl"
   pkl.dump(X_last, open(filename + ".pkl", "wb"))
 
-  filename = "../data/" + mouse + "/y_bump_last_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/y_bump_last_" + kwargs['penalty'] + ".pkl"
   pkl.dump(y_last, open(filename + ".pkl", "wb")) 
 #+end_src
 
 #+RESULTS:
 *** Load Data
 #+begin_src ipython
-  filename = "../data/" + mouse + "/X_bump_first_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/X_bump_first_" + kwargs['penalty'] + ".pkl"
   X_first = pkl.load(open(filename + ".pkl", "rb"))
 
-  filename = "../data/" + mouse + "/y_bump_first_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/y_bump_first_" + kwargs['penalty'] + ".pkl"
   y_first = pkl.load(open(filename + ".pkl", "rb"))
 
-  filename = "../data/" + mouse + "/X_bump_last_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/X_bump_last_" + kwargs['penalty'] + ".pkl"
   X_last = pkl.load(open(filename + ".pkl", "rb"))
 
-  filename = "../data/" + mouse + "/y_bump_last_" + kwargs['penalty'] + ".pkl"
+  filename = "../data/" + kwargs['mouse'] + "/y_bump_last_" + kwargs['penalty'] + ".pkl"
   y_last = pkl.load(open(filename + ".pkl", "rb")) 
 #+end_src
 
@@ -404,14 +274,17 @@
 
 * Energy Landscape
 #+begin_src ipython
-  opts = set_options(mouse=mouse, T_WINDOW=0.0)
+  opts = set_options(T_WINDOW=0.0)
 
   # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  bins = np.concatenate( (opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
   # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  # bins = np.concatenate( (opts['bins_MD'], opts['bins_LD']))
-  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_DELAY']))
+  # bins = opts['bins_PRE_DIST']
+  # bins = None
 #+end_src
 
 #+RESULTS:
@@ -419,61 +292,59 @@
 ** Parameters
 #+begin_src ipython
   task = 'all'
+  kwargs['task'] = task
 
-  num_bins = 200
+  num_bins = int(0.1 * X_first[0].shape[1])
+  num_bins = 60
   print('num_bins', num_bins)
 
   window = 0.1
   print('window', window)
 
   IF_HMM = 0
-  n_iter = 10
+  n_iter = 100
   IF_BOOT=0
   IF_NORM=0
 #+end_src
 
 #+RESULTS:
-: num_bins 200
+: num_bins 60
 : window 0.1
 
 ** Compute Energy
 
 #+begin_src ipython
-  def get_energy(X_, task, num_bins, window, IF_BOOT=0, IF_HMM=0, n_iter=0):
+  def get_energy(X_, y_, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
+
+    # X = []
+    # for i in range(3):
+    #   X_i = X_[i]
+    #   X.append(X_i[y_[i]==1])
+
+    # X = np.vstack(X)
+    # print(X.shape)
     if task=='all':
-        X = np.vstack(X_)
+      X = np.vstack(X_)
     elif task==13:
-        X = np.vstack((X_[0], X_[-1]))
+      X = np.vstack((X_[0], X_[-1]))
     else:
-        X = X_[task]
+      X = X_[task]
 
     if IF_NORM:
         X = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
 
-    X = X[..., bins]
+    if bins is not None:
+      X = X[..., bins]
 
     ci_ = None
     energy_ = run_energy(X, num_bins, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
     if IF_BOOT:
-        _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, window, IF_HMM=IF_HMM), n_samples=1000)
+        _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
 
     return energy_, ci_
 #+end_src
 
 #+RESULTS:
-
-#+begin_src ipython
-  energy_first, ci_first = get_energy(X_first, task, num_bins, window, IF_BOOT)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  energy_last, ci_last = get_energy(X_last, task, num_bins, window, IF_BOOT)
-#+end_src
-#+RESULTS:
-: /home/leon/dual_task/dual_data/org/../dual_data/attractor/energy.py:126: RuntimeWarning: invalid value encountered in log
-:   energy = -np.log(steady_state) + np.log(Z)
 
 #+begin_src ipython
   def plot_landscape(energy_first, energy_last, ci_first, ci_last, SMOOTH=1, window=.1, **kwargs):
@@ -483,8 +354,20 @@
     plot_energy(energy_last, ci=ci_last, ax=ax, window=window, SMOOTH=SMOOTH, color='r')
     # plt.ylim([0, .2])
     # plt.xlim([0, 270])
-    # plt.savefig("../figs/landscape/"+ mouse + "_" + str(task) + '_trials_' + kwargs['penalty'] + '.svg', dpi=300)
+    plt.savefig("../figs/landscape/"+ kwargs['mouse'] + "_" + str(kwargs['task']) + '_trials_' + kwargs['penalty'] + '.svg', dpi=300)
     plt.show()   
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  energy_first, ci_first = get_energy(X_first, y_first, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  energy_last, ci_last = get_energy(X_last, y_last, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
 #+end_src
 
 #+RESULTS:
@@ -492,15 +375,106 @@
 #+begin_src ipython
   SMOOTH = 1
   window = .1
-  plot_landscape(energy_first, energy_last, ci_first, ci_last, SMOOTH, window)
-  plt.savefig("../figs/landscape/"+ mouse + "_" + str(task) + '_trials_' + kwargs['penalty'] + '.svg', dpi=300) ;
+  plot_landscape(energy_first, energy_last, ci_first, ci_last, SMOOTH, window, **kwargs)
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/d747ef02552600507380de06f60621140be28345.png]]
+
+**** Diffusion
+#+begin_src ipython
+  phase_first = []
+  phase_last = []
+
+  for i in range(3):
+      _, phi_first = decode_bump(X_first[i], axis=1)
+      _, phi_last = decode_bump(X_last[i], axis=1)
+
+      print(phi_first.shape)
+      phase_first.append(phi_first)
+      phase_last.append(phi_last)
+
+  phase_first = np.stack(phase_first)
+  phase_last = np.stack(phase_last)
+#+end_src
+
+#+RESULTS:
+: (96, 84)
+: (96, 84)
+: (96, 84)
+
+#+begin_src ipython
+  print('phase_first', phase_first.shape, phase_first.min() * 180 / np.pi, phase_first.max() * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+: phase_first (3, 96, 84) -179.99682078001987 179.99853893676223
+
+#+begin_src ipython
+  from scipy.stats import circstd
+  def circ_std(X, y=None, axis=0):
+      std = circstd(X[y==-1], axis=0) * 180 / np.pi
+      std1 = circstd(X[y==1], axis=0) * 180 / np.pi
+      
+      std = (std + std1) / 2
+
+      return std
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  task = 0
+  
+  std_first = circ_std(phase_first[task] + np.pi, y_first[task])
+  _, ci_first = my_boots_ci(phase_first[task], lambda x: circ_std(x, y_first[task]))
+
+  std_last = circ_std(phase_last[task] + np.pi, y_last[task])
+  _, ci_last = my_boots_ci(phase_last[task], lambda x: circ_std(x, y_last[task]) ) 
 #+end_src
 
 #+RESULTS:
 :RESULTS:
-[[file:./.ob-jupyter/b2bbf62ac19e0c2c28fa5d102c4b3cce832ed30c.png]]
-: <Figure size 700x432.624 with 0 Axes>
+: bootstrap: 100% 1000/1000 [00:02<00:00, 456.09it/s]
+: 
+: bootstrap: 100% 1000/1000 [00:02<00:00, 479.13it/s]
+:
 :END:
+
+#+begin_src ipython
+  time = np.linspace(0, 14, 84)
+  plt.plot(time, std_first, label='First')
+  plt.fill_between(time, std_first-ci_first[:, 0], std_first+ci_first[:, 1], alpha=0.2)
+  
+  plt.plot(time, std_last, label='Last')
+  plt.fill_between(time, std_last-ci_last[:,0], std_last+ci_last[:,1], alpha=0.2)
+
+  plt.xlabel('Time Stim. Offset (s)');
+  # plt.ylabel('$< \sqrt{\delta \phi^2}>_k$ (°)'); 
+  plt.ylabel('Diffusion Error (°)');
+  # plt.ylim([0, 120])
+  # plt.yticks([0, 60, 120])
+  # plt.xticks([3, 6, 9], [0, 3, 6])
+  # plt.xlim([3, 9])
+
+  plt.legend(fontsize=12)
+  add_vlines()
+  plt.savefig('diff_' + kwargs['mouse'] + '.svg', dpi=300)
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/c19842d3a46c4878844869793eef48fdab70aa19.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
 
 * model
 

@@ -294,13 +294,6 @@ def get_clf(**kwargs):
     if kwargs["prescreen"] is not None:
         pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
     
-    # if kwargs["prescreen"] == "fpr":
-    #     pipe.append(("filter", SelectFpr(f_classif, alpha=kwargs["pval"])))
-    # if kwargs["prescreen"] == "fdr":
-    #     pipe.append(("filter", SelectFdr(f_classif, alpha=kwargs["pval"])))
-    # if kwargs["prescreen"] == "fwe":
-    #     pipe.append(("filter", SelectFwe(f_classif, alpha=kwargs["pval"])))
-    
     # dim red
     if kwargs["pca"]:
         pipe.append(("pca", PCA(n_components=kwargs["n_comp"])))
@@ -342,6 +335,9 @@ def get_clf(**kwargs):
     print("##########################################")
     print(
         "MODEL:",
+        kwargs['clf'],
+        "FOLDS",
+        kwargs['in_fold'],
         "RESAMPLE",
         kwargs["balance"],
         "SCALER",
@@ -352,10 +348,6 @@ def get_clf(**kwargs):
         kwargs["pca"],
         "METHOD",
         kwargs["method"],
-        "FOLDS",
-        kwargs["in_fold"],
-        "CLF",
-        kwargs["clf"],
     )
 
     # print(pipe)

@@ -28,7 +28,7 @@ def find_equal_axes(a, b):
 
 def get_coef_feat(X_days, y_days, **options):
     model = get_clf(**options)
-
+    
     if options["features"] == "sample":
         options["task"] = "all"
         options["epochs"] = ["ED"]
