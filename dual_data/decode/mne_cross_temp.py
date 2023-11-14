@@ -150,7 +150,7 @@ def plot_scores_mat(scores_mat, figname, title):
     fig, ax = plt.subplots(1, 1, num=figname)
     im = ax.imshow(
         scores_mat,
-        interpolation="lanczos",
+        # interpolation="lanczos",
         origin="lower",
         cmap="jet",
         extent=[0, 14, 0, 14],
@@ -209,15 +209,22 @@ def run_mne_cross_temp(**kwargs):
 
     task = options["task"]
 
-    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=options["reload"])
+    try:
+        options["day"] = int(options["day"])
+    except:
+        pass
+    
     X_days, y_days = get_X_y_days(**options)
-
+    
     model = get_clf(**options)
 
     # options["task"] = "DPA"
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
-    print("X", X.shape, "y", y.shape)
 
+    if options['AVG_EPOCHS']:
+        X = avg_epochs(X, **options)
+    print("X", X.shape, "y", y.shape)
+    
     # options["task"] = task
     # X2, y2 = get_X_y_S1_S2(X_days, y_days, **options)
 
@@ -244,9 +251,9 @@ def run_mne_cross_temp(**kwargs):
 
     start_time = time.time()
     scores_mat = get_temporal_cv_score(estimator, X, y, cv, n_jobs=-1)
-
+    
     # scores_mat = get_temporal_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
-
+    
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
     figname = (
@@ -256,12 +263,13 @@ def run_mne_cross_temp(**kwargs):
         + "_cross_temp_score_"
         + options["task"]
         + "_"
-        + options["day"]
+        + str(options["day"])
     )
 
-    title = options["day"] + " " + options["task"]
-    plot_scores_mat(scores_mat, figname, title)
+    # title = options["day"] + " " + options["task"]
+    # plot_scores_mat(scores_mat, figname, title)
 
+    return scores_mat
 
 if __name__ == "__main__":
     args = sys.argv[1:]  # Exclude the script name from arguments

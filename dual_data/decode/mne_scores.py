@@ -3,6 +3,7 @@ import sys
 import time
 from datetime import timedelta
 
+from scipy import stats
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -46,9 +47,12 @@ def get_cv_score(estimator, X, y, cv, n_jobs=-1):
     # calling mne.cross_val_multiscore to compute diagonal score at each time point
     scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs, verbose=False)
     # Mean scores across cross-validation splits
-    scores = np.nanmean(scores, axis=0)
-
-    return scores
+    # sem_scores = np.std(scores, axis=0, ddof=1) / np.sqrt(scores.shape[0])  # SEM across CV splits
+    mean_scores = np.nanmean(scores, axis=0)    
+    sem_scores = stats.sem(scores, axis=0)
+    ci_scores = sem_scores * stats.t.ppf((1 + 0.95) / 2., scores.shape[0] - 1)
+    
+    return mean_scores, ci_scores
 
 
 def get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1):
@@ -80,9 +84,9 @@ def get_shuffle_score(estimator, X, y, cv, n_jobs=-1):
 def get_boots_score(estimator, X, y, cv, n_jobs=-1):
     np.random.seed(None)
 
-    X0 = X[y == 0].copy()
+    X0 = X[y == -1].copy()
     X0 = resample(X0, n_samples=X0.shape[0])
-
+    
     X1 = X[y == 1].copy()
     X1 = resample(X1, n_samples=X1.shape[0])
 
@@ -128,12 +132,15 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA", day="fi
     if ci_scores is not None:
         plt.fill_between(
             x,
-            scores - ci_scores[:, 0],
-            scores + ci_scores[:, 1],
-            alpha=0.2,
-            color="k",
+            # scores - ci_scores[:, 0],
+            # scores + ci_scores[:, 1],
+            scores - ci_scores,
+            scores + ci_scores,
+            alpha=0.1,
+            color=paldict[task],
         )
     plt.title(title)
+    print(figname)
     save_fig(fig, figname)
 
 
@@ -180,9 +187,9 @@ def run_mne_scores(**kwargs):
     estimator = SlidingEstimator(model, n_jobs=-1, scoring=scoring, verbose=False)
     
     start_time = time.time()
-    scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
-
-    # scores = get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
+    scores, ci_scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)
+    
+    # scores, sem = get_cv_score_task(estimator, X, X2, y, y2, cv, n_jobs=-1)
 
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
@@ -196,7 +203,7 @@ def run_mne_scores(**kwargs):
     # shuffle_scores = np.array(shuffle_scores)
 
     cv = 5
-    ci_scores = None
+    # ci_scores = None
     if options["bootstrap"] == 1:
         n_boots = options["n_boots"]
         with pgb.tqdm_joblib(pgb.tqdm(desc="bootstrap", total=84 * n_boots)):

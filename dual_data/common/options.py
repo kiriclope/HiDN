@@ -149,7 +149,7 @@ def set_options(**kwargs):
     opts["n_in"] = 5
     opts["inner_score"] = "f1_weighted"
     # accuracy, roc_auc, f1_macro, f1_weighted, neg_log_loss
-
+    
     # multiclass/label
     opts["multilabel"] = False
     opts["multiclass"] = False
@@ -157,6 +157,9 @@ def set_options(**kwargs):
     # gridsearch params
     opts["n_lambda"] = 50
     opts["n_alpha"] = 10
+
+    inv_frame = 0  # 1 / frame_rate
+    opts['T_WINDOW'] = 0.5
     
     opts.update(kwargs)
     
@@ -189,8 +192,6 @@ def set_options(**kwargs):
         palette = sns.color_palette("bright")
 
     frame_rate = 6
-    inv_frame = 0  # 1 / frame_rate
-    T_WINDOW = 0.5
     
     opts['duration'] = 14  # 14, 19.2
     if "P" in opts["mouse"]:
@@ -224,35 +225,35 @@ def set_options(**kwargs):
     
     opts["bins_BL"] = opts["bins"][int(t_BL[0] * frame_rate) : int(t_BL[1] * frame_rate)]
     
-    opts["bins_STIM"]= opts["bins"][int((t_STIM[0] + T_WINDOW) * frame_rate) : int(t_STIM[1] * frame_rate)]
+    opts["bins_STIM"]= opts["bins"][int((t_STIM[0] + opts['T_WINDOW']) * frame_rate) : int(t_STIM[1] * frame_rate)]
     
-    opts["bins_ED"] = opts["bins"][int((t_ED[0] + T_WINDOW) * frame_rate) : int((t_ED[1]) * frame_rate)]
+    opts["bins_ED"] = opts["bins"][int((t_ED[0] + opts['T_WINDOW']) * frame_rate) : int((t_ED[1]) * frame_rate)]
 
-    opts["bins_STIM_ED"] = opts["bins"][int((t_STIM[0] + T_WINDOW) * frame_rate) : int((t_ED[1]) * frame_rate)]
+    opts["bins_STIM_ED"] = opts["bins"][int((t_STIM[0] + opts['T_WINDOW']) * frame_rate) : int((t_ED[1]) * frame_rate)]
 
-    opts["bins_DELAY"] = opts["bins"][int((t_ED[0] + T_WINDOW) * frame_rate) : int((t_TEST[0]) * frame_rate)]
+    opts["bins_DELAY"] = opts["bins"][int((t_ED[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[0]) * frame_rate)]
 
-    opts["bins_PRE_DIST"] = opts["bins"][int((t_BL[0] + T_WINDOW) * frame_rate) : int((t_DIST[0]) * frame_rate)]
+    opts["bins_PRE_DIST"] = opts["bins"][int((t_BL[0] + opts['T_WINDOW']) * frame_rate) : int((t_DIST[0]) * frame_rate)]
     
-    opts["bins_DIST"] = opts["bins"][int((t_DIST[0] + T_WINDOW) * frame_rate) : int(t_DIST[1] * frame_rate)]
+    opts["bins_DIST"] = opts["bins"][int((t_DIST[0] + opts['T_WINDOW']) * frame_rate) : int(t_DIST[1] * frame_rate)]
 
-    opts["bins_MD"]= opts["bins"][int((t_MD[0] + T_WINDOW) * frame_rate) : int((t_MD[1]) * frame_rate)]
+    opts["bins_MD"]= opts["bins"][int((t_MD[0] + opts['T_WINDOW']) * frame_rate) : int((t_MD[1]) * frame_rate)]
 
-    opts["bins_CUE"] = opts["bins"][int((t_CUE[0] + T_WINDOW) * frame_rate) : int(t_CUE[1] * frame_rate)]
+    opts["bins_CUE"] = opts["bins"][int((t_CUE[0] + opts['T_WINDOW']) * frame_rate) : int(t_CUE[1] * frame_rate)]
 
-    opts["bins_RWD"] = opts["bins"][int((t_RWD[0] + T_WINDOW) * frame_rate) : int(t_RWD[1] * frame_rate)]
+    opts["bins_RWD"] = opts["bins"][int((t_RWD[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD[1] * frame_rate)]
     
-    opts["bins_LD"] = opts["bins"][int((t_LD[0] + T_WINDOW) * frame_rate) : int(t_LD[1] * frame_rate)]
+    opts["bins_LD"] = opts["bins"][int((t_LD[0] + opts['T_WINDOW']) * frame_rate) : int(t_LD[1] * frame_rate)]
     
     opts["bins_TEST"] = opts["bins"][
-        int((t_TEST[0] + T_WINDOW) * frame_rate) : int((t_TEST[1]) * frame_rate)
+        int((t_TEST[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[1]) * frame_rate)
     ]
     
     opts["bins_CHOICE"] = opts["bins"][
-        int((t_TEST[1] + T_WINDOW) * frame_rate) : int(t_RWD2[0] * frame_rate)
+        int((t_TEST[1] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[0] * frame_rate)
     ]
     
-    opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + T_WINDOW) * frame_rate) : int(t_RWD2[1] * frame_rate)]
+    opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[1] * frame_rate)]
     
     opts["pal"] = [
         palette[3],

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import sys
 import time
 from datetime import timedelta
@@ -53,7 +52,7 @@ def get_cv_score(estimator, X, y, cv, n_jobs=-1):
     scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=n_jobs, verbose=False)
     # Mean scores across cross-validation splits
     scores = np.nanmean(scores, axis=0)
-
+    
     return scores
 
 
@@ -88,7 +87,7 @@ def get_boots_score(estimator, X, y, cv, n_jobs=-1):
 
     X0 = X[y == 0].copy()
     X0 = resample(X0, n_samples=X0.shape[0])
-
+    
     X1 = X[y == 1].copy()
     X1 = resample(X1, n_samples=X1.shape[0])
 
@@ -124,7 +123,7 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
     plt.ylabel("Score")
     plt.ylim([0.25, 1])
     plt.yticks([0.25, 0.5, 0.75, 1])
-
+    
     if ci_scores is not None:
         plt.fill_between(
             x,
@@ -133,6 +132,7 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
             alpha=0.2,
             color="k",
         )
+    
     plt.title(title)
     save_fig(fig, figname)
 
@@ -140,23 +140,14 @@ def plot_scores_time(figname, title, scores, ci_scores=None, task="DPA"):
 def run_scores_days(**kwargs):
     options = set_options(**kwargs)
 
-    # X_days, y_days = get_X_y_days(mouse=options["mouse"], IF_RELOAD=0)
     X_days, y_days = get_X_y_days(**options)
-
-    # X_days = preprocess_X(
-    #     X_days,
-    #     scaler=options["scaler_BL"],
-    #     avg_mean=options["avg_mean_BL"],
-    #     avg_noise=options["avg_noise_BL"],
-    #     unit_var=options["unit_var_BL"],
-    # )
 
     model = get_clf(**options)
 
     cv = options["n_out"]
     if options["in_fold"] == "loo":
         cv = LeaveOneOut()
-
+        
     if options["out_fold"] == "repeated":
         cv = RepeatedStratifiedKFold(
             n_splits=options["n_out"],
@@ -166,19 +157,21 @@ def run_scores_days(**kwargs):
 
     scoring = options["outer_score"]
 
-    # estimator = SlidingEstimator(model, n_jobs=None, scoring=scoring, verbose=False)
-    estimator = model
+    estimator = SlidingEstimator(model, n_jobs=-1, scoring=scoring, verbose=False)
+    # estimator = model
     start_time = time.time()
-
+    
     # if options['features'] == 'paired':
-    epoch = "RWD2"
+    # epoch = "RWD2"
     # if options['features'] == 'paired':
 
+    options['epochs'] = ['ED', 'LD']
+    
     scores_day = []
     for i_day in range(1, 7):
         options["day"] = i_day
         X, y = get_X_y_S1_S2(X_days, y_days, **options)
-        X_avg = avg_epochs(X, epochs=[epoch])
+        X_avg = avg_epochs(X, **options)
 
         print("day", i_day, "X", X_avg.shape, "y", y.shape)
 
@@ -190,12 +183,13 @@ def run_scores_days(**kwargs):
     print("--- %s ---" % timedelta(seconds=time.time() - start_time))
 
     figname = options["features"] + "cross_temp_scores_day_"
-
+    
     title = options["task"]
     ci_scores = None
     plot_scores_time(figname, title, scores_day, ci_scores, options["task"])
 
-
+    return scores_day
+    
 if __name__ == "__main__":
     options["features"] = sys.argv[1]
     options["day"] = sys.argv[2]
