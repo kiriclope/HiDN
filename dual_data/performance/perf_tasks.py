@@ -61,12 +61,13 @@ def perf_tasks_days(tasks, y_days, perf_type="correct_hit", SAMPLE="all", IF_LAS
                 idx = y_day.response.str.contains(perf_type)
 
             perf_day.append(np.mean(idx))
-            _, ci = my_boots_ci(idx, np.mean, verbose=0, n_samples=1000)
+            # _, ci = my_boots_ci(idx, np.mean, verbose=0, n_samples=1000)
                 
             # perf_day.append(np.sum(idx))
             # _, ci = my_boots_ci(idx, np.sum, verbose=0, n_samples=1000)
             
-            ci_day.append(ci[0])
+            # ci_day.append(ci[0])
+            ci_day.append(0)
 
         perf_task.append(perf_day)
         ci_task.append(ci_day)

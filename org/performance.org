@@ -8,7 +8,7 @@
   %autoreload 2
   %reload_ext autoreload
 
-  %run /home/leon/models/lif_cpp/notebooks/setup.py
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
   %matplotlib inline
   %config InlineBackend.figure_format = 'png'
 #+end_src
@@ -19,7 +19,7 @@
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
-: <Figure size 500x309.017 with 0 Axes>
+: <Figure size 700x432.624 with 0 Axes>
 :END:
 
 * Imports
@@ -100,35 +100,219 @@
 ** All Mice
 #+begin_src ipython
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  mice = ['AP02', 'AP12', 'PP09']
+  # mice = ['AP02', 'AP12', 'PP09']
   # mice = ['PP09','PP17', 'RP13']
   # mice = ['ChRM04','JawsM15', 'JawsM18']
 
+  perf_type = 'correct'
+  
   perfs = []
 
   for mouse in mice:
-      perf_A = run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='A', tasks=tasks)
+      perf = run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='all', tasks=tasks)
       plt.close('all')
-      perf_B = run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='B', tasks=tasks)
-      plt.close('all')
-
-      perf = np.stack((perf_A, perf_B))
       perfs.append(perf)
 
   perfs = np.array(perfs)
+  print(perfs.shape)
 #+end_src
 
 #+RESULTS:
-: e6e2ac00-eb7f-49f3-870c-318836dd7971
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  DPA 1152 (1152, 6) (192, 6)
+  DualGo 1152 (1152, 6) (192, 6)
+  DualNoGo 1152 (1152, 6) (192, 6)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  DPA 1152 (1152, 6) (192, 6)
+  DualGo 1152 (1152, 6) (192, 6)
+  DualNoGo 1152 (1152, 6) (192, 6)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM18
+  X_days (1152, 444, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  DPA 1152 (1152, 6) (192, 6)
+  DualGo 1152 (1152, 6) (192, 6)
+  DualNoGo 1152 (1152, 6) (192, 6)
+  loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  X_days (960, 361, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  DPA 960 (960, 6) (320, 6)
+  DualGo 960 (960, 6) (320, 6)
+  DualNoGo 960 (960, 6) (320, 6)
+  loading files from /home/leon/dual_task/dual_data/data/ACCM04
+  X_days (960, 113, 84) y_days (960, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  DPA 960 (960, 6) (320, 6)
+  DualGo 960 (960, 6) (320, 6)
+  DualNoGo 960 (960, 6) (320, 6)
+  (5, 3, 6)
+#+end_example
+#+RESULTS:
 
 #+begin_src ipython
-  perfs = np.array(perfs)
-  print(perfs.shape)
-  Delta_perf = np.abs(perfs[:, 0] - perfs[:, 1])
-  plt.plot(np.mean(np.mean(Delta_perf, 0), -1))
+    from scipy import stats
+
+    mean_perf = np.mean(perfs, 0)
+    sem = stats.sem(perfs, axis=0)
+    # Number of comparisons
+    num_tests = perfs.shape[1]  # This is the number of confidence intervals you are calculating
+
+    # Family-wise Confidence Level (for all tests)
+    family_confidence_level = 0.95
+
+    # Per-comparison Confidence Level for Bonferroni correction
+    bonferroni_confidence_level = 1 - (1 - family_confidence_level) / num_tests
+
+    # Calculate the t-statistic for the Bonferroni-adjusted confidence level
+    t_stat = stats.t.ppf((1 + bonferroni_confidence_level) / 2., perfs.shape[0] - 1)
+
+    # Calculate the Bonferroni-corrected CI for each time point
+    ci_bound = sem * t_stat
+    print(mean_perf.shape, ci_bound.shape)
 #+end_src
 
 #+RESULTS:
+: (3, 6) (3, 6)
+
+#+begin_src ipython
+  from dual_data.common.options import set_options
+  opts = set_options(**kwargs)
+#+end_src
+
+#+RESULTS:
+
+*** perf
+#+begin_src ipython
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = np.arange(1, 7)
+  fig, ax = plt.subplots()
+
+  for i in range(3):
+      plt.plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i])
+      plt.fill_between(days,
+                       mean_perf[i] - ci_bound[i]/5,
+                       mean_perf[i] + ci_bound[i]/5,
+                       alpha=0.1, color=opts['pal'][i])
+
+  plt.xlabel('Day')
+
+  plt.ylabel('Performance')
+  plt.ylim([0.5, 1])
+  plt.yticks([.5, .75, 1])
+
+  plt.xticks([1, 2, 3, 4, 5, 6])
+  legend = ax.legend(loc='lower right', fontsize=14, frameon=0)
+  bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
+  text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
+  plt.plot([1, 6], [.5, .5], '--k')
+  # Add text above the legend
+  ax.text(1.0, text_y_coord, 'n=5     ',
+          verticalalignment='bottom',
+          horizontalalignment='right',
+          transform=ax.transAxes)
+
+  plt.savefig('../figs/perf/performance_all_mice.svg', dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/754221fce0f4db8c8cb68982c520897609180b90.png]]
+
+
+*** hits
+#+begin_src ipython
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = np.arange(1, 7)
+  fig, ax = plt.subplots()
+
+  for i in range(3):
+      plt.plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i])
+      plt.fill_between(days,
+                       mean_perf[i] - ci_bound[i]/5,
+                       mean_perf[i] + ci_bound[i]/5,
+                       alpha=0.1, color=opts['pal'][i])
+
+  plt.xlabel('Day')
+
+  plt.ylabel('Hits')
+  plt.ylim([0.5, 1])
+  plt.yticks([.5, .75, 1])
+
+  plt.xticks([1, 2, 3, 4, 5, 6])
+  legend = ax.legend(loc='lower right', fontsize=14, frameon=0)
+  bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
+  text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
+  plt.plot([1, 6], [.5, .5], '--k')
+  # Add text above the legend
+  ax.text(1.0, text_y_coord, 'n=5     ',
+          verticalalignment='bottom',
+          horizontalalignment='right',
+          transform=ax.transAxes)
+
+  plt.savefig('../figs/perf/hits_all_mice.svg', dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/98ddbb4ffcd0e616d36760834b7a9783e1154d64.png]]
+
+
+*** fa
+
+#+begin_src ipython
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = np.arange(1, 7)
+  fig, ax = plt.subplots()
+
+  for i in range(3):
+      plt.plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i])
+      plt.fill_between(days,
+                       mean_perf[i] - ci_bound[i]/5,
+                       mean_perf[i] + ci_bound[i]/5,
+                       alpha=0.1, color=opts['pal'][i])
+
+  plt.xlabel('Day')
+
+  if 'fa' in perf_type:
+      plt.ylabel('False Alarms')
+      plt.ylim([0., 1])
+      plt.yticks([0, .25, .5, .75, 1])
+
+  plt.xticks([1, 2, 3, 4, 5, 6])
+  legend = ax.legend(loc='upper right', fontsize=14, frameon=0)
+  bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
+  text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
+  plt.plot([1, 6], [.5, .5], '--k')
+  # Add text above the legend
+  ax.text(1.0, text_y_coord, 'n=5     ',
+          verticalalignment='bottom',
+          horizontalalignment='right',
+          transform=ax.transAxes)
+
+  if 'fa' in perf_type:
+      plt.savefig('../figs/perf/fa_all_mice.svg', dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/787a9e749f7a13f92b5debe46f50ddbe719d8363.png]]
 
 * Summary
 #+begin_src ipython
