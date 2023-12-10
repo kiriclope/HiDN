@@ -1,0 +1,114 @@
+#+TITLE: Score vs Days
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session dual_data :kernel dual_data
+
+* Notebook Settings
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+  
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  import pickle as pkl
+  sys.path.insert(0, '../')
+
+  from dual_data.common.plot_utils import add_vlines
+  from dual_data.common.options import set_options
+  from dual_data.common.get_data import get_X_y_days, get_X_y_S1_S2
+#+end_src
+
+#+RESULTS:
+
+
+** Parameters
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = ['first', 'last']
+
+  kwargs = dict()
+  kwargs = {'mouse': 'JawsM15',
+      'prescreen': 'fpr', 'pval': 0.05, 'trials': 'correct', 'balance': 'under',
+            'method': None, 'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
+            'bootstrap': False, 'n_boots': 1000,
+            'preprocess': False, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l2',
+            'out_fold': 'loo', 'n_out': 5,
+            'in_fold': 'stratified', 'n_in': 5,
+            'random_state': None, 'n_repeats': 100,
+            'n_lambda': 20,
+            }
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+  kwargs['reload'] = False
+  kwargs['data_type'] = 'raw'
+  options = set_options(**kwargs)
+  X_days, y_days = get_X_y_days(**options)
+  options['task'] = 'DualGo'
+  options['trials'] = ''
+  X, y = get_X_y_S1_S2(X_days, y_days, **options)
+#+end_src
+
+#+RESULTS:
+: loading files from /home/leon/dual_task/dual_data/data/JawsM15
+: X_days (1152, 693, 84) y_days (1152, 6)
+: ##########################################
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
+: ##########################################
+: multiple days 0 3 0
+: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+
+#+RESULTS
+
+#+begin_src ipython
+width = 7 
+height = 1.5 * width * golden_ratio
+matplotlib.rcParams['figure.figsize'] = [2*width, height]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+    fig, ax = plt.subplots()
+    #ax.plot([0, 1], [0, 1])
+
+    # Hide both the x-axis and y-axis
+    ax.xaxis.set_visible(False)
+    ax.yaxis.set_visible(False)
+
+    time = np.linspace(0, 14, 84)
+    for i in range(10):
+      neuron = np.random.randint(X.shape[1])      
+      trial = np.random.randint(X.shape[0])
+      plt.plot(time, X[trial, neuron] + i, 'k')
+    # plt.ylabel('Fluo')
+    # plt.xlabel('Time (s)')
+    add_vlines()
+    plt.xlim([0, 12])
+    ax.axis('off')
+    plt.savefig('./fluo.svg', dpi=300)
+    plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/81c498827717da79acc742568c65b844405e3b54.png]]

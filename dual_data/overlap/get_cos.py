@@ -18,15 +18,13 @@ def to_polar_coords_in_N_dims(x):
         coords.append(angle)
     return np.array(coords)
 
-
 def gram_schmidt(a, b):
-    u = a
-    v = b - np.dot(b, u) / np.dot(u, u) * u
-
+    e1 = a / np.linalg.norm(a)
+    v = b - np.dot(b, e1) * e1      
     # Normalize the vectors (make them unit vectors)
-    e1 = u / np.linalg.norm(u)
+    # e1 = u / np.linalg.norm(u)
     e2 = v / np.linalg.norm(v)
-
+    
     return e1, e2
 
 
@@ -36,7 +34,7 @@ def unit_vector(vector):
 
 def cos_between(v1, v2):
     """Returns the angle in radians between vectors 'v1' and 'v2'"""
-
+    
     v1_u = unit_vector(v1)
     v2_u = unit_vector(v2)
     return np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
@@ -64,11 +62,11 @@ def run_get_cos(**kwargs):
     print("coefs sample", np.array(c_sample).shape)
     print('non_zeros', np.sum(c_sample>.0001))
         
-    theta = np.arctan2(c_dist, c_sample)
+    # theta = np.arctan2(c_dist, c_sample)
     
-    # e1, e2 = gram_schmidt(c_sample, c_dist)
-    #theta = np.arctan2(e2, e1)
-        
+    e1, e2 = gram_schmidt(c_sample, c_dist)
+    theta = np.arctan2(e2, e1)
+    
     index_order = theta.argsort()
     print('idx', index_order.shape, 'c_sample', c_sample.shape)
     
@@ -128,9 +126,16 @@ def plot_bump(X, y, trial, windowSize=10, width=7):
     golden_ratio = (5**.5 - 1) / 2
     
     fig, ax = plt.subplots(1, 2, figsize= [1.5*width, width * golden_ratio])
-    sample = [-1, 1]
+    sample = [1, -1]
     for i in range(2):
-        X_sample = X[y == sample[i]]
+        if i==0:
+            rng = np.random.default_rng()
+            X_sample = X[y == sample[1]]
+            print(X_sample.shape)
+            rng.shuffle(X_sample, axis=1)
+        else:
+            X_sample = X[y == sample[1]]
+            
         # print(X_sample.shape)
         
         if windowSize != 0:
@@ -142,27 +147,50 @@ def plot_bump(X, y, trial, windowSize=10, width=7):
             X_scaled = np.mean(X_scaled, 0)
         else:
             X_scaled = X_scaled[trial]
+
         
-        im = ax[i].imshow(
-            X_scaled,
-            # np.roll(X_scaled, 0, axis=0),
-            interpolation="lanczos",
-            origin="lower",
-            cmap="jet",
-            extent=[0, 14, 0, 360],
-            # vmin=-2,
-            # vmax=2.,
-            aspect="auto",
-        )
-        
+        if i==1:
+            im = ax[i].imshow(
+                # X_scaled,
+                np.roll(X_scaled, int(X_scaled.shape[0]/2), axis=0),
+                # interpolation="lanczos",
+                origin="lower",
+                cmap="jet",
+                extent=[0, 14, 0, 360],
+                # vmin=-1,
+                # vmax=2,
+                aspect="auto",  # 
+            )
+        else:
+            im = ax[i].imshow(
+                # X_scaled,
+                np.roll(X_scaled, int(X_scaled.shape[0]/2), axis=0),
+                # interpolation="lanczos",
+                origin="lower",
+                cmap="jet",
+                extent=[0, 14, 0, X_scaled.shape[0]],
+                # vmin=-1.5,
+                # vmax=2,
+                aspect="auto",
+            )
+            
+        if i==0:
+            ax[i].set_title('Unordered')
+        else:            
+            ax[i].set_title('Ordered')
+            
         ax[i].set_xlabel("Time (s)")
-        ax[i].set_ylabel("Pref. Location (°)")
-        ax[i].set_yticks([0, 90, 180, 270, 360])
+        if i == 0:
+            ax[i].set_ylabel("Neuron #")
+        else:
+            ax[i].set_ylabel("Pref. Location (°)")            
+            ax[i].set_yticks([0, 90, 180, 270, 360])
+            
         ax[i].set_xlim([0, 12])
 
     cbar = plt.colorbar(im, ax=ax[1])
     cbar.set_label("<Norm. Fluo>")
-    cbar.set_ticks([-.5, 0.5, 1.])
+    cbar.set_ticks([-0.5, 0.0, 0.5, 1.0, 1.5])
     
 if __name__ == "__main__":
     options["features"] = sys.argv[1]

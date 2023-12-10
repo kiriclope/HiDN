@@ -2,8 +2,10 @@ import numpy as np
 from scipy import stats
 from scipy.stats import circmean, norm
 from sklearn.preprocessing import MinMaxScaler
-
+# from caiman.source_extraction.cnmf.deconvolution import constrained_foopsi
+from oasis.functions import deconvolve
 from dual_data.common import constants as gv
+from joblib import Parallel, delayed
 
 # from scipy.signal import savgol_filter, detrend
 
@@ -188,10 +190,10 @@ def preprocess_X(
     scale=None,
     avg_mean=0,
     avg_noise=0,
-    unit_var=0,
+    unit_var=0,    
 ):
     # X = savgol_filter(X, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
-
+    
     if scaler == "standard":
         X_scale, center, scale = standard_scaler_BL(
             X, center, scale, avg_mean, avg_noise
@@ -206,7 +208,7 @@ def preprocess_X(
         X_scale = minmax_X_y(X, y)
     else:
         X_scale = X
-
+    
     # X_scale = savgol_filter(X_scale, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
 
     # X_scale = detrend(X_scale, bp=[gv.bins_STIM[0], gv.bins_DIST[0]])
@@ -227,11 +229,33 @@ def preprocess_X(
 
     return X_scale
 
+def deconvolve_trial_neuron(X):
+    BL = np.mean(X[:11])
+    c, s, b, g, lam = deconvolve(X, b=BL)
+    return s
+
+def dcvl_df(X):
+    print('Deconvolve Fluo')
+    n_trials, n_neurons, n_time = X.shape
+    
+    # Initialize an array to hold the deconvolved data
+    results = Parallel(n_jobs=-1)(
+        delayed(deconvolve_trial_neuron)(X[trial, neuron])
+        for trial in range(n_trials) for neuron in range(n_neurons)
+    )
+    
+    spike_estimates = np.array(results).reshape(n_trials, n_neurons, n_time)
+    
+    return spike_estimates
+
 
 def preprocess_df(X, y, **kwargs):
     n_days = kwargs["n_days"]
     days = np.arange(1, n_days + 1)
-
+    
+    if kwargs['DCVL']:
+        X = dcvl_df(X)
+    
     X_scaled = np.zeros(X.shape)
     for day in days:
         idx = y.day == day

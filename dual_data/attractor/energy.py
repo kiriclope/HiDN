@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from hmmlearn import hmm
-from discreteMarkovChain import markovChain
+# from discreteMarkovChain import markovChain
 from dual_data.decode.bump import decode_bump, circcvl  
 from dual_data.preprocess.helpers import standard_scaler_BL, preprocess_X
 
@@ -108,23 +108,30 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
         print('X_bins', X_discrete.shape)
     
     # Initialize transition matrix
-    matrix = np.zeros((num_bins, num_bins))
-    
+    matrix = np.ones((num_bins, num_bins))
+
     # Compute transitions
     for i in range(X_discrete.shape[0]): # trials
         for j in range(X_discrete.shape[1] - 1): # bins
             matrix[X_discrete[i, j], X_discrete[i, j+1]] += 1
             # matrix[X_discrete[i, j+1], X_discrete[i, j]] += 1
+            
+    # matrix = circcvl(matrix, windowSize=int(0.1*num_bins), axis=0)
     
     # Normalize transition matrix (to make it stochastic)
-    col_sum = matrix.sum(axis=1)
-    
-    for i in range(matrix.shape[0]):
-        if col_sum[i] == 0:
-            if i == matrix.shape[0]-1:
-                matrix[i] = (matrix[i-1] + matrix[0]) / 2.0
-            elif i<matrix.shape[0]-1:
-                matrix[i] = (matrix[i-1] + matrix[i+1]) / 2.0
+    # col_sum = matrix.sum(axis=1)
+
+    # while np.any(col_sum==0):
+    #     for i in range(matrix.shape[0]):
+    #         if col_sum[i] == 0:
+    #             if i == matrix.shape[0]-1:
+    #                 if col_sum[i-1]>0 and col_sum[0]>0:
+    #                     matrix[i] = (matrix[i-1] + matrix[0]) / 2.0
+    #             elif i<matrix.shape[0]-1:
+    #                 if col_sum[i-1]>0 and col_sum[i+1]>0:
+    #                     matrix[i] = (matrix[i-1] + matrix[i+1]) / 2.0
+                        
+    #     col_sum = matrix.sum(axis=1)
     
     # matrix = replace_zero_cols(matrix)
                 
@@ -179,8 +186,22 @@ def compute_energy_landscape(steady_state, window):
     return energy
 
 
-def run_energy(X, num_bins, window, IF_HMM=0, VERBOSE=0, n_iter=100, IF_SYNT=0, bias=0.5, IF_NORM=0):
-            
+    
+def run_energy(X_, num_bins, bins, task, window, IF_HMM=0, VERBOSE=0, n_iter=100, IF_SYNT=0, bias=0.5, IF_NORM=0):
+    
+    if task=='all':
+      X = np.vstack(X_)
+    elif task==13:
+      X = np.vstack((X_[0], X_[-1]))
+    else:
+      X = X_[task]
+    
+    if IF_NORM:
+        X = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
+        
+    if bins is not None:
+      X = X[..., bins]
+    
     _, phase = decode_bump(X, axis=1)
     phase += np.pi
     
@@ -238,7 +259,7 @@ def plot_energy(energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
             alpha=0.1, color=color
         )
     
-    ax.set_ylabel('Energy (a.u.)')
+    ax.set_ylabel('Energy')
     ax.set_xlabel('Pref. Location (°)')
     ax.set_xticks([0, 90, 180, 270, 360])
     # ax.set_xticks([-180, -90, 0, 90, 180])

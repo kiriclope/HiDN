@@ -64,6 +64,7 @@ def set_options(**kwargs):
     # preprocessing parameters
     ################################
     opts["preprocess"] = 1
+    opts["DCVL"] = 0
     
     # scaling fluo
     opts["scaler_BL"] = "robust"  # standard, robust, center
@@ -159,11 +160,11 @@ def set_options(**kwargs):
     opts["n_alpha"] = 10
 
     inv_frame = 0  # 1 / frame_rate
-    opts['T_WINDOW'] = 0.5
+    opts['T_WINDOW'] = 0.0
     
     opts.update(kwargs)
     
-    opts["Cs"] = np.logspace(-2, 2, opts["n_lambda"])
+    opts["Cs"] = np.logspace(-3, 3, opts["n_lambda"])
     opts["alphas"] = np.linspace(0, 1, opts["n_alpha"])
     
     opts["data_path"] = opts["path"] + "data/"

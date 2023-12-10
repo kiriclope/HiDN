@@ -90,11 +90,11 @@ def save_fig(fig, figname, path=gv.figdir, format="svg", dpi="figure"):
     if not os.path.isdir(path):
         os.makedirs(path)
 
-    pkl.dump(fig, open(path + "/" + figname + ".pkl", "wb"))
+    # pkl.dump(fig, open(path + "/" + figname + ".pkl", "wb"))
     plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
-
-    format = "png"
-    plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
+    
+    # format = "png"
+    # plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
 
 
 def pkl_save(obj, name, path="."):

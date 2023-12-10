@@ -23,7 +23,8 @@
 
 #+begin_src ipython
   import sys
-  sys.path.insert(0, '../')
+  sys.path.insert(0, '/home/leon/dual_task/dual_data')
+
   import pickle as pkl
   import numpy as np
   import matplotlib.pyplot as plt
@@ -37,29 +38,30 @@
   from dual_data.preprocess.helpers import preprocess_X
   from dual_data.common.options import set_options
   from dual_data.common.plot_utils import add_vlines
-  
+
 #+end_src
 
 #+RESULTS:
 
 * Bump
 ** Parameters
+
 #+begin_src ipython
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   days = ['first', 'last']
 
   kwargs = dict()
   kwargs = {'prescreen': None, 'pval': 0.05, 'trials': '', 'balance': 'under', 'laser':0,
-            'method': None,
+            'method': 'bootstrap',
             'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
-            'bootstrap':False, 'n_boots': 1000,
+            'bootstrap': False, 'n_boots': 1000,
             'preprocess': True, 'scaler_BL':'robust',
             'avg_noise': True, 'unit_var_BL':False,
             'clf': 'log_loss', 'scaler': None,
             'tol':0.001, 'penalty': 'l2',
             'shrinkage': 'auto',
             'class_weight': None, 'random_state': None,
-            'in_fold': 'loo', 'n_in': 5,
+            'in_fold': 'repeated', 'n_in': 5,
             'n_repeats': 10,
             'n_lambda': 20,
             }
@@ -95,140 +97,152 @@
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   ##########################################
-  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
+  MODEL: log_loss FOLDS repeated RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (55, 693, 84) X_S2 (70, 693, 84)
   coefs dist (693,)
-  non_zeros 347
+  non_zeros 328
   ##########################################
-  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
+  MODEL: log_loss FOLDS repeated RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
   ##########################################
   DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
   ##########################################
   multiple days 0 3 0
   X_S1 (95, 693, 84) X_S2 (100, 693, 84)
-  coefs sample (693,)
-  non_zeros 323
-  idx (693,) c_sample (693,)
-  ##########################################
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  ##########################################
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  ##########################################
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  Done
-  (2, 693)
-  loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  X_days (1152, 693, 84) y_days (1152, 6)
-  ##########################################
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  ##########################################
-  ##########################################
-  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
-  ##########################################
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (78, 693, 84) X_S2 (82, 693, 84)
-  coefs dist (693,)
-  non_zeros 388
-  ##########################################
-  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN fpr PCA False METHOD bootstrap
-  ##########################################
-  DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (124, 693, 84) X_S2 (125, 693, 84)
-  coefs sample (693,)
-  non_zeros 314
-  idx (693,) c_sample (693,)
-  ##########################################
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  ##########################################
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  ##########################################
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-  Done
-  (2, 693)
 #+end_example
-
-#+begin_src ipython
-  print(X_first[2].shape)
-#+end_src
-
 #+RESULTS:
-: (160, 361, 84)
 
-*** Plot Bumps
+*** plot coefs
 #+begin_src ipython
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Ellipse
+  width = 7
+  golden_ratio = (5**.5 - 1) / 2
+  fig, ax = plt.subplots(1, 2, figsize= [1.5*width, width * golden_ratio])
 
-    width = np.std(coefs_last[0]) * 100.0
-    height = np.std(coefs_last[1]) * 100.0
+  ax[0].scatter(coefs_first[0], coefs_first[1], s=1)
+  # ax[0].set_xlim([-0.15, 0.15]) 
+  # ax[0].set_ylim([-0.15, 0.15])
+  ax[0].set_ylabel('Distractor Axis')
+  ax[0].set_xlabel('Sample Axis')
+  ax[0].set_title('First')
 
-    max = np.max((width, height))
+  ax[1].scatter(coefs_last[0], coefs_last[1], s=1)
+  # ax[1].set_xlim([-0.15, 0.15]) 
+  # ax[1].set_ylim([-0.15, 0.15])
+  ax[1].set_xlabel('Sample Axis')
+  ax[1].set_title('Last')
 
-    print(width, height)
-    # Example parameters for the ellipse: center at (1, 2), width 4, height 2, and angle of rotation 45 degrees
-    ellipse = Ellipse(xy=(1, 2), width=width, height=height, angle=45, edgecolor='r', fc='None', lw=5)
-    fig, ax = plt.subplots()
+  plt.savefig("../figs/landscape/"+ kwargs['mouse'] + "_memories_" + kwargs['penalty'] + '.svg', dpi=300)
 
-    # Add the ellipse to the axes
-    ax.add_patch(ellipse)
-    ax.set_xlim(-1, 3)
-    ax.set_ylim(0, 4)
-
-    # ax.set_xlim([-max, max])
-    # ax.set_ylim([-max, max])
-    plt.show()
+  plt.show()
 #+end_src
 
 #+RESULTS:
 :RESULTS:
-: 3.7912184410436716 3.7982948822252074
-[[file:./.ob-jupyter/b752e4c0c3e2aec2bfaa560a2ea396f0848716ad.png]]
+# [goto error]
+#+begin_example
+  [0;31m---------------------------------------------------------------------------[0m
+  [0;31mNameError[0m                                 Traceback (most recent call last)
+  Cell [0;32mIn[6], line 5[0m
+  [1;32m      2[0m golden_ratio [38;5;241m=[39m ([38;5;241m5[39m[38;5;241m*[39m[38;5;241m*[39m[38;5;241m.5[39m [38;5;241m-[39m [38;5;241m1[39m) [38;5;241m/[39m [38;5;241m2[39m
+  [1;32m      3[0m fig, ax [38;5;241m=[39m plt[38;5;241m.[39msubplots([38;5;241m1[39m, [38;5;241m2[39m, figsize[38;5;241m=[39m [[38;5;241m1.5[39m[38;5;241m*[39mwidth, width [38;5;241m*[39m golden_ratio])
+  [0;32m----> 5[0m ax[[38;5;241m0[39m][38;5;241m.[39mscatter([43mcoefs_first[49m[[38;5;241m0[39m], coefs_first[[38;5;241m1[39m], s[38;5;241m=[39m[38;5;241m1[39m)
+  [1;32m      6[0m [38;5;66;03m# ax[0].set_xlim([-0.15, 0.15]) [39;00m
+  [1;32m      7[0m [38;5;66;03m# ax[0].set_ylim([-0.15, 0.15])[39;00m
+  [1;32m      8[0m ax[[38;5;241m0[39m][38;5;241m.[39mset_ylabel([38;5;124m'[39m[38;5;124mDistractor Axis[39m[38;5;124m'[39m)
+
+  [0;31mNameError[0m: name 'coefs_first' is not defined
+#+end_example
+[[file:./.ob-jupyter/17c976748947177251ae57e327c535dbc083cc83.png]]
+:END:
+
+#+begin_src ipython
+  norm_coefs_first = coefs_first / np.linalg.norm(coefs_first, axis=-1)[:, np.newaxis]
+  norm_coefs_last = coefs_last / np.linalg.norm(coefs_last, axis=-1)[:, np.newaxis]
+
+  angle_first = np.arccos(np.dot(norm_coefs_first[0], norm_coefs_first[1])) * 180/np.pi
+  angle_last = np.arccos(np.dot(norm_coefs_last[0], norm_coefs_last[1])) * 180/np.pi
+  
+  print(angle_first, angle_last)
+#+end_src
+
+#+RESULTS:
+: 89.62898208770777 86.40019290477156
+
+*** Plot Bumps
+#+begin_src ipython
+  import matplotlib.pyplot as plt
+  from matplotlib.patches import Ellipse
+
+  fig, ax = plt.subplots(figsize=[5.25, 5])
+
+  width = np.std(coefs_first[0]) * 100.0
+  height = np.std(coefs_first[1]) * 100.0
+  radius = np.sqrt(width**2 + height**2)
+  
+  ellipse_first = Ellipse(xy=(0, 0), width=width, height=height, angle=0, edgecolor='b', fc='None', lw=2)
+
+  width = np.std(coefs_last[0]) * 100.0
+  height = np.std(coefs_last[1]) * 100.0
+  radius = np.sqrt(width**2 + height**2)
+
+  ellipse_last = Ellipse(xy=(0, 0), width=width, height=height, angle=0, edgecolor='r', fc='None', lw=2)
+
+  max = np.max((width, height))
+
+  print(width, height)
+
+
+  # Add the ellipse to the axes
+  ax.add_patch(ellipse_first)
+  ax.add_patch(ellipse_last)
+  ax.set_xlim(-1.5, 1.5)
+  ax.set_ylim(-1, 1)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: 5.368894316151367 3.8101921753860206
+[[file:./.ob-jupyter/95064e1fff9da92b7fef274fbc88e8f08e380b97.png]]
+:END:
+
+#+begin_src ipython  
+  task = 1
+  X_norm = X_last[task]
+  # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
+  plot_bump(X_norm, y_first[task], 'all', int(X_first[task].shape[1] * .1))
+  plt.savefig("../figs/landscape/"+ kwargs['mouse'] + "_bump_first_" + str(task) + '_trials_' + kwargs['penalty'] + '.svg', dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (48, 693, 84)
+[[file:./.ob-jupyter/119d76a2dda29922f34274b950c60644ca10482e.png]]
 :END:
 
 #+begin_src ipython
   task = 0
-  X_norm = X_first[task]
-  # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
-  plot_bump(X_norm, y_first[task], 'all', int(X_first[task].shape[1] * .1))
-#+end_src
-
-#+RESULTS:
-[[file:./.ob-jupyter/f74bc9d5e85e8134566fc33a50f5a4c0598eebbb.png]]
-
-#+begin_src ipython
   X_norm = X_last[task]
-  # X_norm = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
-  plot_bump(X_norm, y_last[task], 'all', int(X_last[task].shape[1] * .1))
+  # X_norm = preprocess_X(X_norm, scaler="robust", avg_noise=1, unit_var=0)
+  idx = np.random.randint(48)
+  print(idx)
+  
+  plot_bump(X_norm, y_last[task], idx, int(X_last[task].shape[1] * .2))
+  plt.savefig("../figs/landscape/"+ kwargs['mouse'] + "_bump_last_" + str(task) + '_trials_' + str(idx) + '_' + kwargs['penalty'] + '.svg', dpi=300)
+  plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/24b6d402cf01f231e1908ec7b768232daceeadd5.png]]
+:RESULTS:
+: 22
+: (48, 693, 84)
+[[file:./.ob-jupyter/4219990bffcb5bfe5291289c429fc41e40d7c142.png]]
+:END:
 
 *** Save Data
 #+begin_src ipython
@@ -265,23 +279,24 @@
 
 #+RESULTS:
 
+
+
 * Energy Landscape
 #+begin_src ipython
   opts = set_options(T_WINDOW=0.0)
-  print(opts['T_WINDOW'])
+
+  bins = None
   # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
   # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  #  bins = np.concatenate( (opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
   # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
-  # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  
-  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_DELAY']))
-  bins = opts['bins_PRE_DIST']
-  # bins = None
+  # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD']))
+  bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = opts['bins_PRE_DIST']
+  # bins = opts['bins_DELAY']
 #+end_src
 
 #+RESULTS:
-: 0.0
 
 ** Parameters
 #+begin_src ipython
@@ -297,8 +312,8 @@
 
   IF_HMM = 0
   n_iter = 100
-  IF_BOOT=1
-  IF_NORM=0
+  IF_BOOT=0
+  IF_NORM=1
 #+end_src
 
 #+RESULTS:
@@ -308,34 +323,14 @@
 ** Compute Energy
 
 #+begin_src ipython
-  def get_energy(X_, y_, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
-
-    # X = []
-    # for i in range(3):
-    #   X_i = X_[i]
-    #   X.append(X_i[y_[i]==1])
-
-    # X = np.vstack(X)
-    # print(X.shape)
-    if task=='all':
-      X = np.vstack(X_)
-    elif task==13:
-      X = np.vstack((X_[0], X_[-1]))
-    else:
-      X = X_[task]
-    
-    if IF_NORM:
-        X = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
-
-    if bins is not None:
-      X = X[..., bins]
-
+  def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
     ci_ = None
-    energy_ = run_energy(X, num_bins, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+    energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
     if IF_BOOT:
-        _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=10000)
-
-    return energy_, ci_
+        _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
+    if ci_ is not None:
+      ci_ = ci_ / 2.0
+    return energy_, ci_ 
 #+end_src
 
 #+RESULTS:
@@ -346,7 +341,7 @@
 
     plot_energy(energy_first,  ci=ci_first, ax=ax, window=window, SMOOTH=SMOOTH, color='b')
     plot_energy(energy_last, ci=ci_last, ax=ax, window=window, SMOOTH=SMOOTH, color='r')
-    # plt.ylim([0, .2])
+    # plt.ylim([0, .3])
     # plt.xlim([0, 270])
     plt.savefig("../figs/landscape/"+ kwargs['mouse'] + "_" + str(kwargs['task']) + '_trials_' + kwargs['penalty'] + '.svg', dpi=300)
     plt.show()   
@@ -355,17 +350,18 @@
 #+RESULTS:
 
 #+begin_src ipython
-  energy_first, ci_first = get_energy(X_first, y_first, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
+  X_first_rs = np.swapaxes(X_first, 0, 1)
+  energy_first, ci_first = get_energy(X_first_rs, y_first, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
 #+end_src
 
 #+RESULTS:
-: bootstrap: 100% 10000/10000 [00:34<00:00, 289.76it/s]
-:
 
 #+begin_src ipython
-  energy_last, ci_last = get_energy(X_last, y_last, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
+  X_last_rs = np.swapaxes(X_last, 0, 1)
+  energy_last, ci_last = get_energy(X_last_rs, y_last, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
 #+end_src
 
+#+RESULTS:
 
 #+begin_src ipython
   SMOOTH = 1
@@ -374,8 +370,64 @@
 #+end_src
 
 #+RESULTS:
+[[file:./.ob-jupyter/b00e6839b5a19e35230aee16a2ddb018fc59c0c7.png]]
+
+#+begin_src ipython
+kwargs['mouse']
+#+end_src
+
+#+RESULTS:
+: JawsM15
+
+**** velocity
+#+begin_src ipython
+def compute_phase_velocity(phases, dt):
+    # Calculate raw phase differences
+    raw_diffs = np.diff(phases, axis=1)
+    # Adjust for phase wrapping
+    phase_diffs = (raw_diffs + 180) % 360 - 180
+    # Calculate phase velocity
+    phase_velocity = phase_diffs / dt
+    return phase_velocity
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  _, phi_first = decode_bump(X_first[0], axis=1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print('phase_first', phi_first.shape, phi_first.min() * 180 / np.pi, phi_first.max() * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+: phase_first (96, 84) -179.98792045484757 179.9552104812942
+
+#+begin_src ipython
+  phi_first = phi_first * 180 / np.pi + 180
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  vel = compute_phase_velocity(phi_first, 1.0/6.0)
+  print(vel.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 83)
+
+#+begin_src ipython
+plt.plot(vel[3])
+#+end_src
+
+#+RESULTS:
 :RESULTS:
-[[file:./.ob-jupyter/2063f618674f069632ac32223575230d98935a03.png]]
+| <matplotlib.lines.Line2D | at | 0x7f6b24d45ca0> |
+[[file:./.ob-jupyter/c87112368cbde2dad885212999f82fe9cd28642d.png]]
 : /home/leon/dual_task/dual_data/org/../dual_data/attractor/energy.py:159: RuntimeWarning: invalid value encountered in log
 :   energy = -np.log(steady_state) + np.log(Z)
 :END:
@@ -473,7 +525,6 @@
 #+end_src
 
 #+RESULTS:
-
 
 * Model
 ** Mastro

@@ -451,7 +451,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
         kwargs["laser"],
     )
     print("##########################################")
-
     idx_trials = True
     if kwargs["trials"] == "correct":
         idx_trials = ~y.response.str.contains("incorrect")

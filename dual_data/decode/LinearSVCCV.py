@@ -52,7 +52,7 @@ class LinearSVCCV(LinearClassifierMixin, SparseCoefMixin, BaseEstimator):
             fit_intercept=self.fit_intercept,
             intercept_scaling=self.intercept_scaling,
             class_weight=self.class_weight,
-            verbose=self.verbose,
+            verbose=self.verbose,            
             random_state=self.random_state,
             max_iter=self.max_iter,
         )

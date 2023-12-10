@@ -25,13 +25,17 @@ def get_labels_task(y, task, perf_type, SAMPLE="all", IF_LASER=0):
         idx_paired = ((y.sample_odor == 0) & (y.test_odor == 0)) | (
             (y.sample_odor == 1) & (y.test_odor == 1)
         )
-
+        
+        print(np.mean(idx_paired))
+        
         idx &= idx_paired
     elif ("rej" in perf_type) or ("fa" in perf_type):
         idx_unpaired = ((y.sample_odor == 0) & (y.test_odor == 1)) | (
             (y.sample_odor == 1) & (y.test_odor == 0)
         )
         idx &= idx_unpaired
+        
+        print(np.mean(idx_unpaired))
 
     return idx
 
@@ -61,13 +65,13 @@ def perf_tasks_days(tasks, y_days, perf_type="correct_hit", SAMPLE="all", IF_LAS
                 idx = y_day.response.str.contains(perf_type)
 
             perf_day.append(np.mean(idx))
-            # _, ci = my_boots_ci(idx, np.mean, verbose=0, n_samples=1000)
+            _, ci = my_boots_ci(idx, np.mean, verbose=0, n_samples=1000)
                 
             # perf_day.append(np.sum(idx))
             # _, ci = my_boots_ci(idx, np.sum, verbose=0, n_samples=1000)
             
-            # ci_day.append(ci[0])
-            ci_day.append(0)
+            ci_day.append(ci[0])
+            # ci_day.append(0)
 
         perf_task.append(perf_day)
         ci_task.append(ci_day)
@@ -95,27 +99,27 @@ def run_perf_tasks(**kwargs):
     
     n_days = len(y_days.day.unique())
     day_list = np.arange(1, n_days + 1)
-
+    
     figname = options["mouse"] + "_behavior_tasks_" + perf_type
     fig = plt.figure(figname)
 
     for i in range(len(tasks)):
         if tasks[i] == "DPA":
-            plt.plot(day_list, perf_off[i], "-o", color=gv.pal[i], ms=1.5, label="DPA")
-            plt.errorbar(day_list, perf_off[i], yerr=ci_off[i].T, fmt="none", alpha=1, color=gv.pal[0])
+            plt.plot(day_list, perf_off[i], "-o", color=kwargs['pal'][i], ms=5, label="DPA")
+            plt.errorbar(day_list, perf_off[i], yerr=ci_off[i].T, fmt="none", alpha=1, color=kwargs['pal'][0])
         elif tasks[i] == "DualGo":
-            plt.plot(day_list + 0.1, perf_off[i], "-o", color=gv.pal[1], ms=1.5, label="DualGo")
+            plt.plot(day_list + 0.1, perf_off[i], "-o", color=kwargs['pal'][1], ms=5, label="DualGo")
             plt.errorbar(
                 day_list + 0.1,
                 perf_off[i],
                 yerr=ci_off[i].T,
                 fmt="none",
                 alpha=1,
-                color=gv.pal[1],
+                color=kwargs['pal'][1],
             )
         elif tasks[i] == "DualNoGo":
             plt.plot(
-                day_list + 0.2, perf_off[i], "-o", color=gv.pal[2], ms=1.5, label="DualNoGo"
+                day_list + 0.2, perf_off[i], "-o", color=kwargs['pal'][2], ms=5, label="DualNoGo"
             )
             plt.errorbar(
                 day_list + 0.2,
@@ -123,27 +127,27 @@ def run_perf_tasks(**kwargs):
                 yerr=ci_off[i].T,
                 fmt="none",
                 alpha=1,
-                color=gv.pal[2],
+                color=kwargs['pal'][2],
             )
         else:
-            plt.plot(day_list, perf_off[i], "-o", color='k', ms=1.5, label="all")
+            plt.plot(day_list, perf_off[i], "-o", color='k', ms=5, label="all")
             plt.errorbar(
-                day_list, perf_off[i], yerr=ci_off[i].T, fmt="none", alpha=1, color=gv.pal[i]
+                day_list, perf_off[i], yerr=ci_off[i].T, fmt="none", alpha=1, color=kwargs['pal'][i]
             )
             
     plt.plot([1, day_list[-1]], [0.5, 0.5], "--k", alpha=0.5)
 
     plt.xlabel("Day")
-    plt.ylabel(perf_type)
+    plt.ylabel('Correct Rejections')
     plt.ylim([0.25, 1.25])
     plt.xticks(gv.days)
-
+    
     if "rej" in perf_type:
         plt.yticks([0., 0.25, 0.5, 0.75, 1])
     else:
         plt.yticks([0., 0.25, 0.5, 0.75, 1])
         
-    plt.xlim([0.8, day_list[-1] + 0.2])
+    plt.xlim([0.8, 6 + 0.25])
     # plt.legend(loc='best', frameon=False)
     
     pkl_save(fig, figname, path=gv.figdir)

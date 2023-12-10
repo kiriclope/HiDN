@@ -49,7 +49,7 @@ def get_coef_feat(X_days, y_days, **options):
     
     coefs, model = get_coefs(model, X_avg, y, **options)
     
-    coefs = coefs / np.linalg.norm(coefs)
+    # coefs = coefs / np.linalg.norm(coefs)
     return coefs, model
 
 
@@ -133,26 +133,43 @@ def run_get_overlap(**kwargs):
             n_samples=1000,
         )
 
-    if options["show_AB"]:
+    if options["show_AB"]=="A":        
         plot_overlap(data=A, ci=overlap_ci, **options)
-        plot_overlap(data=B, ci=overlap_ci, **options)
-    plot_overlap(data=overlap, ci=overlap_ci, **options)
+    elif options["show_AB"] =="B":
+        if options["overlap"] == "sample":
+            plot_overlap(data=-B, ci=overlap_ci, **options)
+        else:
+            plot_overlap(data=B, ci=overlap_ci, **options)
+    else:
+        plot_overlap(data=overlap, ci=overlap_ci, **options)
 
+    return overlap
 
 def plot_overlap(data, ci=None, **options):
-    figname = (
-        options["mouse"] + "_" + options["task"] + "_" + options["overlap"] + "_overlap"
-    )
 
+    figname = options["mouse"] + "_overlap"
+    
+    if 'task' in options['plot']:    
+        figname += "_" + options["task"] 
+        
+    if 'day' in options['plot']:            
+        figname += "_" + options["day"]
+        
+    if 'overlap' in options['plot']:
+        figname += "_" + options["overlap"]
+        
+    if options["show_AB"]:
+        figname += "_" + str(options["show_AB"])
+            
     fig = plt.figure(figname)
 
     xtime = np.linspace(0, options["duration"], data.shape[-1])
     
-    if options["day"] == "first":
-        pal = sns.color_palette("muted")
-    else:
-        pal = sns.color_palette("bright")
-        
+    # if options["day"] == "first":
+    #     pal = sns.color_palette("muted")
+    # else:
+    pal = sns.color_palette("bright")
+    
     paldict = {
         "DPA": pal[3],
         "DualGo": pal[0],
@@ -161,8 +178,21 @@ def plot_overlap(data, ci=None, **options):
         "all": pal[4],
     }
 
-    plt.plot(xtime, data, color=paldict[options["task"]])
+    if options['day'] == 'first':
+        alpha = .25
+    else:
+        alpha = 1
     
+    if options['overlap'] == "sample":
+        ms = 'o'
+    else:
+        ms = 's'
+        
+    if options['laser'] ==0:        
+        plt.plot(xtime, data, color=paldict[options["task"]], alpha=alpha)
+    else:
+        plt.plot(xtime, data, color='k', alpha=alpha)
+        
     plt.plot([0, options['duration']], [0, 0], "--k")
     
     if ci is not None:
@@ -170,7 +200,7 @@ def plot_overlap(data, ci=None, **options):
             xtime,
             data - ci[:, 0],
             data + ci[:, 1],
-            alpha=0.25,
+            alpha=0.1,
             color=paldict[options["task"]],
         )
 
@@ -182,7 +212,7 @@ def plot_overlap(data, ci=None, **options):
     
     plt.xlabel("Time (s)")
     plt.ylabel("Overlap")
-
+    
     save_fig(fig, figname)
     print("Done")
 
