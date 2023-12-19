@@ -1,11 +1,11 @@
-# Dual Task Data Analysis Repository
-This project contains the code to analyze the calcium imaging recordings from the dual task.
+# HiDN a ML pipeline for sparse high dimensional data
+This project contains code to analyse high dimensional data.
 
 ## Introduction
-Explain what is your project about, the problem it solves, and its uses.
+Here we implement different pipelines for classification/regression of high dimensional data with small sample size.
 
 ## Requirements
-Highlight the tech, tools, libraries, and Python versions needed to run the project.
+sklearn, numpy, scipy
 
 ## Installation
 Provide clear instructions on how to get your development environment running.
