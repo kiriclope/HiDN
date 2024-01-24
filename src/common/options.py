@@ -160,7 +160,7 @@ def set_options(**kwargs):
     opts["n_alpha"] = 10
 
     inv_frame = 0  # 1 / frame_rate
-    opts['T_WINDOW'] = 0.0
+    opts['T_WINDOW'] = 0.5
     
     opts.update(kwargs)
     
@@ -242,7 +242,7 @@ def set_options(**kwargs):
 
     opts["bins_CUE"] = opts["bins"][int((t_CUE[0] + opts['T_WINDOW']) * frame_rate) : int(t_CUE[1] * frame_rate)]
 
-    opts["bins_RWD"] = opts["bins"][int((t_RWD[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD[1] * frame_rate)]
+    opts["bins_RWD"] = opts["bins"][int((t_RWD[0]) * frame_rate) : int(t_RWD[1] * frame_rate)]
     
     opts["bins_LD"] = opts["bins"][int((t_LD[0] + opts['T_WINDOW']) * frame_rate) : int(t_LD[1] * frame_rate)]
     

@@ -1,0 +1,470 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session at :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+  
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+
+  from src.common.fig_grid import create_grid
+  from src.overlap.get_cos import run_get_cos, plot_bump
+  from src.attractor.energy import run_energy, plot_energy 
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl  
+  from src.preprocess.helpers import preprocess_X
+  from src.common.options import set_options
+  from src.common.plot_utils import add_vlines
+
+#+end_src
+
+#+RESULTS:
+* Parameters
+
+#+begin_src ipython
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = ['first', 'last']
+  
+  kwargs = dict()
+  kwargs = {'prescreen': None, 'pval': 0.05, 'trials': 'correct', 'balance': 'under', 'laser':0,
+            'method': 'bootstrap',
+            'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
+            'bootstrap': False, 'n_boots': 1000,
+            'preprocess': True, 'scaler_BL':'robust',
+            'avg_noise': True, 'unit_var_BL':False,
+            'clf': 'log_loss', 'scaler': None,
+            'tol':0.001, 'penalty': 'l1',
+            'shrinkage': 'auto',
+            'class_weight': None, 'random_state': None,
+            'in_fold': 'stratified', 'n_in': 10,
+            'n_repeats': 10,
+            'n_lambda': 20,
+            'T_WINDOW': 0.25,
+            }
+
+  kwargs['mouse'] = 'JawsM15'
+  kwargs['reload']= False
+  kwargs['data_type'] = 'raw'
+#+end_src
+
+#+RESULTS:
+
+* Single mouse
+*** Locations on the Ring
+
+#+begin_src ipython  
+  day = 'first'
+  X_first, y_first, coefs_first = run_get_cos(day=day, **kwargs)
+  
+  day = 'last'
+  kwargs['reload']= False 
+  X_last, y_last, coefs_last = run_get_cos(day=day, **kwargs)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (55, 693, 84) X_S2 (70, 693, 84)
+  coefs dist (693,)
+  non_zeros 329
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (95, 693, 84) X_S2 (100, 693, 84)
+  coefs sample (693,)
+  non_zeros 332
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES test TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (75, 693, 84) X_S2 (50, 693, 84)
+  coefs test (693,)
+  non_zeros 296
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (55, 693, 84) X_S2 (70, 693, 84)
+  coefs rwd (693,)
+  non_zeros 343
+  idx (693,) c_sample (693,)
+  ##########################################
+  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (55, 693, 84) X_S2 (70, 693, 84)
+  ##########################################
+  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (55, 693, 84) X_S2 (70, 693, 84)
+  ##########################################
+  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (55, 693, 84) X_S2 (70, 693, 84)
+  Done
+  (4, 693)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (78, 693, 84) X_S2 (82, 693, 84)
+  coefs dist (693,)
+  non_zeros 354
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (124, 693, 84) X_S2 (125, 693, 84)
+  coefs sample (693,)
+  non_zeros 316
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES test TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (83, 693, 84) X_S2 (77, 693, 84)
+  coefs test (693,)
+  non_zeros 340
+  ##########################################
+  MODEL: log_loss FOLDS stratified RESAMPLE under SCALER None PRESCREEN None PCA False METHOD bootstrap
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (78, 693, 84) X_S2 (82, 693, 84)
+  coefs rwd (693,)
+  non_zeros 343
+  idx (693,) c_sample (693,)
+  ##########################################
+  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (78, 693, 84) X_S2 (82, 693, 84)
+  ##########################################
+  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (78, 693, 84) X_S2 (82, 693, 84)
+  ##########################################
+  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (78, 693, 84) X_S2 (82, 693, 84)
+  Done
+  (4, 693)
+#+end_example
+#+RESULTS:
+
+#+begin_src ipython
+  width = 7
+  golden_ratio = (5**.5 - 1) / 2
+  fig, ax = plt.subplots(1, 2, figsize= [1.5*width, width * golden_ratio])
+
+  ax[0].scatter(coefs_first[0], coefs_first[1], s=1)
+  ax[0].set_xlim([-0.15, 0.15]) 
+  ax[0].set_ylim([-0.15, 0.15])
+  ax[0].set_ylabel('Distractor Axis')
+  ax[0].set_xlabel('Sample Axis')
+  ax[0].set_title('First')
+
+  ax[1].scatter(coefs_last[0], coefs_last[1], s=1)
+  ax[1].set_xlim([-0.15, 0.15]) 
+  ax[1].set_ylim([-0.15, 0.15])
+  ax[1].set_xlabel('Sample Axis')
+  ax[1].set_title('Last')
+
+  plt.savefig("../figs/landscape/"+ kwargs['mouse'] + "_memories_" + kwargs['penalty'] + '.svg', dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/6846c951acb3eaa40b10b87eaa0c8f91ba045ec6.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+**** save/load
+#+begin_src ipython
+  filename = "../data/" + kwargs['mouse'] + "/coefs_first_" + kwargs['penalty'] + ".pkl"
+  pkl.dump(coefs_first, open(filename + ".pkl", "wb"))
+
+  filename = "../data/" + kwargs['mouse'] + "/coefs_last_" + kwargs['penalty'] + ".pkl"
+  pkl.dump(coefs_last, open(filename + ".pkl", "wb"))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  filename = "../data/" + kwargs['mouse'] + "/coefs_first_" + kwargs['penalty'] + ".pkl"
+  coefs_first = pkl.load(open(filename + ".pkl", "rb"))
+
+  filename = "../data/" + kwargs['mouse'] + "/coefs_last_" + kwargs['penalty'] + ".pkl"
+  coefs_last = pkl.load(open(filename + ".pkl", "rb"))
+#+end_src
+
+#+RESULTS:
+
+* valente
+
+#+begin_src ipython
+  sys.path.append('/home/leon/populations_paper_code/')
+
+  from matplotlib.patches import Ellipse
+  from low_rank_rnns import helpers, raposo, mante, regressions, clustering
+  import low_rank_rnns.mixedselectivity as ms
+  color = sns.color_palette('deep')[0]
+  
+#+end_src
+
+#+RESULTS:
+
+** Scatter
+
+#+begin_src ipython
+  def plot_scatter(coefs_first, ax=None):
+
+    if ax is None:
+      fig, ax = plt.subplots(figsize=(4, 4))
+
+    ax.scatter(coefs_first[0], coefs_first[1], color=color, s=1)
+    helpers.center_axes(ax)
+    # ax.set_xlim(-.1, .1)
+    # ax.set_ylim(-.1, .1)
+
+    X = coefs_first.T
+
+    cov = X.T @ X / X.shape[0]
+    eigvals, eigvecs = np.linalg.eig(cov)
+    v1 = eigvecs[:, 0]
+    angle = np.arctan(v1[1] / v1[0])
+    angle = angle * 180 / np.pi
+    std_factor = 1
+    ax.add_artist(Ellipse(xy=[0, 0], 
+                          angle=angle,
+                          width=np.sqrt(eigvals[0]) * 2 * std_factor, 
+                          height=np.sqrt(eigvals[1]) * 2 * std_factor, 
+                          fill=True, fc='silver', ec='black', lw=1, zorder=-1, alpha=0.2))
+    
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  i,j= 0,3
+  vec_first = np.array([coefs_first[i], coefs_first[j]])
+  vec_last = np.array([coefs_last[i], coefs_last[j]])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+  plot_scatter(vec_first, ax=ax[0])
+  plot_scatter(vec_last, ax=ax[1])
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/c9d946b5afd17b3e63e4b8f7c31cdac2f1cf42a9.png]]
+
+** Clustering 
+
+#+begin_src ipython
+  def plot_cluster(vecs, n_pop=2, ax=None):
+    if ax is None:
+      fig, ax = plt.subplots(figsize=(4, 4))
+
+    z, model = clustering.gmm_fit(vecs.T, n_pops, algo='bayes', n_init=50, random_state=2020)
+    z = 1 - z   # inverting population labels for presentation purposes
+
+    clustering.pop_scatter_linreg(vecs[0], vecs[1], z, n_pop, colors=colors, linreg=False, ax=ax)
+    # plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  colors = ['seagreen', 'rebeccapurple', 'r']
+  n_pop=2
+  
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+  plot_cluster(vec_first, n_pop, ax=ax[0])
+  plot_cluster(vec_last, n_pop, ax=ax[1])
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/eb2e5b3bdb1a39a921ce8d646a9de2385c10fe5b.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** ePAIRS
+
+#+begin_src ipython
+  figsize=(8,4)
+  fig, ax = plt.subplots(1, 2, figsize=(8, 4))  
+  ms.epairs(vec_first.T, 1, 30, figsize=figsize, col=color, ax=ax[0])
+  ms.epairs(vec_last.T, 1, 30, figsize=figsize, col=color, ax=ax[1])
+
+  ax[0].set_xlim([0, .1])
+  ax[1].set_xlim([0, .1])
+#+end_src
+
+#+RESULTS:
+: (1, 693)
+: clusteriness: -0.09067361227647018
+: data mean: 0.081, mc mean: 0.080
+: KS 2 sample test: p=0.08252488832163411
+: Wilcoxon rank-sum test: p=0.7433418169483657
+: Kruskal-Wallis test: p=0.7433418169484138
+
+* RNN trained on DMS
+
+#+begin_src ipython
+from low_rank_rnns.modules import *
+from low_rank_rnns import dms, ranktwo, clustering, helpers
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  hidden_size = 500
+  noise_std = 5e-2
+  alpha = 0.2
+  net = LowRankRNN(2, hidden_size, 1, noise_std, alpha, rank=2)
+  net.load_state_dict(torch.load(f'/home/leon/populations_paper_code/models/dms_rank2_500.pt', map_location='cpu'))
+  net.svd_reparametrization()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  m1 = -net.m[:,0].detach().numpy()
+  n1 = -net.n[:,0].detach().numpy()
+
+  m2 = -net.m[:,1].detach().numpy()
+  n2 = -net.n[:,1].detach().numpy()
+
+  wi1 = net.wi[0].detach().numpy()
+  wi2 = net.wi[1].detach().numpy()
+  
+  wo = net.wo[:,0].detach().numpy()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print(net.m.shape)
+  print(net.wi.shape)
+  print(net.wo.shape)
+#+end_src
+
+#+RESULTS:
+: torch.Size([500, 2])
+: torch.Size([2, 500])
+: torch.Size([500, 1])
+
+#+begin_src ipython
+  figsize = plt.rcParams['figure.figsize']
+  figsize = (figsize[0], figsize[1])
+  conn_space = np.array([wi1, wi2, n1, m2, n2, m2]).transpose()
+  ms.epairs(conn_space, 500, figsize=figsize, xlim=(.1, .8), col=color)
+  # plt.savefig('figure_1/epairs_raposo.pdf', bbox_inches='tight')
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (500, 500)
+: clusteriness: 0.5054646173270512
+: data mean: 0.426, mc mean: 0.458
+: KS 2 sample test: p=4.139148762146412e-18
+: Wilcoxon rank-sum test: p=4.1878957952915215e-26
+: Kruskal-Wallis test: p=4.1878368725910396e-26
+| 4.1878957952915215e-26 | 0.5054646173270512 |
+[[file:./.ob-jupyter/6b6a10bc3bbfe8f7a48a8e2b61886062adc9b8d3.png]]
+:END:
+
+#+begin_src ipython
+  plot_scatter(np.array([wi1, wi2]))
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/08e6fc25554feed0a436d1d496d0abe7acfee2e3.png]]
+
+#+begin_src ipython
+  colors = ['seagreen', 'rebeccapurple', 'r']
+
+  n_pop = 2
+  vecs = clustering.make_vecs(net)
+  
+  z, model = clustering.gmm_fit(vecs, n_pops, algo='bayes', n_init=50, random_state=2020)
+  z = 1 - z   # inverting population labels for presentation purposes
+
+  clustering.pop_scatter_linreg(wi1, wi2, z, n_pop, colors=colors, linreg=False)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/72648d62bc65fe44c2745e544ca0db41e418e0d6.png]]
+
+#+begin_src ipython
+
+#+end_src

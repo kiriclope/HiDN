@@ -2,7 +2,7 @@ import xml.etree.ElementTree as ET
 
 import matplotlib
 import matplotlib.pyplot as plt
-from svgutils.compose import SVG, Figure, Text
+from svgutils.compose import SVG, Figure, Panel, Text
 
 
 def get_svg_size(svg_file):
@@ -31,7 +31,7 @@ def create_test_svg(title):
     plt.close("all")
 
 
-def create_grid(figlist, figname, dim, fontsize=22):
+def create_grid(figlist, figname, dim):
     width, height = get_svg_size(figlist[0])
     print(width, height)
     size = ["%dpt" % (dim[0] * width), "%dpt" % (dim[1] * height)]
@@ -48,7 +48,7 @@ def create_grid(figlist, figname, dim, fontsize=22):
             chr(65 + i),
             25 + (i % dim[0]) * width,
             20 + (i // dim[0]) * height,
-            size=fontsize,
+            size=16,
             weight="bold",
         )
         # Add them to the figure

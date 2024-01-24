@@ -3,6 +3,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
+
 print("Python exe")
 print(sys.executable)
 

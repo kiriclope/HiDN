@@ -30,13 +30,18 @@ def get_coef_feat(X_days, y_days, **options):
     model = get_clf(**options)
     
     if options["features"] == "sample":
-        options["task"] = "all"
+        options["task"] = "all"        
         options["epochs"] = ["ED"]
         options["overlap"] = "sample"
         
     elif options["features"] == "distractor":
         options["task"] = "Dual"
-        options["epochs"] = ["MD"]
+
+        if options["overlap"] == 'rwd':
+            options["epochs"] = ["MD"]
+        else:
+            options["epochs"] = ["RWD"]
+        
         options["overlap"] = "distractor"
         
     elif options["features"] == "test":

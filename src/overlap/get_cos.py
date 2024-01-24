@@ -52,6 +52,7 @@ def run_get_cos(**kwargs):
     X_days, y_days = get_X_y_days(**options)
     
     options['trials'] = 'correct'
+    
     options["features"] = "distractor"
     c_dist, _ = get_coef_feat(X_days, y_days, **options)
     print("coefs dist", np.array(c_dist).shape)
@@ -61,7 +62,18 @@ def run_get_cos(**kwargs):
     c_sample, _ = get_coef_feat(X_days, y_days, **options)
     print("coefs sample", np.array(c_sample).shape)
     print('non_zeros', np.sum(c_sample>.0001))
-        
+
+    options["features"] = "test"
+    c_test, _ = get_coef_feat(X_days, y_days, **options)
+    print("coefs test", np.array(c_test).shape)
+    print('non_zeros', np.sum(c_test>.0001))
+
+    options["features"] = "distractor"
+    options["overlap"] = "rwd"    
+    c_rwd, _ = get_coef_feat(X_days, y_days, **options)
+    print("coefs rwd", np.array(c_rwd).shape)
+    print('non_zeros', np.sum(c_rwd>.0001))
+    
     # theta = np.arctan2(c_dist, c_sample)
     
     e1, e2 = gram_schmidt(c_sample, c_dist)
@@ -117,7 +129,7 @@ def run_get_cos(**kwargs):
     # print(X.shape)
     print("Done")
     # return X_day_task, y_day_task, X_task, y_task, theta
-    coefs = np.vstack((c_sample, c_dist))
+    coefs = np.vstack((c_sample, c_dist, c_rwd, c_test))
     print(coefs.shape)
     
     return X_task, y_task, coefs
