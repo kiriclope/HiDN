@@ -1,0 +1,575 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session train :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+  
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.append('/home/leon/populations_paper_code/')
+  
+  import low_rank_rnns.dms as dms
+  from low_rank_rnns.modules import *
+#+end_src
+
+#+RESULTS:
+
+* Training
+** Parameters
+
+#+begin_src ipython
+  hidden_size = 512
+  noise_std = 5e-2
+  alpha = 0.2
+  global_nepochs = 20
+#+end_src
+
+#+RESULTS:
+
+** Full rank
+
+#+begin_src ipython
+  # Training full rank network
+  net_fr = FullRankRNN(2, hidden_size, 1, noise_std, alpha)
+
+  dms.delay_duration_max = 2000
+  dms.setup()
+
+  x_train, y_train, mask_train, x_val, y_val, mask_val = dms.generate_dms_data(1000)
+
+  initial_wrec = net_fr.wrec.detach().cpu().numpy()
+  
+  train(net_fr, x_train, y_train, mask_train, lr=1e-5, n_epochs=10, early_stop=0.05, keep_best=True, cuda=True)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  Training...
+  initial loss: 1.000
+  epoch 0:  loss=1.000  (took 2.31 s) *
+  epoch 1:  loss=0.997  (took 2.32 s) *
+  epoch 2:  loss=0.997  (took 2.31 s) *
+  epoch 3:  loss=0.993  (took 2.31 s) *
+  epoch 4:  loss=0.989  (took 2.30 s) *
+  epoch 5:  loss=0.972  (took 2.30 s) *
+  epoch 6:  loss=0.932  (took 2.32 s) *
+  epoch 7:  loss=0.871  (took 2.32 s) *
+  epoch 8:  loss=0.796  (took 2.31 s) *
+  epoch 9:  loss=0.707  (took 2.31 s) *
+#+end_example
+
+#+begin_src ipython
+  torch.save(net_fr.state_dict(), f"/home/leon/populations_paper_code/models/dms_fullrank_{hidden_size}.pt") 
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+# net_fr.load_state_dict(torch.load(f"../models/dms_fullrank_{hidden_size}.pt"))
+#+end_src
+
+#+RESULTS:
+
+#+RESULTS:
+: torch.Size([200, 205, 2]) torch.Size([200, 205, 1]) torch.Size([200, 205, 1])
+
+#+begin_src ipython
+  loss, acc = dms.test_dms(net_fr, x_val, y_val, mask_val)
+  print("final loss: {}\nfinal accuracy: {}".format(loss, acc))
+
+  dms.confusion_matrix(net_fr)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  final loss: 0.6711661219596863
+  final accuracy: 1.0
+              | different  |    same    
+  ----------------------------------------
+      A-A     |    0.00    |    1.00    
+  ----------------------------------------
+      B-B     |    0.00    |    1.00    
+  ----------------------------------------
+      A-B     |    1.00    |    0.00    
+  ----------------------------------------
+      B-A     |    1.00    |    0.00    
+  ----------------------------------------
+#+end_example
+
+** Low rank
+*** First batch
+
+#+begin_src ipython 
+  wi_init = net_fr.wi.detach()
+  wo_init = net_fr.wo.detach() * hidden_size
+  u, s, v = np.linalg.svd(net_fr.wrec.detach().cpu().numpy())
+
+  m_init = torch.from_numpy(s[:2] * u[:, :2]).to(device=net_fr.wrec.device) * sqrt(hidden_size)
+  n_init = torch.from_numpy(v[:2, :].transpose()).to(device=net_fr.wrec.device) * sqrt(hidden_size)
+  
+  print(m_init.std().item() * sqrt(hidden_size))
+  print(n_init.std().item() * sqrt(hidden_size))
+  print(wo_init.std().item() * hidden_size)
+  print(wi_init.std().item())
+#+end_src
+
+#+RESULTS:
+: 45.345380262231124
+: 22.615400088522097
+: 500.93499755859375
+: 1.0056970119476318
+
+#+begin_src ipython
+  net = LowRankRNN(2, hidden_size, 1, noise_std, alpha, rank=2, wi_init=wi_init, wo_init=wo_init, m_init=m_init, n_init=n_init)
+
+
+  dms.delay_duration_max = 700
+  dms.setup()
+  x_train, y_train, mask_train, x_val, y_val, mask_val = dms.generate_dms_data(1000)
+  
+  train(net, x_train, y_train, mask_train, lr=1e-2, n_epochs=100, early_stop=0.05, keep_best=True, cuda=True, clip_gradient=.01)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  Training...
+  initial loss: 1.000
+  epoch 0:  loss=1.000  (took 2.10 s) *
+  epoch 1:  loss=0.999  (took 2.01 s) *
+  epoch 2:  loss=1.001  (took 2.00 s)
+  epoch 3:  loss=1.000  (took 2.00 s)
+  epoch 4:  loss=0.999  (took 2.00 s)
+  epoch 5:  loss=1.000  (took 2.00 s)
+  epoch 6:  loss=1.000  (took 1.99 s)
+  epoch 7:  loss=1.000  (took 1.99 s)
+  epoch 8:  loss=0.999  (took 2.00 s)
+  epoch 9:  loss=1.001  (took 2.01 s)
+  epoch 10:  loss=1.001  (took 2.00 s)
+  epoch 11:  loss=1.000  (took 2.01 s)
+  epoch 12:  loss=1.000  (took 2.00 s)
+  epoch 13:  loss=1.000  (took 2.00 s)
+  epoch 14:  loss=1.000  (took 2.00 s)
+  epoch 15:  loss=1.000  (took 2.01 s)
+  epoch 16:  loss=1.000  (took 1.99 s)
+  epoch 17:  loss=1.000  (took 2.00 s)
+  epoch 18:  loss=1.000  (took 1.99 s)
+  epoch 19:  loss=1.000  (took 1.99 s)
+  epoch 20:  loss=1.000  (took 2.00 s)
+  epoch 21:  loss=1.000  (took 1.99 s)
+  epoch 22:  loss=0.999  (took 2.00 s)
+  epoch 23:  loss=0.999  (took 1.99 s) *
+  epoch 24:  loss=1.000  (took 1.99 s)
+  epoch 25:  loss=1.000  (took 1.99 s)
+  epoch 26:  loss=0.999  (took 1.99 s) *
+  epoch 27:  loss=1.002  (took 2.00 s)
+  epoch 28:  loss=1.001  (took 1.99 s)
+  epoch 29:  loss=1.000  (took 1.99 s)
+  epoch 30:  loss=1.000  (took 1.99 s)
+  epoch 31:  loss=0.999  (took 2.00 s)
+  epoch 32:  loss=1.000  (took 2.00 s)
+  epoch 33:  loss=1.000  (took 2.00 s)
+  epoch 34:  loss=1.000  (took 2.00 s)
+  epoch 35:  loss=1.000  (took 2.00 s)
+  epoch 36:  loss=0.999  (took 2.00 s)
+  epoch 37:  loss=1.000  (took 1.99 s)
+  epoch 38:  loss=1.000  (took 1.99 s)
+  epoch 39:  loss=1.001  (took 1.99 s)
+  epoch 40:  loss=1.000  (took 1.99 s)
+  epoch 41:  loss=1.000  (took 1.99 s)
+  epoch 42:  loss=1.000  (took 1.99 s)
+  epoch 43:  loss=0.999  (took 1.99 s)
+  epoch 44:  loss=0.999  (took 2.00 s)
+  epoch 45:  loss=1.000  (took 1.99 s)
+  epoch 46:  loss=1.001  (took 1.99 s)
+  epoch 47:  loss=1.001  (took 1.99 s)
+  epoch 48:  loss=1.000  (took 1.99 s)
+  epoch 49:  loss=1.000  (took 1.99 s)
+  epoch 50:  loss=1.000  (took 1.99 s)
+  epoch 51:  loss=1.000  (took 1.99 s)
+  epoch 52:  loss=1.000  (took 1.99 s)
+  epoch 53:  loss=1.000  (took 2.00 s)
+  epoch 54:  loss=1.000  (took 1.99 s)
+  epoch 55:  loss=1.000  (took 1.99 s)
+  epoch 56:  loss=1.000  (took 1.99 s)
+  epoch 57:  loss=1.000  (took 1.99 s)
+  epoch 58:  loss=1.000  (took 1.99 s)
+  epoch 59:  loss=1.000  (took 1.99 s)
+  epoch 60:  loss=1.000  (took 1.99 s)
+  epoch 61:  loss=1.000  (took 1.99 s)
+  epoch 62:  loss=1.000  (took 2.00 s)
+  epoch 63:  loss=1.000  (took 1.99 s)
+  epoch 64:  loss=1.000  (took 1.99 s)
+  epoch 65:  loss=1.000  (took 2.00 s)
+  epoch 66:  loss=1.000  (took 1.99 s)
+  epoch 67:  loss=1.000  (took 1.99 s)
+  epoch 68:  loss=1.000  (took 1.99 s)
+  epoch 69:  loss=1.000  (took 2.00 s)
+  epoch 70:  loss=1.000  (took 1.99 s)
+  epoch 71:  loss=1.000  (took 1.99 s)
+  epoch 72:  loss=1.000  (took 2.00 s)
+  epoch 73:  loss=1.000  (took 1.99 s)
+  epoch 74:  loss=0.999  (took 1.99 s)
+  epoch 75:  loss=1.000  (took 1.99 s)
+  epoch 76:  loss=1.000  (took 1.99 s)
+  epoch 77:  loss=1.000  (took 1.99 s)
+  epoch 78:  loss=1.000  (took 2.00 s)
+  epoch 79:  loss=1.000  (took 1.99 s)
+  epoch 80:  loss=0.999  (took 1.99 s)
+  epoch 81:  loss=1.000  (took 1.99 s)
+  epoch 82:  loss=1.000  (took 2.00 s)
+  epoch 83:  loss=1.000  (took 1.99 s)
+  epoch 84:  loss=1.000  (took 2.00 s)
+  epoch 85:  loss=1.001  (took 1.98 s)
+  epoch 86:  loss=1.000  (took 1.99 s)
+  epoch 87:  loss=1.000  (took 1.99 s)
+  epoch 88:  loss=1.000  (took 1.99 s)
+  epoch 89:  loss=1.000  (took 1.99 s)
+  epoch 90:  loss=1.000  (took 1.99 s)
+  epoch 91:  loss=0.942  (took 1.99 s) *
+  epoch 92:  loss=0.917  (took 1.99 s) *
+  epoch 93:  loss=1.060  (took 1.99 s)
+  epoch 94:  loss=1.002  (took 2.00 s)
+  epoch 95:  loss=1.001  (took 1.99 s)
+  epoch 96:  loss=0.999  (took 1.99 s)
+  epoch 97:  loss=0.997  (took 1.99 s)
+  epoch 98:  loss=1.001  (took 1.99 s)
+  epoch 99:  loss=1.001  (took 1.99 s)
+#+end_example
+
+#+begin_src ipython
+  loss, acc = dms.test_dms(net, x_val, y_val, mask_val)
+  print("final loss: {}\nfinal accuracy: {}".format(loss, acc))
+  print("final loss: {}\nfinal accuracy: {}".format(loss, acc))
+  dms.confusion_matrix(net)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  final loss: 1.0965005159378052
+  final accuracy: 0.5199999809265137
+  final loss: 1.0965005159378052
+  final accuracy: 0.5199999809265137
+              | different  |    same    
+  ----------------------------------------
+      A-A     |    0.93    |    0.07    
+  ----------------------------------------
+      B-B     |    1.00    |    0.00    
+  ----------------------------------------
+      A-B     |    1.00    |    0.00    
+  ----------------------------------------
+      B-A     |    1.00    |    0.00    
+  ----------------------------------------
+#+end_example
+
+*** Second batch
+
+#+begin_src ipython
+  ## Second training batch
+  dms.delay_duration_max = 1000
+  dms.setup()
+  x_train, y_train, mask_train, x_val, y_val, mask_val = dms.generate_dms_data(1000)
+  #train(net, x_train, y_train, mask_train, lr=global_lr, n_epochs=global_nepochs, keep_best=True, plot_learning_curve=True,
+  #      plot_gradient=True)
+
+  train(net, x_train, y_train, mask_train, lr=1e-3, n_epochs=50, early_stop=0.05, keep_best=True, cuda=True, clip_gradient=1)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  Training...
+  initial loss: 1.069
+  epoch 0:  loss=1.080  (took 2.18 s)
+  epoch 1:  loss=1.088  (took 2.17 s)
+  epoch 2:  loss=1.082  (took 2.17 s)
+  epoch 3:  loss=1.070  (took 2.17 s)
+  epoch 4:  loss=1.064  (took 2.17 s) *
+  epoch 5:  loss=1.023  (took 2.17 s) *
+  epoch 6:  loss=1.059  (took 2.17 s)
+  epoch 7:  loss=1.046  (took 2.17 s)
+  epoch 8:  loss=1.041  (took 2.18 s)
+  epoch 9:  loss=1.008  (took 2.18 s) *
+  epoch 10:  loss=1.024  (took 2.17 s)
+  epoch 11:  loss=1.026  (took 2.17 s)
+  epoch 12:  loss=1.003  (took 2.17 s) *
+  epoch 13:  loss=1.024  (took 2.17 s)
+  epoch 14:  loss=1.008  (took 2.18 s)
+  epoch 15:  loss=1.003  (took 2.17 s)
+  epoch 16:  loss=1.004  (took 2.17 s)
+  epoch 17:  loss=0.995  (took 2.18 s) *
+  epoch 18:  loss=0.998  (took 2.17 s)
+  epoch 19:  loss=0.973  (took 2.17 s) *
+  epoch 20:  loss=0.932  (took 2.17 s) *
+  epoch 21:  loss=0.890  (took 2.17 s) *
+  epoch 22:  loss=0.862  (took 2.17 s) *
+  epoch 23:  loss=0.840  (took 2.17 s) *
+  epoch 24:  loss=0.825  (took 2.17 s) *
+  epoch 25:  loss=0.807  (took 2.17 s) *
+  epoch 26:  loss=0.800  (took 2.17 s) *
+  epoch 27:  loss=0.798  (took 2.17 s) *
+  epoch 28:  loss=0.771  (took 2.17 s) *
+  epoch 29:  loss=0.824  (took 2.17 s)
+  epoch 30:  loss=0.804  (took 2.17 s)
+  epoch 31:  loss=0.764  (took 2.17 s) *
+  epoch 32:  loss=0.788  (took 2.17 s)
+  epoch 33:  loss=0.757  (took 2.17 s) *
+  epoch 34:  loss=0.774  (took 2.17 s)
+  epoch 35:  loss=0.783  (took 2.17 s)
+  epoch 36:  loss=0.767  (took 2.17 s)
+  epoch 37:  loss=0.824  (took 2.17 s)
+  epoch 38:  loss=0.779  (took 2.17 s)
+  epoch 39:  loss=0.794  (took 2.17 s)
+  epoch 40:  loss=0.805  (took 2.17 s)
+  epoch 41:  loss=0.752  (took 2.18 s) *
+  epoch 42:  loss=0.804  (took 2.17 s)
+  epoch 43:  loss=0.787  (took 2.17 s)
+  epoch 44:  loss=0.763  (took 2.17 s)
+  epoch 45:  loss=0.721  (took 2.16 s) *
+  epoch 46:  loss=0.720  (took 2.16 s) *
+  epoch 47:  loss=0.687  (took 2.17 s) *
+  epoch 48:  loss=0.720  (took 2.16 s)
+  epoch 49:  loss=0.677  (took 2.18 s) *
+#+end_example
+
+#+begin_src ipython
+  loss, acc = dms.test_dms(net, x_val, y_val, mask_val)
+  print("final loss: {}\nfinal accuracy: {}".format(loss, acc))
+  dms.confusion_matrix(net)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  final loss: 0.7263391017913818
+  final accuracy: 0.7199999690055847
+              | different  |    same    
+  ----------------------------------------
+      A-A     |    0.02    |    0.98    
+  ----------------------------------------
+      B-B     |    1.00    |    0.00    
+  ----------------------------------------
+      A-B     |    1.00    |    0.00    
+  ----------------------------------------
+      B-A     |    1.00    |    0.00    
+  ----------------------------------------
+#+end_example
+
+*** Third batch
+
+#+begin_src ipython
+  ## Third training batch
+  dms.delay_duration_max = 4000
+  dms.setup()
+  x_train, y_train, mask_train, x_val, y_val, mask_val = dms.generate_dms_data(1000)
+  #train(net, x_train, y_train, mask_train, lr=global_lr, n_epochs=global_nepochs, keep_best=True, plot_learning_curve=True,
+  #      plot_gradient=True)
+  train(net, x_train, y_train, mask_train, lr=1e-4, batch_size=128, n_epochs=40, early_stop=0.05, keep_best=True, cuda=True)  
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  Training...
+  initial loss: 0.661
+  epoch 0:  loss=0.699  (took 1.01 s)
+  epoch 1:  loss=0.666  (took 1.01 s)
+  epoch 2:  loss=0.648  (took 1.01 s) *
+  epoch 3:  loss=0.654  (took 1.01 s)
+  epoch 4:  loss=0.687  (took 1.00 s)
+  epoch 5:  loss=0.667  (took 1.00 s)
+  epoch 6:  loss=0.673  (took 1.00 s)
+  epoch 7:  loss=0.664  (took 1.00 s)
+  epoch 8:  loss=0.668  (took 1.00 s)
+  epoch 9:  loss=0.658  (took 1.00 s)
+  epoch 10:  loss=0.670  (took 1.01 s)
+  epoch 11:  loss=0.658  (took 1.00 s)
+  epoch 12:  loss=0.637  (took 1.01 s) *
+  epoch 13:  loss=0.696  (took 1.01 s)
+  epoch 14:  loss=0.673  (took 1.01 s)
+  epoch 15:  loss=0.659  (took 1.01 s)
+  epoch 16:  loss=0.675  (took 1.01 s)
+  epoch 17:  loss=0.639  (took 1.02 s)
+  epoch 18:  loss=0.639  (took 1.01 s)
+  epoch 19:  loss=0.661  (took 1.01 s)
+  epoch 20:  loss=0.670  (took 1.01 s)
+  epoch 21:  loss=0.655  (took 1.00 s)
+  epoch 22:  loss=0.668  (took 1.01 s)
+  epoch 23:  loss=0.642  (took 1.00 s)
+  epoch 24:  loss=0.649  (took 1.01 s)
+  epoch 25:  loss=0.663  (took 1.01 s)
+  epoch 26:  loss=0.666  (took 1.01 s)
+  epoch 27:  loss=0.682  (took 1.00 s)
+  epoch 28:  loss=0.634  (took 1.01 s) *
+  epoch 29:  loss=0.647  (took 1.01 s)
+  epoch 30:  loss=0.664  (took 1.01 s)
+  epoch 31:  loss=0.651  (took 1.01 s)
+  epoch 32:  loss=0.666  (took 1.01 s)
+  epoch 33:  loss=0.631  (took 1.01 s) *
+  epoch 34:  loss=0.634  (took 1.01 s)
+  epoch 35:  loss=0.649  (took 1.01 s)
+  epoch 36:  loss=0.661  (took 1.01 s)
+  epoch 37:  loss=0.654  (took 1.01 s)
+  epoch 38:  loss=0.626  (took 1.01 s) *
+  epoch 39:  loss=0.666  (took 1.01 s)
+#+end_example
+
+#+begin_src ipython  
+  loss, acc = dms.test_dms(net, x_val, y_val, mask_val)
+  print("final loss: {}\nfinal accuracy: {}".format(loss, acc))
+  dms.confusion_matrix(net)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  final loss: 0.6668319702148438
+  final accuracy: 0.7450000047683716
+              | different  |    same    
+  ----------------------------------------
+      A-A     |    0.00    |    1.00    
+  ----------------------------------------
+      B-B     |    1.00    |    0.00    
+  ----------------------------------------
+      A-B     |    1.00    |    0.00    
+  ----------------------------------------
+      B-A     |    1.00    |    0.00    
+  ----------------------------------------
+#+end_example
+
+#+begin_src ipython
+  torch.save(net.state_dict(), f"/home/leon/populations_paper_code/models/dms_rank2_{hidden_size}.pt")
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+  dist = int(2*np.random.uniform())
+  n_trials = 10
+  x = dms.std_default * torch.randn(n_trials, dms.total_duration, 2)
+
+  # Sample durations
+  delay_duration = np.random.uniform(dms.delay_duration_min, dms.delay_duration_max)
+  delay_duration_discrete = floor(delay_duration / dms.deltaT)
+
+  stimulus1_duration = np.random.uniform(dms.stimulus1_duration_min, dms.stimulus1_duration_max)
+  stimulus1_duration_discrete = floor(stimulus1_duration / dms.deltaT)
+
+  #  dist_duration = np.random.uniform(dms.dist_duration_min, dms.dist_duration_max)
+  # dist_duration_discrete = floor(dist_duration / dms.deltaT)
+
+  stimulus2_duration = np.random.uniform(dms.stimulus2_duration_min, dms.stimulus2_duration_max)
+  stimulus2_duration_discrete = floor(stimulus2_duration / dms.deltaT)
+
+  decision_time_discrete = dms.fixation_duration_discrete + stimulus1_duration_discrete + \
+                           delay_duration_discrete + stimulus2_duration_discrete
+
+  stim1_begin = dms.fixation_duration_discrete
+  stim1_end = stim1_begin + stimulus1_duration_discrete
+
+  # dist_begin = stim1_end + floor(500.0 / dms.deltaT)
+  # dist_end = dist_begin + dist_duration_discrete
+
+  stim2_begin = stim1_end + delay_duration_discrete
+  stim2_end = stim2_begin + stimulus2_duration_discrete
+
+  input1=1
+  input2=1
+
+  x[0, stim1_begin:stim1_end, 0] += input1
+  x[0, stim1_begin:stim1_end, 1] += 1 - input1
+
+  # x[0, dist_begin:dist_end, 0] += dist
+  # x[0, dist_begin:dist_end, 1] += 1 - dist
+
+  x[0, stim2_begin:stim2_end, 0] += input2
+  x[0, stim2_begin:stim2_end, 1] += 1 - input2
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def time_mapping(t):
+    return t * dms.deltaT / 1000
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython 
+  outp1, trajectories = net.forward(x.to('cuda'), return_dynamics=True)
+  trajectories = trajectories.cpu().detach().numpy().squeeze()
+  rates = np.tanh(trajectories)
+  time = time_mapping(np.arange(x.shape[1]))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(rates.shape)
+#+end_src
+
+#+RESULTS:
+: (10, 306, 512)
+
+#+begin_src ipython
+  plt.plot(time, np.mean(rates[0], 1)[1:])
+#+end_src
+#+RESULTS:
+:RESULTS:
+| <matplotlib.lines.Line2D | at | 0x7f093eb28790> |
+[[file:./.ob-jupyter/6b63d53732fae1882a03dfe6085862e1157d32df.png]]
+:END:
+
+#+begin_src ipython
+  fig, ax = plt.subplots()
+  # x = x.squeeze().numpy()
+  print(x.shape)
+  ax.plot(time, x[0, :, 0], lw=4)
+  ax.plot(time, x[0, :, 1], lw=4)
+  ax.set_axis_off()
+  ax.set_xticks([])
+  ax.set_yticks([])
+  ax.spines['left'].set_visible(False)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: torch.Size([10, 305, 2])
+[[file:./.ob-jupyter/decdd203dc4379dde3d9c72db251628dc0c34462.png]]
+:END:
+
+
+#+begin_src ipython
+  fig, ax = plt.subplots()
+  out = outp1.cpu().detach().squeeze().numpy()
+  print(out.shape)
+  ax.plot(time_mapping(np.arange(out.shape[1])), out[0],  lw=4, zorder=30)
+  ax.plot(time_mapping(np.arange(out.shape[1])), out[4], lw=4, zorder=30)
+  # ax.set_axis_off()
+  # helpers.center_axes(ax)
+  # ax.plot([0, 0.2], [-1, -1], c='gray', lw=4)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (10, 305)
+[[file:./.ob-jupyter/ce4cf67e77df7828ed51d7ad340b205bb55d388f.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src

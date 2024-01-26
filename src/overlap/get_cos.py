@@ -57,38 +57,44 @@ def run_get_cos(**kwargs):
     c_dist, _ = get_coef_feat(X_days, y_days, **options)
     print("coefs dist", np.array(c_dist).shape)
     print('non_zeros', np.sum(c_dist>.0001))
-
+    
     options["features"] = "sample"
-    c_sample, _ = get_coef_feat(X_days, y_days, **options)
-    print("coefs sample", np.array(c_sample).shape)
-    print('non_zeros', np.sum(c_sample>.0001))
+    options["overlap"] = "ED"
+    c_ED, _ = get_coef_feat(X_days, y_days, **options)
+    print("coefs ED", np.array(c_ED).shape)
+    print('non_zeros', np.sum(c_ED>.0001))
 
-    options["features"] = "test"
-    c_test, _ = get_coef_feat(X_days, y_days, **options)
-    print("coefs test", np.array(c_test).shape)
-    print('non_zeros', np.sum(c_test>.0001))
+    options["overlap"] = "MD"
+    c_MD, _ = get_coef_feat(X_days, y_days, **options)
+    print("coefs MD", np.array(c_MD).shape)
+    print('non_zeros', np.sum(c_MD>.0001))
 
-    options["features"] = "distractor"
-    options["overlap"] = "rwd"    
-    c_rwd, _ = get_coef_feat(X_days, y_days, **options)
-    print("coefs rwd", np.array(c_rwd).shape)
-    print('non_zeros', np.sum(c_rwd>.0001))
+    options["overlap"] = "LD"
+    c_LD, _ = get_coef_feat(X_days, y_days, **options)
+    print("coefs LD", np.array(c_LD).shape)
+    print('non_zeros', np.sum(c_LD>.0001))
     
-    # theta = np.arctan2(c_dist, c_sample)
+    # options["features"] = "test"
+    # c_test, _ = get_coef_feat(X_days, y_days, **options)
+    # print("coefs test", np.array(c_test).shape)
+    # print('non_zeros', np.sum(c_test>.0001))
+
+    # options["features"] = "distractor"
+    # options["overlap"] = "rwd"    
+    # c_rwd, _ = get_coef_feat(X_days, y_days, **options)
+    # print("coefs rwd", np.array(c_rwd).shape)
+    # print('non_zeros', np.sum(c_rwd>.0001))
     
-    e1, e2 = gram_schmidt(c_sample, c_dist)
+    e1, e2 = gram_schmidt(c_ED, c_dist)
     theta = np.arctan2(e2, e1)
     
     index_order = theta.argsort()
-    print('idx', index_order.shape, 'c_sample', c_sample.shape)
+    print('idx', index_order.shape, 'c_sample', c_ED.shape)
     
     options['trials'] = trials
     
     X_task = []
     y_task = []
-
-    X_day_task = []
-    y_day_task = []
     
     for task in ['DPA', 'DualGo', 'DualNoGo']:
         options["task"] = task  
@@ -99,37 +105,8 @@ def run_get_cos(**kwargs):
         X_task.append(X)
         y_task.append(y)
         
-        # X_day = []
-        # y_day = []
-        
-        # for day in range(1, options['n_days'] + 1):
-        #     options['day'] = day
-        #     X, y = get_X_y_S1_S2(X_days, y_days, **options)
-        #     X = X[:, index_order, :]
-            
-        #     X_day.append(X)
-        #     y_day.append(y)
-        
-        # X_day_task.append(X)
-        # y_day_task.append(y)
-        
-    # T = np.column_stack((e1, e2))
-    # vec = np.ones(X.shape[1])
-    # new_vec = np.dot(T.T, vec)
-    # theta = to_polar_coords_in_N_dims(new_vec)
-
-    # x_t = []
-    # for i in range(X.shape[0]):
-    #     new_x = T_inv.dot(X[i])
-    #     x_t.append(to_polar_coords_in_N_dims(new_x))
-
-    # x_t = np.array(x_t)
-    
-    # X = X[:, index_order, :]
-    # print(X.shape)
     print("Done")
-    # return X_day_task, y_day_task, X_task, y_task, theta
-    coefs = np.vstack((c_sample, c_dist, c_rwd, c_test))
+    coefs = np.vstack((c_ED, c_dist, c_MD, c_LD))
     print(coefs.shape)
     
     return X_task, y_task, coefs

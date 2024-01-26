@@ -30,8 +30,15 @@ def get_coef_feat(X_days, y_days, **options):
     model = get_clf(**options)
     
     if options["features"] == "sample":
-        options["task"] = "all"        
-        options["epochs"] = ["ED"]
+        options["task"] = "all"
+
+        if options["overlap"] == "ED":
+            options["epochs"] = ["ED"]
+        elif options["overlap"] == "MD":
+            options["epochs"] = ["MD"]
+        elif options["overlap"] == "LD":
+            options["epochs"] = ["LD"]
+            
         options["overlap"] = "sample"
         
     elif options["features"] == "distractor":
@@ -46,7 +53,7 @@ def get_coef_feat(X_days, y_days, **options):
         
     elif options["features"] == "test":
         options["task"] = "Dual"
-        options["epochs"] = ["CHOICE"]
+        options["epochs"] = ["TEST"]
         options["overlap"] = "test"
     
     X, y = get_X_y_S1_S2(X_days, y_days, **options)

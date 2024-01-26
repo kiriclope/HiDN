@@ -267,7 +267,7 @@ def preprocess_df(X, y, **kwargs):
             avg_noise=kwargs["avg_noise_BL"],
             unit_var=kwargs["unit_var_BL"],
         )
-
+    
     return X_scaled
 
 
