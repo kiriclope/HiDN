@@ -2,95 +2,6 @@
 #+STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session my_session :kernel torch
 
-#+BEGIN_SRC ipython
-  import torch
-  import torch.nn as nn
-  import torch.nn.functional as F
-
-  class MultivariateRNN(nn.Module):
-      def __init__(self, input_size, hidden_size, num_layers, output_size, device='cuda', decay_rate=0.1):
-          super(MultivariateRNN, self).__init__()
-
-          self.input_size = input_size
-          self.hidden_size = hidden_size
-          self.output_size = output_size
-
-          self.num_layers = num_layers
-
-          # Weight matrices
-          self.W_ih = nn.Parameter(torch.Tensor(hidden_size, input_size))
-          self.W_hh = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
-          # Bias terms
-          self.b_ih = nn.Parameter(torch.Tensor(hidden_size))
-          self.b_hh = nn.Parameter(torch.Tensor(hidden_size))
-
-          self.fc = nn.Linear(hidden_size, output_size)
-          # Decay rate for the hidden state
-          self.decay_rate = decay_rate
-          self.exp_decay = torch.exp(-torch.tensor(decay_rate))
-          # Initialize parameters
-          self.reset_parameters()
-
-      def reset_parameters(self):
-          # Initialize weight and bias parameters using xavier initialization or another preferred method
-          nn.init.xavier_uniform_(self.W_ih)
-          nn.init.xavier_uniform_(self.W_hh)
-          nn.init.zeros_(self.b_ih)
-          nn.init.zeros_(self.b_hh)
-
-      def forward(self, x):
-          # x is of shape (batch_size, sequence_length, input_size)
-          batch_size, seq_length, _ = x.size()
-          # hidden_state = torch.zeros(batch_size, self.W_hh.size(0))
-          hidden_state = torch.zeros(batch_size, self.W_hh.size(0), device=x.device)
-
-          outputs = []
-          for t in range(seq_length):
-              # Compute new hidden state:
-              hidden_state = torch.tanh(
-                  torch.mm(x[:, t], self.W_ih.t()) + self.b_ih +
-                  torch.mm(hidden_state, self.W_hh.t()) + self.b_hh)
-              # Apply exponential decay: 
-              if t > 0:
-                  # Apply decay rate on the hidden state from the previous time step
-                  hidden_state = hidden_state * self.exp_decay
-              # Collect outputs
-              outputs.append(self.fc(hidden_state.unsqueeze(1)))
-
-          # Concatenate outputs along the time dimension
-          outputs = torch.cat(outputs, dim=1)
-
-          return outputs
-#+END_SRC
-
-#+RESULTS:
-
-#+BEGIN_SRC ipython
-  # Example usage:
-  input_size = 10
-  hidden_size = 20
-  num_layers = 1
-  output_size = 10
-
-  decay_rate = 0.1
-
-  seq_length = 5
-  batch_size = 3
-
-  model = MultivariateRNN(input_size, hidden_size, num_layers, output_size, decay_rate)
-  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-  model.to(device)
-
-  input_tensor = torch.randn(batch_size, seq_length, input_size)
-  input_tensor = input_tensor.to(device)
-
-  output = model(input_tensor)
-  print(input_tensor.shape, output.shape)
-#+END_SRC
-
-#+RESULTS:
-: torch.Size([3, 5, 10]) torch.Size([3, 5, 10])
-
 * Notebook Settings
 
 #+begin_src ipython
@@ -120,72 +31,8 @@
 
 #+RESULTS:
 
-* Torch model
-** RNN
-*** Model
-
-#+begin_src ipython
-  # Define the RNN model
-  class MultivariateRNN(nn.Module):
-      def __init__(self, input_size, hidden_size, num_layers, output_size, device):
-          super(MultivariateRNN, self).__init__()
-          self.hidden_size = hidden_size
-          self.num_layers = num_layers
-          self.device=device
-          # You can swap nn.RNN with nn.LSTM or nn.GRU depending on your requirements
-
-          self.rnn = nn.RNN(input_size, hidden_size, num_layers,
-                            batch_first=True, nonlinearity='relu', device=self.device)
-
-          self.fc = nn.Linear(hidden_size, output_size, device=self.device)
-
-          DT = 0.1
-          TAU = 20
-
-          self.DT_TAU = DT/TAU
-          self.EXP_DT_TAU = np.exp(-DT/TAU)
-
-      def forward(self, input):
-          # Initial hidden state (can also initialize this outside and pass it as a parameter)
-          rates = torch.zeros(self.num_layers, input.size(1), self.hidden_size, device=self.device)
-          h = torch.zeros(self.num_layers, input.size(1), self.hidden_size, device=self.device)
-          
-          # Forward propagate the RNN
-          h, _ = self.rnn(input, rates)
-          rates = self.EXP_DT_TAU * rates + self.DT_TAU * h
-          output = self.fc(rates)
-
-          return output
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  model = MultivariateRNN(100, 100, 1, 100, 'cuda')
-  h = torch.zeros((1, 1, 100)).to('cuda')
-  model(h)
-#+end_src
-
-#+RESULTS:
-#+begin_example
-  tensor([[[ 0.0743,  0.0349, -0.0281,  0.0244,  0.0638, -0.0326, -0.0098,
-            -0.0893, -0.0864,  0.0060, -0.0675,  0.0550, -0.0947, -0.0688,
-             0.0893,  0.0037, -0.0952, -0.0735, -0.0637,  0.0374, -0.0392,
-            -0.0892, -0.0861,  0.0955, -0.0957, -0.0601,  0.0050, -0.0573,
-            -0.0101, -0.0468, -0.0750,  0.0093, -0.0496,  0.0580,  0.0404,
-            -0.0109, -0.0046,  0.0811,  0.0832, -0.0034, -0.0890, -0.0895,
-            -0.0485, -0.0620, -0.0397, -0.0410,  0.0560,  0.0687,  0.0319,
-             0.0292,  0.0970,  0.0766,  0.0810,  0.0926,  0.0071, -0.0206,
-            -0.0410, -0.0890, -0.0930, -0.0726, -0.0713, -0.0730,  0.0188,
-             0.0178,  0.0304, -0.0033, -0.0768,  0.0896,  0.0487, -0.0550,
-            -0.0873, -0.0742, -0.0879,  0.0261,  0.0960,  0.0327, -0.0123,
-            -0.0355,  0.0805, -0.0619, -0.0210,  0.0105,  0.0337,  0.0168,
-            -0.0204,  0.0357,  0.0311, -0.0377, -0.0324, -0.0346,  0.0420,
-             0.0939, -0.0045, -0.0886, -0.0213, -0.0426,  0.0186,  0.0023,
-            -0.0154, -0.0235]]], device='cuda:0', grad_fn=<ViewBackward0>)
-#+end_example
-
-*** Sliding Window
+* Utils
+** Sliding Window
 
 #+begin_src ipython
   class SlidingWindowDataset(Dataset):
@@ -217,21 +64,21 @@
 
 #+RESULTS:
 
-*** Data Split
+** Data Split
 
 #+begin_src ipython
-  def split_data(X, train_perc=0.8, batch_size=32):
+  def split_data(X, Y, train_perc=0.8, batch_size=32):
 
     # Split the dataset into training and validation sets
-    train_size = int(train_perc * len(X))
+    train_size = int(train_perc * X.shape[0])
 
     X_train = X[:train_size]
     X_test = X[train_size:]
-
+    
     # X_train, X_mean, X_std = standard_scaler(X_train, IF_RETURN=1)
     # X_test = (X_test - X_mean) / X_std
 
-    Y_train = Y[:train_size]
+    Y_train = Y[:train_size]    
     Y_test = Y[train_size:]
 
     # Y_train, Y_mean, Y_std = standard_scaler(Y_train, IF_RETURN=1)
@@ -241,9 +88,12 @@
     # train_dataset = TensorDataset(X_train_scaled, Y_train_scaled)
     # val_dataset = TensorDataset(X_test_scaled, Y_test_scaled)
 
+    print(X_train.shape, Y_train.shape)
     train_dataset = TensorDataset(X_train, Y_train)
+
+    print(X_test.shape, Y_test.shape)
     val_dataset = TensorDataset(X_test, Y_test)
-    
+
     # Create data loaders
     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
@@ -260,7 +110,7 @@
 
 #+RESULTS:
 
-*** Optimization
+** Optimization
 
 #+begin_src ipython
   def train(dataloader, model, loss_fn, optimizer):
@@ -271,7 +121,7 @@
       for batch, (X, y) in enumerate(dataloader):
 
           X, y = X.to(device), y.to(device)
-          
+
           # Compute prediction error
           pred = model(X)
           loss = loss_fn(pred, y)
@@ -283,6 +133,7 @@
 
       return loss
 #+end_src
+
 
 #+RESULTS:
 
@@ -306,17 +157,6 @@
           val_loss /= size
 
       return val_loss
-      # model.eval()
-      # test_loss, correct = 0, 0
-      # with torch.no_grad():
-      #     for X, y in dataloader:
-      #         X, y = X.to(device), y.to(device)
-      #         pred = model(X)
-      #         test_loss += loss_fn(pred, y).item()
-      #         correct += (pred.argmax(1) == y).type(torch.float).sum().item()
-      # test_loss /= num_batches
-      # correct /= size
-      # print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
 #+end_src
 
 #+RESULTS:
@@ -330,21 +170,23 @@
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
-    
+
     # Training loop.
     for epoch in range(num_epochs):
         loss = train(train_loader, model, loss_fn, optimizer)
         val_loss = test(val_loader, model, loss_fn)
         scheduler.step(val_loss)
 
-        if epoch % int(0.1 * num_epochs) == 0:
+        if epoch % int(num_epochs  / 10) == 0:
             print(f'Epoch {epoch}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
 
 #+end_src
 
 #+RESULTS:
 
-*** Prediction
+
+** Prediction
+
 
 #+begin_src ipython
   def get_predictions(model, future_steps, device='cuda:1'):
@@ -420,11 +262,11 @@
   # Define the transformations (preprocessing)
   preprocessing = transforms.Compose([
       transforms.ToTensor(),
-      standard_scaler()
+      # standard_scaler()
   ])
 
   # Create the pipeline
-  model = MyRNNModel()  # Replace with your actual model
+  model = MultivariateRNN()  # Replace with your actual model
   pipeline = MyPipeline(model, preprocessing)
 
   # Now you can use your pipeline to process and feed data into your model
@@ -443,18 +285,18 @@
 # [goto error]
 #+begin_example
   ---------------------------------------------------------------------------
-  TypeError                                 Traceback (most recent call last)
-  Cell In[58], line 18
-       13         return self.model(x)
-       15 # Define the transformations (preprocessing)
+  NameError                                 Traceback (most recent call last)
+  Cell In[10], line 22
        16 preprocessing = transforms.Compose([
        17     transforms.ToTensor(),
-  ---> 18     standard_scaler()
+       18     # standard_scaler()
        19 ])
        21 # Create the pipeline
-       22 model = MyRNNModel()  # Replace with your actual model
+  ---> 22 model = MultivariateRNN()  # Replace with your actual model
+       23 pipeline = MyPipeline(model, preprocessing)
+       25 # Now you can use your pipeline to process and feed data into your model
 
-  TypeError: standard_scaler() missing 1 required positional argument: 'data'
+  NameError: name 'MultivariateRNN' is not defined
 #+end_example
 :END:
 
@@ -488,7 +330,461 @@
 
 #+RESULTS:
 
-** Test on synthetic data
+** Loss
+
+#+begin_src ipython
+  class CustomBCELoss(nn.Module):
+      def __init__(self):
+          super(CustomBCELoss, self).__init__()
+
+      def forward(self, inputs, targets):
+          inputs = torch.cat(inputs, dim=1)
+          y_pred = self.linear(inputs[:, -1, :])
+
+          proba = torch.sigmoid(y_pred).squeeze(-1)
+
+          loss = F.binary_cross_entropy(proba, targets, reduction='none')
+          
+          return loss.mean()  # Or .sum(), or custom reduction as needed.
+#+end_src
+
+#+RESULTS:
+
+* RNN models
+** Vanilla
+
+#+begin_src ipython
+  # Define the RNN model
+  class VanillaRNN(nn.Module):
+      def __init__(self, input_size, hidden_size, num_layers, output_size, device):
+          super(VanillaRNN, self).__init__()
+          self.hidden_size = hidden_size
+          self.num_layers = num_layers
+          self.device=device
+          # You can swap nn.RNN with nn.LSTM or nn.GRU depending on your requirements
+
+          self.rnn = nn.RNN(input_size, hidden_size, num_layers,
+                            batch_first=True, nonlinearity='relu', device=self.device)
+
+          self.fc = nn.Linear(hidden_size, output_size, device=self.device)
+
+          DT = 0.1
+          TAU = 20
+
+          self.DT_TAU = DT/TAU
+          self.EXP_DT_TAU = np.exp(-DT/TAU)
+
+      def forward(self, input):
+          # Initial hidden state (can also initialize this outside and pass it as a parameter)
+          rates = torch.zeros(self.num_layers, input.size(1), self.hidden_size, device=self.device)
+          h = torch.zeros(self.num_layers, input.size(1), self.hidden_size, device=self.device)
+          
+          # Forward propagate the RNN
+          h, _ = self.rnn(input, rates)
+          rates = self.EXP_DT_TAU * rates + self.DT_TAU * h
+          output = self.fc(rates)
+
+          return output
+#+end_src
+
+#+RESULTS:
+
+** Classifier
+
+#+begin_src ipython
+  class CustomCombinedLoss(nn.Module):
+      def __init__(self, weight1=1.0, weight2=1.0):
+          super(CustomCombinedLoss, self).__init__()
+          self.weight1 = weight1
+          self.weight2 = weight2
+          # You could also include additional initializations for 
+          # each distinct condition if necessary.
+
+      def forward(self, inputs, targets):
+          # Condition 1 (for example, Mean Squared Error)
+          loss1 = torch.mean((inputs - targets[0]) ** 2)
+          
+          # Condition 2 (for example, Mean Absolute Error)
+          loss2 = torch.mean(torch.abs(inputs - targets[1]))
+
+          # Combine the two conditions
+          loss = self.weight1 * loss1 + self.weight2 * loss2
+          return loss
+#+end_src
+
+#+BEGIN_SRC ipython
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+
+  class ClassifierRNN(nn.Module):
+      def __init__(self, input_size, hidden_size, num_layers, output_size, device='cuda', dt=.01, noise=0.01, rank=2, alpha=0.0):
+          super(ClassifierRNN, self).__init__()
+
+          self.input_size = input_size
+          self.hidden_size = hidden_size
+          self.output_size = output_size
+
+          self.num_layers = num_layers
+          self.alpha = alpha
+          # Weight matrices
+          self.W_ih = nn.Parameter(torch.Tensor(hidden_size, input_size))
+          self.W_hh = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+          # Bias terms
+          self.b_ih = nn.Parameter(torch.Tensor(hidden_size))
+          self.b_hh = nn.Parameter(torch.Tensor(hidden_size))
+          # Low rank
+          self.xi = nn.Parameter(torch.Tensor(hidden_size, rank))
+
+          self.noise_std = torch.tensor(noise)
+
+          self.linear = nn.Linear(hidden_size, 1)
+          # Decay rate for the hidden state
+
+          with torch.no_grad():
+              self.decay_rate = torch.tensor(dt / 20)
+              self.exp_rate = torch.exp(-self.decay_rate)
+
+              self.decay_syn = torch.tensor(dt / 3)
+              self.exp_syn = torch.exp(-self.decay_syn)
+
+          # Initialize parameters
+          self.reset_parameters()
+
+      def reset_parameters(self):
+          # Initialize weight and bias parameters using xavier initialization or another preferred method
+          nn.init.xavier_uniform_(self.W_ih)
+          nn.init.xavier_uniform_(self.W_hh)
+          nn.init.zeros_(self.b_ih)
+          nn.init.zeros_(self.b_hh)
+          nn.init.normal_(self.xi)
+
+      def forward(self, x):
+          # x is of shape (batch_size, sequence_length, input_size)
+          batch_size, seq_length, _ = x.size()
+
+          rec_inputs = torch.zeros(batch_size, self.hidden_size, device=x.device)
+          rates = torch.zeros(batch_size, self.hidden_size, device=x.device)
+          noise = torch.randn(batch_size, seq_length, self.hidden_size, device=x.device)
+
+          outputs = []
+          for t in range(seq_length):
+
+              ff_inputs = torch.mm(x[:, t], self.W_ih.t()) + self.b_ih
+
+              full = torch.mm(rates, self.W_hh.t()) + self.b_hh
+              lr = rates.matmul(self.xi).matmul(self.xi.t()) / self.hidden_size
+              
+              hidden = (1.0 - self.alpha) * full + self.alpha * lr
+              rec_inputs = self.exp_syn * rec_inputs + self.decay_syn * hidden
+              # rec_inputs = full + lr
+              net_inputs = ff_inputs + rec_inputs + noise[:, t, :] * self.noise_std
+
+              # Compute rates
+              rates = nn.ReLU()(net_inputs)
+              # rates = rates * self.exp_rate + self.decay_rate * nn.ReLU()(net_inputs)
+
+              # Collect outputs
+              outputs.append(rates.unsqueeze(1))
+
+          # Concatenate outputs along the time dimension
+          outputs = torch.cat(outputs, dim=1)
+          y_pred = self.linear(outputs[:, -1, :])
+
+          return torch.sigmoid(y_pred).squeeze(-1)
+#+END_SRC
+
+#+RESULTS:
+
+#+BEGIN_SRC ipython
+  # Example usage:
+  input_size = 10
+  hidden_size = 20
+  num_layers = 1
+  output_size = 10
+
+  decay_rate = 0.1
+
+  seq_length = 5
+  batch_size = 3
+
+  model = ClassifierRNN(input_size, hidden_size, num_layers, output_size, decay_rate)
+  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  model.to(device)
+
+  input_tensor = torch.randn(batch_size, seq_length, input_size)
+  input_tensor = input_tensor.to(device)
+  
+  output = model(input_tensor)
+  print(input_tensor.shape, output.shape)
+#+END_SRC
+
+#+RESULTS:
+: torch.Size([3, 5, 10]) torch.Size([3])
+
+** Rate
+
+#+begin_src ipython
+  class CustomCombinedLoss(nn.Module):
+      def __init__(self, weight1=1.0, weight2=1.0):
+          super(CustomCombinedLoss, self).__init__()
+          self.weight1 = weight1
+          self.weight2 = weight2
+          # You could also include additional initializations for 
+          # each distinct condition if necessary.
+
+      def forward(self, inputs, targets):
+          # Condition 1 (for example, Mean Squared Error)
+          loss1 = torch.mean((inputs - targets[0]) ** 2)
+          
+          # Condition 2 (for example, Mean Absolute Error)
+          loss2 = torch.mean(torch.abs(inputs - targets[1]))
+
+          # Combine the two conditions
+          loss = self.weight1 * loss1 + self.weight2 * loss2
+          return loss
+#+end_src
+
+#+begin_src ipython
+  covariance = torch.tensor([[1.0, self.LR_COV],
+                             [self.LR_COV, 1.0],], dtype=self.FLOAT, device=self.device)
+
+
+  multivariate_normal = MultivariateNormal(mean, covariance)
+  self.ksi = multivariate_normal.sample((Nb,)).T
+
+#+end_src
+
+#+begin_src ipython
+  ff_input = self.Ja0[0] * (1.0 + self.ksi[0] * self.I0[0] * self.M0)
+#+end_src
+
+
+#+BEGIN_SRC ipython
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+
+  class ClassifierRNN(nn.Module):
+      def __init__(self, input_size, hidden_size, num_layers, output_size, device='cuda', dt=.01, noise=0.01, rank=2, alpha=0.0):
+          super(ClassifierRNN, self).__init__()
+
+          self.input_size = input_size
+          self.hidden_size = hidden_size
+          self.output_size = output_size
+
+          self.num_layers = num_layers
+          self.alpha = alpha
+          # Weight matrices
+          self.W_ih = nn.Parameter(torch.Tensor(hidden_size, input_size))
+          self.W_hh = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+          # Bias terms
+          self.b_ih = nn.Parameter(torch.Tensor(hidden_size))
+          self.b_hh = nn.Parameter(torch.Tensor(hidden_size))
+          # Low rank
+          self.xi = nn.Parameter(torch.Tensor(hidden_size, rank))
+
+          self.noise_std = torch.tensor(noise)
+
+          self.linear = nn.Linear(hidden_size, 1)
+          # Decay rate for the hidden state
+
+          with torch.no_grad():
+              self.decay_rate = torch.tensor(dt / 20)
+              self.exp_rate = torch.exp(-self.decay_rate)
+
+              self.decay_syn = torch.tensor(dt / 3)
+              self.exp_syn = torch.exp(-self.decay_syn)
+
+          # Initialize parameters
+          self.reset_parameters()
+
+      def reset_parameters(self):
+          # Initialize weight and bias parameters using xavier initialization or another preferred method
+          nn.init.xavier_uniform_(self.W_ih)
+          nn.init.xavier_uniform_(self.W_hh)
+          nn.init.zeros_(self.b_ih)
+          nn.init.zeros_(self.b_hh)
+          nn.init.normal_(self.xi)
+
+      def forward(self, x):
+          # x is of shape (batch_size, sequence_length, input_size)
+          batch_size, seq_length, _ = x.size()
+
+          rec_inputs = torch.zeros(batch_size, self.hidden_size, device=x.device)
+          rates = torch.zeros(batch_size, self.hidden_size, device=x.device)
+          noise = torch.randn(batch_size, seq_length, self.hidden_size, device=x.device)
+
+          outputs = []
+          for t in range(seq_length):
+
+              ff_inputs = torch.mm(x[:, t], self.W_ih.t()) + self.b_ih
+
+              full = torch.mm(rates, self.W_hh.t()) + self.b_hh
+              lr = rates.matmul(self.xi).matmul(self.xi.t()) / self.hidden_size
+              
+              hidden = (1.0 - self.alpha) * full + self.alpha * lr
+              rec_inputs = self.exp_syn * rec_inputs + self.decay_syn * hidden
+              # rec_inputs = full + lr
+              net_inputs = ff_inputs + rec_inputs + noise[:, t, :] * self.noise_std
+
+              # Compute rates
+              rates = nn.ReLU()(net_inputs)
+              # rates = rates * self.exp_rate + self.decay_rate * nn.ReLU()(net_inputs)
+
+              # Collect outputs
+              outputs.append(rates.unsqueeze(1))
+
+          # Concatenate outputs along the time dimension
+          outputs = torch.cat(outputs, dim=1)
+          y_pred = self.linear(outputs[:, -1, :])
+
+          return torch.sigmoid(y_pred).squeeze(-1)
+#+END_SRC
+
+#+RESULTS:
+
+#+BEGIN_SRC ipython
+  # Example usage:
+  input_size = 10
+  hidden_size = 20
+  num_layers = 1
+  output_size = 10
+
+  decay_rate = 0.1
+
+  seq_length = 5
+  batch_size = 3
+
+  model = ClassifierRNN(input_size, hidden_size, num_layers, output_size, decay_rate)
+  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  model.to(device)
+
+  input_tensor = torch.randn(batch_size, seq_length, input_size)
+  input_tensor = input_tensor.to(device)
+  
+  output = model(input_tensor)
+  print(input_tensor.shape, output.shape)
+#+END_SRC
+
+#+RESULTS:
+: torch.Size([3, 5, 10]) torch.Size([3])
+
+** Multivariate
+
+
+#+BEGIN_SRC ipython
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+
+  class MultivariateRNN(nn.Module):
+      def __init__(self, input_size, hidden_size, num_layers, output_size, device='cuda', dt=.01, noise=0.01, rank=2, alpha=0.5):
+          super(MultivariateRNN, self).__init__()
+
+          self.input_size = input_size
+          self.hidden_size = hidden_size
+          self.output_size = output_size
+          self.alpha = alpha
+          self.num_layers = num_layers
+
+          # Weight matrices
+          self.W_ih = nn.Parameter(torch.Tensor(hidden_size, input_size))
+          self.W_hh = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
+          # Bias terms
+          self.b_ih = nn.Parameter(torch.Tensor(hidden_size))
+          self.b_hh = nn.Parameter(torch.Tensor(hidden_size))
+          self.xi = nn.Parameter(torch.Tensor(hidden_size, rank))
+
+          self.noise_std = torch.tensor(noise)
+
+          self.fc = nn.Linear(hidden_size, output_size, bias=False)
+          # Decay rate for the hidden state
+
+          with torch.no_grad():          
+              self.decay_rate = torch.tensor(dt / 20)
+              self.exp_rate = torch.exp(-self.decay_rate)
+
+              self.decay_syn = torch.tensor(dt / 3)
+              self.exp_syn = torch.exp(-self.decay_syn)
+
+          # Initialize parameters
+          self.reset_parameters()
+
+      def reset_parameters(self):
+          # Initialize weight and bias parameters using xavier initialization or another preferred method
+          nn.init.xavier_uniform_(self.W_ih)
+          nn.init.xavier_uniform_(self.W_hh)
+          nn.init.zeros_(self.b_ih)
+          nn.init.zeros_(self.b_hh)
+          nn.init.normal_(self.xi)
+
+      def forward(self, x):
+          # x is of shape (batch_size, sequence_length, input_size)
+          batch_size, seq_length, _ = x.size()
+
+          rec_inputs = torch.zeros(batch_size, self.W_hh.size(0), device=x.device)
+          rates = torch.zeros(batch_size, self.W_hh.size(0), device=x.device)
+          noise = torch.randn(batch_size, seq_length, self.W_hh.size(0), device=x.device)
+
+          outputs = []
+          for t in range(seq_length):
+              
+              ff_inputs = torch.mm(x[:, t], self.W_ih.t()) + self.b_ih
+              hidden = torch.mm(rates, self.W_hh.t()) + self.b_hh
+
+              full = torch.mm(rates, self.W_hh.t()) + self.b_hh
+              lr = rates.matmul(self.xi).matmul(self.xi.t()) / self.hidden_size
+
+              hidden = (1.0 - self.alpha) * full + self.alpha * lr
+
+              rec_inputs = self.exp_syn * rec_inputs + self.decay_syn * hidden
+              # rec_inputs = hidden
+
+              net_inputs = ff_inputs + rec_inputs + noise[:, t, :] * self.noise_std
+
+              # Compute rates
+              rates = nn.ReLU()(net_inputs)
+              # rates = rates * self.exp_rate + self.decay_rate * nn.ReLU()(net_inputs)
+
+              # Collect outputs
+              outputs.append(self.fc(rates.unsqueeze(1)))
+
+          # Concatenate outputs along the time dimension
+          outputs = torch.cat(outputs, dim=1)
+
+          return outputs
+#+END_SRC
+
+#+RESULTS:
+
+#+BEGIN_SRC ipython
+  # Example usage:
+  input_size = 10
+  hidden_size = 20
+  num_layers = 1
+  output_size = 10
+
+  decay_rate = 0.1
+
+  seq_length = 5
+  batch_size = 3
+  
+  model = MultivariateRNN(input_size, hidden_size, num_layers, output_size, decay_rate)
+  device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+  model.to(device)
+
+  input_tensor = torch.randn(batch_size, seq_length, input_size)
+  input_tensor = input_tensor.to(device)
+
+  output = model(input_tensor)
+  print(input_tensor.shape, output.shape)
+#+END_SRC
+
+#+RESULTS:
+: torch.Size([3, 5, 10]) torch.Size([3, 5, 10])
+
+* Train on synthetic data
 *** Create synthetic data
 
 #+begin_src ipython
@@ -534,7 +830,7 @@
                           num_layers=num_layers, output_size=num_features, device=device)
 
   batch_size = 8
-  train_loader, val_loader = split_data(X, train_perc=0.8, batch_size=batch_size)
+  train_loader, val_loader = split_data(X, Y, train_perc=0.8, batch_size=batch_size)
 
   learning_rate = 0.001
   criterion = nn.MSELoss()
@@ -546,20 +842,22 @@
 
 #+RESULTS:
 #+begin_example
-  Epoch 0/100, Training Loss: 0.1629, Validation Loss: 0.1796
-  Epoch 10/100, Training Loss: 0.0850, Validation Loss: 0.0888
-  Epoch 20/100, Training Loss: 0.0840, Validation Loss: 0.0886
-  Epoch 00029: reducing learning rate of group 0 to 1.0000e-04.
-  Epoch 30/100, Training Loss: 0.0822, Validation Loss: 0.0865
-  Epoch 40/100, Training Loss: 0.0808, Validation Loss: 0.0861
-  Epoch 50/100, Training Loss: 0.0800, Validation Loss: 0.0864
-  Epoch 00052: reducing learning rate of group 0 to 1.0000e-05.
-  Epoch 60/100, Training Loss: 0.0811, Validation Loss: 0.0860
-  Epoch 00069: reducing learning rate of group 0 to 1.0000e-06.
-  Epoch 70/100, Training Loss: 0.0819, Validation Loss: 0.0860
-  Epoch 80/100, Training Loss: 0.0826, Validation Loss: 0.0860
-  Epoch 00089: reducing learning rate of group 0 to 1.0000e-07.
-  Epoch 90/100, Training Loss: 0.0800, Validation Loss: 0.0860
+  torch.Size([25, 83, 100]) torch.Size([25, 83, 100])
+  torch.Size([7, 83, 100]) torch.Size([7, 83, 100])
+  Epoch 0/100, Training Loss: 0.2809, Validation Loss: 0.1823
+  Epoch 10/100, Training Loss: 0.0889, Validation Loss: 0.0885
+  Epoch 20/100, Training Loss: 0.0857, Validation Loss: 0.0875
+  Epoch 30/100, Training Loss: 0.0847, Validation Loss: 0.0875
+  Epoch 40/100, Training Loss: 0.0800, Validation Loss: 0.0875
+  Epoch 00043: reducing learning rate of group 0 to 1.0000e-04.
+  Epoch 50/100, Training Loss: 0.0814, Validation Loss: 0.0872
+  Epoch 00058: reducing learning rate of group 0 to 1.0000e-05.
+  Epoch 60/100, Training Loss: 0.0818, Validation Loss: 0.0872
+  Epoch 70/100, Training Loss: 0.0817, Validation Loss: 0.0872
+  Epoch 80/100, Training Loss: 0.0820, Validation Loss: 0.0872
+  Epoch 00082: reducing learning rate of group 0 to 1.0000e-06.
+  Epoch 90/100, Training Loss: 0.0825, Validation Loss: 0.0872
+  Epoch 00093: reducing learning rate of group 0 to 1.0000e-07.
 #+end_example
 
 #+RESULTS:
@@ -567,106 +865,8 @@
 *** See data
 
 #+begin_src ipython
-  predicted_time_series = get_predictions(model, future_steps=84, device=device)
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
-  ---------------------------------------------------------------------------
-  RuntimeError                              Traceback (most recent call last)
-  Cell In[78], line 1
-  ----> 1 predicted_time_series = get_predictions(model, future_steps=84, device=device)
-
-  Cell In[77], line 22, in get_predictions(model, future_steps, device)
-       18 for _ in range(future_steps):
-       19     # Forward pass
-       20     with torch.no_grad():  # No need to track gradients
-       21         # out, hidden = model.rnn(seed_sequence, hidden)
-  ---> 22         out = model(hidden)
-       23         next_step = out[:, -1, :]  # Output for the last time step
-       25     predictions.append(next_step.cpu().numpy())
-
-  File ~/mambaforge/envs/torch/lib/python3.10/site-packages/torch/nn/modules/module.py:1518, in Module._wrapped_call_impl(self, *args, **kwargs)
-     1516     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
-     1517 else:
-  -> 1518     return self._call_impl(*args, **kwargs)
-
-  File ~/mambaforge/envs/torch/lib/python3.10/site-packages/torch/nn/modules/module.py:1527, in Module._call_impl(self, *args, **kwargs)
-     1522 # If we don't have any hooks, we want to skip the rest of the logic in
-     1523 # this function, and just call forward.
-     1524 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
-     1525         or _global_backward_pre_hooks or _global_backward_hooks
-     1526         or _global_forward_hooks or _global_forward_pre_hooks):
-  -> 1527     return forward_call(*args, **kwargs)
-     1529 try:
-     1530     result = None
-
-  Cell In[65], line 46, in MultivariateRNN.forward(self, x)
-       42 outputs = []
-       43 for t in range(seq_length):
-       44     # Compute new hidden state:
-       45     hidden_state = torch.tanh(
-  ---> 46         torch.mm(x[:, t], self.W_ih.t()) + self.b_ih +
-       47         torch.mm(hidden_state, self.W_hh.t()) + self.b_hh)
-       48     # Apply exponential decay: 
-       49     if t > 0:
-       50         # Apply decay rate on the hidden state from the previous time step
-
-  RuntimeError: mat1 and mat2 shapes cannot be multiplied (1x1000 and 100x1000)
-#+end_example
-:END:
-
-#+begin_src ipython
-  import numpy as np
-  import matplotlib.pyplot as plt
-
-  # Assuming 'predicted_time_series' is a numpy array containing your generated data
-  # Each column in 'predicted_time_series' corresponds to a different feature in the time series
-
-  # Plot each feature of the time series
-  num_features = predicted_time_series.shape[1]
-  plt.figure()
-  for i in range(2):
-      plt.plot(predicted_time_series[:, i], lw=5)
-      plt.plot(X.cpu().numpy()[0, :, i], alpha=.2)
-
-  plt.xlabel('Time')
-  plt.ylabel('Feature Value')
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
-  ---------------------------------------------------------------------------
-  NameError                                 Traceback (most recent call last)
-  Cell In[23], line 8
-        2 import matplotlib.pyplot as plt
-        4 # Assuming 'predicted_time_series' is a numpy array containing your generated data
-        5 # Each column in 'predicted_time_series' corresponds to a different feature in the time series
-        6 
-        7 # Plot each feature of the time series
-  ----> 8 num_features = predicted_time_series.shape[1]
-        9 plt.figure()
-       10 for i in range(2):
-
-  NameError: name 'predicted_time_series' is not defined
-#+end_example
-:END:
-
-#+begin_src ipython
   from sklearn.metrics import mean_squared_error
 
-  # Assuming you have data loaders or a way to get your dataset (inputs and targets)
-  # inputs: Your input multivariate time series data of shape (batch_size, sequence_length, input_size)
-  # targets: The ground truth values of shape (batch_size, sequence_length, output_size)
-
-  # Load the model (once again assuming it's already trained)
-  # model = MultivariateRNN(input_size, hidden_size, num_layers, output_size)
-  # model.to(device)  # Move the model to the appropriate compute device
   model.eval()  # Set the model to evaluation mode
 
   # This function feeds inputs through the model and computes the predictions
@@ -677,7 +877,7 @@
           for inputs, targets in data_loader:
               inputs, targets = inputs.to(device), targets.to(device)
               outputs = model(inputs)
-              predictions.append(outputs.cpu())  # If using cuda, need to move data to cpu
+              predictions.append(outputs.cpu()) # If using cuda, need to move data to cpu
               ground_truth.append(targets.cpu())
 
       # Concatenate all batches
@@ -702,14 +902,10 @@
 #+begin_src ipython
   import matplotlib.pyplot as plt
 
-  # Assuming predictions and ground_truth are for a single batch or example:
-  # predictions: tensor of shape (batch_size, sequence_length, output_size)
-  # ground_truth: tensor of shape (batch_size, sequence_length, output_size)
-
   # Convert tensors to numpy arrays for plotting
   predictions_np = predictions.numpy()
   ground_truth_np = ground_truth.numpy()
-
+  
   # Plot the predictions on top of the ground truth
   plt.figure()
   pal = sns.color_palette("tab10")
@@ -719,12 +915,7 @@
      plt.plot(ground_truth_np[0, :, i], label='Ground Truth', marker='.', color=pal[i])
      plt.plot(predictions_np[0, :, i], label='Model Prediction', marker='x', color=pal[i])
 
-  # You can loop through more feature dimensions if needed
-  # for i in range(output_size):
-  #     plt.plot(ground_truth_np[0, :, i], label=f'Ground Truth Feature {i}', marker='.')
-  #     plt.plot(predictions_np[0, :, i], label=f'Prediction Feature {i}', marker='x')
-
-  plt.title("Model Prediction vs Ground Truth")
+  plt.title("Model Prediction vs Ground Truth", fontsize=14)
   plt.xlabel("Time steps")
   plt.ylabel("Value")
   # plt.legend(fontsize=12)
@@ -732,10 +923,10 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/0903581ef936a9e5652040fba52e58231c4a1bec.png]]
+[[file:./.ob-jupyter/d1a83e29b24b28332a20c96cc5c0b3cb4954b379.png]]
 
-* Data
-** imports
+* Train on Experimental Data
+** Imports
 
 #+begin_src ipython
   import sys
@@ -747,7 +938,7 @@
 
 #+RESULTS:
 
-** parameters
+** Parameters
 
 #+begin_src ipython
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
@@ -765,368 +956,55 @@
             'random_state': None, 'n_repeats': 10,
             'n_lambda': 20, 'T_WINDOW': 0.5,
             }
-  
+
+  kwargs['mouse'] = 'JawsM15'
 #+end_src
 
 #+RESULTS:
 
-** load
+** Load Data
 
 #+begin_src ipython
   options = set_options(**kwargs)
   options['reload'] = True
   options['data_type'] = 'raw'
   options['DCVL'] = 1
-  X_days, y_days = get_X_y_days(**options)
-  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
 #+end_src
 
 #+RESULTS:
-#+begin_example
-  reading raw data
-  mouse JawsM15 n_days 6 day 1 type raw all data: X (192, 693, 84) y (9, 192)
-  X (192, 693, 84) y (9, 192)
-  mouse JawsM15 n_days 6 day 2 type raw all data: X (192, 693, 84) y (9, 192)
-  X (192, 693, 84) y (9, 192)
-  mouse JawsM15 n_days 6 day 3 type raw all data: X (192, 693, 84) y (9, 192)
-  X (192, 693, 84) y (9, 192)
-  mouse JawsM15 n_days 6 day 4 type raw all data: X (192, 693, 84) y (9, 192)
-  X (192, 693, 84) y (9, 192)
-  mouse JawsM15 n_days 6 day 5 type raw all data: X (192, 693, 84) y (9, 192)
-  X (192, 693, 84) y (9, 192)
-  mouse JawsM15 n_days 6 day 6 type raw all data: X (192, 693, 84) y (9, 192)
-  X (192, 693, 84) y (9, 192)
-  X_days (1152, 693, 84) y_days (1152, 6)
-  ##########################################
-  PREPROCESSING: SCALER None AVG MEAN False AVG NOISE True UNIT VAR False
-  ##########################################
-  Deconvolve Fluo
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/scipy/signal/_spectral_py.py:2017: UserWarning: nperseg = 256 is greater than input length  = 84, using nperseg = 84
-    warnings.warn('nperseg = {0:d} is greater than input length '
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/oasis/functions.py:166: RuntimeWarning: invalid value encountered in multiply
-    return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-  ##########################################
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-#+end_example
+
+#+begin_src ipython  
+  # X_days, y_days = get_X_y_days(**options)
+  # X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+  # y_data = y_data[:, np.newaxis]
+  # print(X_data.shape, y_data.shape)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import pickle as pkl
+
+  filename = "../data/" + kwargs['mouse'] + "/X_dcvl.pkl"
+  # pkl.dump(X_data, open(filename + ".pkl", "wb"))
+
+  filename = "../data/" + kwargs['mouse'] + "/y_dcvl_.pkl"
+  # pkl.dump(y_data, open(filename + ".pkl", "wb"))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import pickle as pkl
+  filename = "../data/" + kwargs['mouse'] + "/X_dcvl.pkl"
+  X_data = pkl.load(open(filename + ".pkl", "rb"))
+
+  filename = "../data/" + kwargs['mouse'] + "/y_dcvl_.pkl"
+  y_data = pkl.load(open(filename + ".pkl", "rb"))
+#+end_src
+
+#+RESULTS:
 
 #+begin_src ipython
   import numpy as np
@@ -1179,7 +1057,7 @@
 #+RESULTS:
 [[file:./.ob-jupyter/7f4539ef4bed2a80edcf910fae40892f08148ad8.png]]
 
-* Training
+** Training
 
 #+begin_src ipython
   # y = np.roll(X_data, -1)
@@ -1209,38 +1087,61 @@
 #+RESULTS:
 
 #+begin_src ipython
+  y_data[y_data==-1] = 0
+  Y = torch.tensor(y_data, dtype=torch.float32, device=device)
+  print(Y.shape)
+#+end_src
+
+#+RESULTS:
+: torch.Size([96])
+
+#+begin_src ipython
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-  hidden_size = 693
+  hidden_size = 1024
   num_layers = 1
   num_features = 693
   
-  model = MultivariateRNN(input_size=num_features, hidden_size=hidden_size,
-                          num_layers=num_layers, output_size=num_features, device=device)
-
   batch_size = 8
-  train_loader, val_loader = split_data(X, train_perc=0.8, batch_size=batch_size)
+  train_loader, val_loader = split_data(X, Y, train_perc=0.8, batch_size=batch_size)
+#+end_src
 
+#+RESULTS:
+: torch.Size([76, 83, 693]) torch.Size([76, 83, 693])
+: torch.Size([20, 83, 693]) torch.Size([20, 83, 693])
+
+#+begin_src ipython
   learning_rate = 0.001
   criterion = nn.MSELoss()
-  optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.00001)
+  # criterion = nn.BCELoss() # Binary Cross-Entropy Loss
+
+  optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.001)
 
   num_epochs = 100
-  run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs)  
+  
+  model = MultivariateRNN(input_size=num_features, hidden_size=hidden_size,
+                        num_layers=num_layers, output_size=num_features, device=device, dt=.01, noise=0, alpha=1)
+
+  run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs)
 #+end_src
 
 #+RESULTS:
 #+begin_example
-  Epoch 0/100, Training Loss: 0.0024, Validation Loss: 0.0021
-  Epoch 10/100, Training Loss: 0.0006, Validation Loss: 0.0009
-  Epoch 20/100, Training Loss: 0.0003, Validation Loss: 0.0007
-  Epoch 30/100, Training Loss: 0.0003, Validation Loss: 0.0006
-  Epoch 40/100, Training Loss: 0.0002, Validation Loss: 0.0005
-  Epoch 50/100, Training Loss: 0.0002, Validation Loss: 0.0005
-  Epoch 60/100, Training Loss: 0.0002, Validation Loss: 0.0004
-  Epoch 70/100, Training Loss: 0.0002, Validation Loss: 0.0004
-  Epoch 80/100, Training Loss: 0.0002, Validation Loss: 0.0004
-  Epoch 90/100, Training Loss: 0.0002, Validation Loss: 0.0004
+  Epoch 0/100, Training Loss: 0.0018, Validation Loss: 0.0022
+  Epoch 10/100, Training Loss: 0.0026, Validation Loss: 0.0022
+  Epoch 00012: reducing learning rate of group 0 to 1.0000e-04.
+  Epoch 20/100, Training Loss: 0.0021, Validation Loss: 0.0022
+  Epoch 00023: reducing learning rate of group 0 to 1.0000e-05.
+  Epoch 30/100, Training Loss: 0.0022, Validation Loss: 0.0022
+  Epoch 00034: reducing learning rate of group 0 to 1.0000e-06.
+  Epoch 40/100, Training Loss: 0.0019, Validation Loss: 0.0022
+  Epoch 00045: reducing learning rate of group 0 to 1.0000e-07.
+  Epoch 50/100, Training Loss: 0.0025, Validation Loss: 0.0022
+  Epoch 00056: reducing learning rate of group 0 to 1.0000e-08.
+  Epoch 60/100, Training Loss: 0.0021, Validation Loss: 0.0022
+  Epoch 70/100, Training Loss: 0.0019, Validation Loss: 0.0022
+  Epoch 80/100, Training Loss: 0.0017, Validation Loss: 0.0022
+  Epoch 90/100, Training Loss: 0.0019, Validation Loss: 0.0022
 #+end_example
 
 * Reverse Engineering
@@ -1249,15 +1150,8 @@
 #+begin_src ipython
   from sklearn.metrics import mean_squared_error
 
-  # Assuming you have data loaders or a way to get your dataset (inputs and targets)
-  # inputs: Your input multivariate time series data of shape (batch_size, sequence_length, input_size)
-  # targets: The ground truth values of shape (batch_size, sequence_length, output_size)
-
-  # Load the model (once again assuming it's already trained)
-  # model = MultivariateRNN(input_size, hidden_size, num_layers, output_size)
-  # model.to(device)  # Move the model to the appropriate compute device
   model.eval()  # Set the model to evaluation mode
-
+  
   # This function feeds inputs through the model and computes the predictions
   def get_predictions(data_loader):
       predictions = []
@@ -1290,7 +1184,7 @@
 
 #+begin_src ipython
   import matplotlib.pyplot as plt
-
+  
   # Assuming predictions and ground_truth are for a single batch or example:
   # predictions: tensor of shape (batch_size, sequence_length, output_size)
   # ground_truth: tensor of shape (batch_size, sequence_length, output_size)
@@ -1304,10 +1198,10 @@
   pal = sns.color_palette("tab10")
   time = np.linspace(0, 14, 84)[:-1]
   # Example for plotting the first feature dimension
-  for i in range(10):
-     i = 10 + i
-     plt.plot(time, ground_truth_np[0, :, i], '-', label='Ground Truth', color=pal[i-10], alpha=.2)
-     plt.plot(time, predictions_np[0, :, i], label='Model Prediction', marker='o', color=pal[], alpha=1, lw=0)
+  for i in range(3):
+     j = np.random.randint(693)
+     plt.plot(time, ground_truth_np[0, :, j], '-', label='Ground Truth', color=pal[i], alpha=.2)
+     plt.plot(time, predictions_np[0, :, j], label='Model Prediction', marker='o', color=pal[i], alpha=1, lw=0)
 
   # You can loop through more feature dimensions if needed
   # for i in range(output_size):
@@ -1322,34 +1216,7 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/ad9ce1bc3737f36fb1c1b5f726bc7118778ab80f.png]]
-
-*** old
-#+begin_src ipython
-  predicted_time_series = get_predictions(model, future_steps=52, device=device)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  import numpy as np
-  import matplotlib.pyplot as plt
-
-  time = np.linspace(0, 14, 84)[:52]
-  num_features = predicted_time_series.shape[1]
-  plt.figure()
-  for i in range(10):
-      i = np.random.randint(100)
-      plt.plot(time, predicted_time_series[:, i], lw=1)
-      plt.plot(time, X.cpu().numpy()[0, :, i], alpha=.2)
-
-  plt.xlabel('Time')
-  plt.ylabel('Feature Value')
-  plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./.ob-jupyter/3f744212fc665c1af03483616877dfbf1ba6efc0.png]]
+[[file:./.ob-jupyter/c300ecd214cc68557e80464695d21404a2d435d8.png]]
 
 ** Connectivity
 
@@ -1365,7 +1232,7 @@
 #+end_src
 
 #+RESULTS:
-: (693, 693)
+: (1024, 1024)
 
 #+begin_src ipython
   ksi1 = S[0] * u1 * v1
@@ -1375,7 +1242,7 @@
 #+end_src
 
 #+RESULTS:
-: (693,)
+: (1024,)
 
 #+begin_src ipython
   plt.imshow(weights, cmap='jet')
@@ -1383,15 +1250,15 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/d6f4932eb95afd3ff8aa50422b5670462ce9b27f.png]]
+[[file:./.ob-jupyter/11578db95a1a6b58bc8dec464e5a0f44c398e91e.png]]
 
 #+begin_src ipython
 print(S[:10])
 #+end_src
 
 #+RESULTS:
-: [2.2203255 1.9502777 1.9423882 1.92128   1.9170479 1.9051721 1.8953644
-:  1.8862114 1.8783259 1.8719671]
+: [1.9814498 1.9744787 1.9646422 1.9554437 1.9534712 1.9489214 1.9417928
+:  1.9313139 1.9252403 1.9179983]
 
 #+begin_src ipython
   theta = np.arctan2(ksi2, ksi1)
@@ -1400,7 +1267,7 @@ print(S[:10])
 #+end_src
 
 #+RESULTS:
-: (693,)
+: (1024,)
 
 #+begin_src ipython
   plt.hist(theta*180/np.pi, bins='auto', density=True)
@@ -1410,7 +1277,7 @@ print(S[:10])
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/b0ed52e11f31a96f9002ccd9ce5ddec164c83ab4.png]]
+[[file:./.ob-jupyter/099a65908ef7704d6358c246a22486d3109d6a14.png]]
 
 #+begin_src ipython
   plt.scatter(ksi1, ksi2)
@@ -1420,7 +1287,7 @@ print(S[:10])
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/e62fbc477220894e4bedf0c9aa1106b217141c8b.png]]
+[[file:./.ob-jupyter/d01f5d2783046201922e1db5107ff2e26aa456cc.png]]
 
 #+begin_src ipython
   Jij = weights[index][index]
@@ -1428,26 +1295,8 @@ print(S[:10])
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-#+begin_src ipython
-  print(Jij[:5,:5])
-#+end_src
-
+: (1024, 1024)
 #+RESULTS:
-: [[-0.01165107 -0.02418897  0.03574118 -0.03905753 -0.00204194]
-:  [-0.03716209  0.02849341 -0.00865756  0.03969168  0.0192147 ]
-:  [ 0.00862231 -0.05665462 -0.02051322 -0.05261631  0.0372612 ]
-:  [ 0.01896639  0.01403332  0.02511325  0.02357699  0.03226864]
-:  [ 0.03584021 -0.05170242  0.00827882 -0.02540789  0.01031427]]
-
-: (693, 693)
-:END:
-#+RESULTS:
-: [[-0.02597944 -0.00937634 -0.01982111  0.01863813  0.0037094 ]
-:  [ 0.00066194 -0.02193735  0.00506656  0.00574334  0.00689308]
-:  [-0.01483703 -0.00148363  0.01205834  0.02673673 -0.00484562]
-:  [-0.03468229  0.01836705 -0.0079672  -0.02631866  0.01750046]
-:  [-0.02275267  0.01882395  0.02421768 -0.00107763  0.00368118]]
 
 #+begin_src ipython
   plt.imshow(Jij, cmap='jet')
@@ -1455,14 +1304,14 @@ print(S[:10])
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/79c1de3ef880921522ed2210e9966124a544319b.png]]
+[[file:./.ob-jupyter/b0df0938d097ca3d5cc016971789444184450c2a.png]]
 
 #+begin_src ipython
   # Plot the singular values
   plt.figure(figsize=(10, 5))
   plt.plot(S)
   plt.yscale('log')  # Log scale can be helpful to see the drop-off more clearly
-  plt.title('Singular Values of the RNN Hidden-to-Hidden Weight Matrix')
+  plt.title('Singular Values of the Weight Matrix')
   plt.ylabel('Singular values (log scale)')
   plt.xlabel('Index')
   plt.grid(True)
@@ -1482,6 +1331,6 @@ print(S[:10])
 
 #+RESULTS:
 :RESULTS:
-[[file:./.ob-jupyter/ab3e9a175abf042764d0bd8899917cddedb0193b.png]]
-[[file:./.ob-jupyter/8d3ee7d2a41c82c957ea3eb7c9e85fe24f2d0d04.png]]
+[[file:./.ob-jupyter/30201ecad8903d28918b95016afd87dd50c33b31.png]]
+[[file:./.ob-jupyter/6c3e9d4171dfadfd37066d45bee6edb45d108828.png]]
 :END:

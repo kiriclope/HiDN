@@ -478,12 +478,20 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S4 = y.sample_odor == 3
 
     elif kwargs["features"] == "paired":
-        # pair
-        idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_miss")
-        # unpair
-        idx_S2 = (y.response == "incorrect_fa") | (y.response == "correct_rej")
-        idx_S3 = False
-        idx_S4 = False
+        if kwargs["trials"] == "correct":
+            # pair
+            idx_S1 = y.response == "correct_hit"
+            # unpair
+            idx_S2 = y.response == "correct_rej"
+            idx_S3 = False
+            idx_S4 = False
+        else:
+            # pair
+            idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_miss")
+            # unpair
+            idx_S2 = (y.response == "incorrect_fa") | (y.response == "correct_rej")
+            idx_S3 = False
+            idx_S4 = False
 
         idx_trials = True
 
