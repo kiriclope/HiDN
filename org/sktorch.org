@@ -30,7 +30,10 @@
   import matplotlib.pyplot as plt
   from scipy.stats import circmean
   from src.common.plot_utils import add_vlines
- #+end_src
+
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader  
+#+end_src
 
 #+RESULTS:
 
@@ -46,6 +49,301 @@
 
 #+RESULTS:
 
+
+** Training
+*** split data
+
+#+begin_src ipython
+  def split_data(X, Y, train_perc=0.8, batch_size=32):
+
+    # Split the dataset into training and validation sets
+    train_size = int(train_perc * X.shape[0])
+
+    X_train = X[:train_size]
+    X_test = X[train_size:]
+
+    # X_train, X_mean, X_std = standard_scaler(X_train, IF_RETURN=1)
+    # X_test = (X_test - X_mean) / X_std
+
+    Y_train = Y[:train_size]    
+    Y_test = Y[train_size:]
+
+    # Y_train, Y_mean, Y_std = standard_scaler(Y_train, IF_RETURN=1)
+    # Y_test = (Y_test - Y_mean) / Y_std
+
+    # Create data sets
+    # train_dataset = TensorDataset(X_train_scaled, Y_train_scaled)
+    # val_dataset = TensorDataset(X_test_scaled, Y_test_scaled)
+
+    # print('X_train', X_train.shape, 'y_train', Y_train.shape)
+    train_dataset = TensorDataset(X_train, Y_train)
+
+    # print('X_test', X_test.shape, 'y_test', Y_test.shape)
+    val_dataset = TensorDataset(X_test, Y_test)
+
+    # Create data loaders
+    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
+
+    # sequence_length = 14  # or any other sequence length you want
+    # stride = 1  # or any other stride you want
+    
+    # sliding_window_dataset = SlidingWindowDataset(X, sequence_length, stride)
+    # train_loader = torch.utils.data.DataLoader(sliding_window_dataset, batch_size=5, shuffle=True)
+    # val_loader = torch.utils.data.DataLoader(sliding_window_dataset, batch_size=5, shuffle=True)
+
+    return train_loader, val_loader
+#+end_src
+
+#+RESULTS:
+
+** Optimization
+
+#+begin_src ipython
+  def train(dataloader, model, loss_fn, optimizer, penalty=None, lbd=1):
+      device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+      model.train()
+      for batch, (X, y) in enumerate(dataloader):
+          optimizer.zero_grad()
+
+          X, y = X.to(device), y.to(device)
+          # Compute prediction error
+          y_pred = model(X)
+          loss = loss_fn(y_pred, y)
+
+          if penalty is not None:
+              reg_loss = 0
+              for param in model.parameters():
+                  if penalty=='l1':
+                      reg_loss += torch.sum(torch.abs(param))
+                  else:
+                      reg_loss += torch.sum(torch.square(param))
+
+                  loss = loss + lbd * reg_loss
+
+          # Backpropagation
+          loss.backward()
+          optimizer.step()
+
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def test(dataloader, model, loss_fn):
+      size = len(dataloader.dataset)
+      num_batches = len(dataloader)
+
+      device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+      # Validation loop.
+      model.eval()
+      val_loss = 0.0
+      with torch.no_grad():
+          for data, targets in dataloader:
+              data, targets = data.to(device), targets.to(device)
+              
+              outputs = model(data)
+              loss = loss_fn(outputs, targets)
+              val_loss += loss.item() * data.size(0)
+          val_loss /= size
+
+      return val_loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, penalty=None, lbd=1, verbose=0):
+
+    # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
+    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+
+    loss_list = []
+    val_loss_list = []
+
+    # Training loop.
+    for epoch in range(num_epochs):
+        loss = train(train_loader, model, loss_fn, optimizer, penalty, lbd)
+        val_loss = test(val_loader, model, loss_fn)
+        scheduler.step(val_loss)
+
+        loss_list.append(loss.item())
+        val_loss_list.append(val_loss)
+
+        #  if epoch % int(num_epochs  / 10) == 0:
+        if verbose:
+          print(f'Epoch {epoch+1}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
+
+    return loss_list, val_loss_list
+#+end_src
+
+#+RESULTS:
+
+** Loss
+
+#+begin_src ipython
+  def correlation_loss(output, target):
+      # Subtract the mean of each vector
+      output_mean = output - torch.mean(output)
+      target_mean = target - torch.mean(target)
+    
+      # Compute the covariance between output and target
+      covariance = torch.mean(output_mean * target_mean)
+      
+      # Compute the standard deviations of the vectors
+      output_std = torch.std(output)
+      target_std = torch.std(target)
+    
+      # Calculate the Pearson correlation coefficient
+      correlation = covariance / (output_std * target_std)
+    
+      # Since we want to increase the correlation, we minimize its negative
+      loss = -correlation  # Maximizing correlation by minimizing its negative
+    
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+    import torch
+    import torch.nn as nn
+
+    def sign_constrained_loss(output, xi, target_sign):
+        dot_product = torch.dot(output.flatten(), xi.flatten())
+        if target_sign > 0:
+            loss = torch.relu(-dot_product)  # Encourages positive dot product
+        else:
+            loss = torch.relu(dot_product)   # Encourages negative dot product
+        return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class CosineLoss(nn.Module):
+      def __init__(self):
+          super(CosineLoss, self).__init__()
+          self.cosine_similarity = nn.CosineSimilarity(dim=-1)
+          
+      def forward(self, input1, input2):
+          # Calculate cosine similarity
+          cosine_sim = self.cosine_similarity(input1, input2)
+          # Calculate the loss as 1 - cosine_similarity
+          loss = 1 - cosine_sim
+          # Return the mean loss over the batch
+          return loss.mean()
+#+end_src
+
+#+RESULTS:
+
+
+#+RESULTS:
+
+*
+* Data
+** imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '../')
+  
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.common.options import set_options
+#+end_src
+
+#+RESULTS:
+
+** parameters
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = ['first', 'last']
+  
+  kwargs = dict()
+  kwargs = {'prescreen': None, 'pval': 0.05, 'trials': '', 'balance': 'under',
+            'method': 'bootstrap', 'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
+            'bootstrap': True, 'n_boots': 1000,
+            'preprocess': False, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l2',
+            'out_fold': 'stratified', 'n_out': 5,
+            'in_fold': 'stratified', 'n_in': 5,
+            'random_state': None, 'n_repeats': 10,
+            'n_lambda': 20, 'T_WINDOW': 0.5,
+            'features': 'paired',
+            'day': 'last'
+            }
+
+#+end_src
+
+#+RESULTS:
+
+** Load X, y
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['reload'] = 0
+  options['data_type'] = 'raw'
+  options['preprocess'] = True
+  options['DCVL'] = 0
+
+  options['mouse'] = 'ChRM04'
+  options['task'] = 'DualGo'
+  options['day'] = 'last'
+  options['features'] = 'sample'
+  options['trials'] = 'correct'
+
+  X_days, y_days = get_X_y_days(**options)
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+  y_data[y_data==-1] = 0
+  print('X', X_data.shape, 'y', y_data.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (43, 668, 84) X_S2 (46, 668, 84)
+  X (89, 668, 84) y (89,)
+#+end_example
+
+#+begin_src ipython
+  times = np.linspace(0, 14, 84)
+  plt.plot(times, X_data[0, 1])
+  plt.plot(times, X_data[0, 10])  
+  plt.plot(times, X_data.mean((0,1)))
+  plt.xticks([0, 2, 4, 6, 8 ,10, 12, 14])
+  plt.xlim([0, 14])
+  add_vlines()
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/084ada5934fc64da815d105b126e44416df40814.png]]
+
+#+begin_src ipython
+  print(times[-24], times[-12])
+#+end_src
+
+#+RESULTS:
+: 10.120481927710843 12.14457831325301
+
 * Perceptron
 
 #+begin_src ipython
@@ -55,12 +353,15 @@
   import torch.optim as optim
 
   class Perceptron(nn.Module):
-      def __init__(self, num_features=361):
+      def __init__(self, num_features):
           super(Perceptron, self).__init__()
           self.linear = nn.Linear(num_features, 1)
+          self.dropout = nn.Dropout(0.5)
 
       def forward(self, x):
-          return torch.sigmoid(self.linear(x))
+          x = self.dropout(x)
+          hidden = self.linear(x)
+          return torch.sigmoid(hidden)
 
 #+end_src
 
@@ -94,9 +395,10 @@ class CaptureWeightsCallback(Callback):
 
   # Instantiate the custom callback
   # capture_weights_cb = CaptureWeightsCallback()
+  model = Perceptron(num_features=X_data.shape[1])
   
   net = NeuralNetClassifier(
-      module=Perceptron,
+      module=model,
       criterion=nn.BCELoss,
       optimizer=optim.Adam,
       optimizer__lr=0.01,
@@ -110,95 +412,91 @@ class CaptureWeightsCallback(Callback):
 
 #+RESULTS:
 
-* Data
-** imports
-
 #+begin_src ipython
-  import sys
-  sys.path.insert(0, '../')
-  
-  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-  from src.common.options import set_options
+  class RegularizedNet(NeuralNetClassifier):
+      def __init__(self, *args, lambda1=0.1, **kwargs):
+          super().__init__(*args, **kwargs)
+          self.lambda1 = lambda1
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+          loss += self.lambda1 * sum([w.abs().sum() for w in self.module_.parameters()])
+          return loss
 #+end_src
 
 #+RESULTS:
 
-** parameters
-
 #+begin_src ipython
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  days = ['first', 'last']
-  
-  kwargs = dict()
-  kwargs = {'prescreen': 'fpr', 'pval': 0.05, 'trials': '', 'balance': 'under',
-            'method': 'bootstrap', 'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
-            'bootstrap': True, 'n_boots': 1000,
-            'preprocess': True, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
-            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l2',
-            'out_fold': 'stratified', 'n_out': 5,
-            'in_fold': 'stratified', 'n_in': 5,
-            'random_state': None, 'n_repeats': 10,
-            'n_lambda': 20, 'T_WINDOW': 0.5,
-            'features': 'paired',
-            'day': 'last'
-            }
+  class ElasticNetNet(NeuralNetClassifier):
+      def __init__(self, module, alpha=0.01, l1_ratio=0.5, **kwargs):
+          self.alpha = alpha  # Regularization strength
+          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+          super().__init__(module, **kwargs)
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          # Call super method to compute primary loss
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+          elastic_net_reg = 0
+          for param in self.module_.parameters():
+              elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+              elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2) / 2
+
+          # Add the elastic net regularization term to the primary loss
+          return loss + elastic_net_reg
 
 #+end_src
 
 #+RESULTS:
 
-** Load X, y
-
 #+begin_src ipython
-  options = set_options(**kwargs)
-  options['reload'] = 0
-  options['data_type'] = 'raw'
-  options['DCVL'] = 0
+  net = ElasticNetNet(
+      module=model,
+      criterion=nn.BCELoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.01,
+      max_epochs=100,
+      callbacks=[early_stopping],  # Add the EarlyStopping callback here
+      verbose=0,
+      iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
 
-  options['mouse'] = 'ACCM03'
-  options['task'] = 'DualGo'
-  options['day'] = 'last'
-  options['features'] = 'choice'
-  options['trials'] = ''
-
-  X_days, y_days = get_X_y_days(**options)
-  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-
-  y_data[y_data==-1] = 0
-  print(X_data.shape, y_data.shape)
 #+end_src
 
 #+RESULTS:
-#+begin_example
-  loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  X_days (960, 361, 84) y_days (960, 6)
-  ##########################################
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  ##########################################
-  ##########################################
-  DATA: FEATURES choice TASK DualGo TRIALS  DAYS last LASER 0
-  ##########################################
-  multiple days 0 3 0
-  X_S1 (106, 361, 84) X_S2 (54, 361, 84)
-  (160, 361, 84) (160,)
-#+end_example
 
-* fit
-** Standard fit
+#+begin_src ipython
+  net = RegularizedNet(
+      module=model,
+      criterion=nn.BCELoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.01,
+      max_epochs=100,
+      callbacks=[early_stopping],  # Add the EarlyStopping callback here
+      verbose=0,
+      iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+#+end_src
+
+#+RESULTS:
 
 #+begin_src ipython
   print('X', X_data.shape, 'y', y_data.shape)
 #+end_src
 
 #+RESULTS:
-: X (160, 361, 84) y (160,)
+: X (77, 668, 84) y (77,)
 
 #+begin_src ipython  
   from sklearn.preprocessing import StandardScaler
   from sklearn.model_selection import train_test_split
   from sklearn.model_selection import cross_val_score, cross_validate
   from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import LeaveOneOut
   from time import perf_counter  
 
 
@@ -213,11 +511,11 @@ class CaptureWeightsCallback(Callback):
   pipe.append(("scaler", StandardScaler()))
   pipe.append(("clf", net))
   pipe = Pipeline(pipe)
-  
+
   for i in range(X_data.shape[-1]):
       X = np.float32(X_data[..., i])
-
-      scores = cross_val_score(pipe, X, y, cv=5, scoring='f1_weighted')
+      
+      scores = cross_val_score(net, X, y, cv=5, scoring='f1_weighted')
       scores_list.append(scores)
 
       # # Now use cross_validate (ensure to set return_estimator=True if you want the fitted estimators)
@@ -228,12 +526,1020 @@ class CaptureWeightsCallback(Callback):
 
   end = perf_counter()
   print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-
 #+end_src
 
 #+RESULTS:
-: Elapsed (with compilation) = 0h 0m 13s
+#+begin_example
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  Elapsed (with compilation) = 0h 0m 19s
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=5.
+    warnings.warn(
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 3 members, which is less than n_splits=5.
+    warnings.warn(
+#+end_example
 #+RESULTS:
 
 #+begin_src ipython
@@ -247,75 +1553,865 @@ class CaptureWeightsCallback(Callback):
  #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/219c6ac2be23ffb96a331e733f7e39cb4dcf6b16.png]]
-
-** multiprocessing
+[[file:./.ob-jupyter/bd55a973a659ea37a26234bb2116d13d26bfa221.png]]
 
 #+begin_src ipython
-  y_data[y_data==-1] = 0
-  X = np.float32(X_data[..., 0])
+  net = ElasticNetNet(
+      module=model,
+      criterion=nn.BCELoss,
+      optimizer=optim.SGD,
+      optimizer__lr=0.1,
+      max_epochs=20,
+      callbacks=[early_stopping],  # Add the EarlyStopping callback here
+      verbose=0,
+      iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from sklearn.model_selection import GridSearchCV
+
+  params = {
+      'alpha': np.logspace(-2, 0, 10),
+      # 'l1_ratio': np.linspace(0, 1, 2),
+      # 'alpha': np.logspace(-4, 0, 5),
+      # 'l1_ratio': np.linspace(0, 1, 5),
+  }
+
+  # Perform grid search
+  gs = GridSearchCV(net, params, refit=True, cv=5, scoring='accuracy', n_jobs=-1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from time import perf_counter  
+  from sklearn.model_selection import StratifiedKFold  
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
+
+  start = perf_counter()
+
   y = np.float32(y_data[:, np.newaxis])
-  
+
+  cv = StratifiedKFold()  
+  # estimator = SlidingEstimator(net, n_jobs=-1, scoring='accuracy', verbose=False)  
+  estimator = GeneralizingEstimator(gs, n_jobs=-1, scoring='accuracy', verbose=False)
+
+  scores = cross_val_multiscore(estimator, X_data.astype(np.float32), y.astype(np.float32), cv=cv, n_jobs=-1,verbose=False)
+
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+
+#+RESULTS:
+: Elapsed (with compilation) = 0h 6m 30s
+
+#+begin_src ipython
+  fig, ax = plt.subplots()
+  im = ax.imshow(
+      scores.mean(0),
+      # interpolation="lanczos",
+      origin="lower",
+      cmap="jet",
+      extent=[0, 14, 0, 14],
+      vmin=0.5,
+      vmax=1.0,
+  )
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/1f154eb6c9c57dc4a93cda0f2e797ecbe352575e.png]]
+
+#+begin_src ipython
+  print(scores.shape)
+  plt.plot(np.diag(scores.mean(0)))
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (5, 84, 84)
+[[file:./.ob-jupyter/86ac8e237b7a44d12d4be0347880c65c8413e0fd.png]]
+:END:
+
+* RNN
+
+#+begin_src ipython
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+
+  class CustomBCELoss(nn.Module):
+      def __init__(self):
+          super(CustomBCELoss, self).__init__()
+    
+      def forward(self, output, target):
+          # Ensure the output and target tensors are of the same shape
+          assert output.shape == target.shape, "Output and target must have the same shape"
+
+          # Select the last 12 elements from the sequences
+          output_last_12 = output[..., -12:]  # Use '...,' to keep all preceding dimensions intact
+          target_last_12 = target[..., -12:]
+
+          # Calculate BCE loss on the selected segments
+          loss = F.binary_cross_entropy(output_last_12, target_last_12)
+
+          return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+  # Example usage:
+  # Assume some example output and target tensors, ensuring they have the same shape
+  output_example = torch.sigmoid(torch.randn(5, 20))  # Example model outputs, through sigmoid to get probabilities
+  target_example = torch.rand(5, 20)  # Example random target values
+
+  # Instantiate your custom loss function
+  custom_loss_fn = CustomBCELoss()
+
+  # Calculate the loss
+  loss = custom_loss_fn(output_example, target_example)
+  print("Custom BCE Loss:", loss.item())
+
+#+end_src
+
+#+RESULTS:
+: Custom BCE Loss: 0.8481178283691406
+
+#+begin_src ipython
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+
+  class SequenceTagger(nn.Module):
+      def __init__(self, num_features, hidden_dim, num_classes):
+          super(SequenceTagger, self).__init__()
+          self.hidden_dim = hidden_dim
+          self.lstm = nn.LSTM(num_features, hidden_dim, batch_first=True)
+          # self.rnn = nn.RNN(num_features, hidden_dim, batch_first=True)
+
+          self.classifier = nn.Linear(hidden_dim, num_classes)
+
+      def forward(self, sequence):
+          lstm_out,  (h_n, c_n) = self.lstm(sequence)
+          # lstm_out, _ = self.rnn(sequence)
+          scores = self.classifier(lstm_out)
+          return torch.sigmoid(scores).squeeze(-1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  X = X_data[..., :-12]
+  y = (y_data * np.ones((X_data.shape[0], X.shape[2])).T).T
+  print(y.shape)  
+#+end_src
+
+#+RESULTS:
+: (288, 72)
+
+#+begin_src ipython
+  X = np.swapaxes(X, 1, 2)
+  # y = np.swapaxes(y, 1, 2)
   print(X.shape, y.shape)
 #+end_src
 
 #+RESULTS:
-: (96, 693) (96, 1)
+: (288, 72, 693) (288, 72)
+
+#+begin_src ipython
+  from sklearn.model_selection import train_test_split
+  X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=None)
+
+  model = SequenceTagger(num_features=X_data.shape[1], hidden_dim=1000, num_classes=1)
+  
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+  batch_size = 32
+  train_loader, val_loader = split_data(torch.tensor(X_train.astype(np.float32)), torch.tensor(y_train.astype(np.float32)), train_perc=0.8, batch_size=batch_size)
+
+  learning_rate = 0.1
+
+  # CosineLoss, BCELoss, BCEWithLogitLoss
+  criterion = CustomBCELoss()
+
+  # SGD, Adam, AdamW
+  optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+
+  num_epochs = 100
+  loss, val_loss = run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs, verbose=1)
+#+End_src
+
+#+RESULTS:
+#+begin_example
+  Epoch 1/100, Training Loss: 1.3588, Validation Loss: 2.3145
+  Epoch 2/100, Training Loss: 0.9875, Validation Loss: 1.7450
+  Epoch 3/100, Training Loss: 0.4063, Validation Loss: 1.5196
+  Epoch 4/100, Training Loss: 0.5989, Validation Loss: 1.5508
+  Epoch 5/100, Training Loss: 0.0698, Validation Loss: 1.9291
+  Epoch 6/100, Training Loss: 0.0878, Validation Loss: 1.8186
+  Epoch 7/100, Training Loss: 0.0296, Validation Loss: 1.9364
+  Epoch 8/100, Training Loss: 0.0149, Validation Loss: 1.9229
+  Epoch 9/100, Training Loss: 0.0211, Validation Loss: 1.7895
+  Epoch 10/100, Training Loss: 0.0130, Validation Loss: 2.0671
+  Epoch 11/100, Training Loss: 0.0089, Validation Loss: 2.0420
+  Epoch 12/100, Training Loss: 0.0058, Validation Loss: 2.2071
+  Epoch 13/100, Training Loss: 0.0215, Validation Loss: 2.3148
+  Epoch 00014: reducing learning rate of group 0 to 1.0000e-02.
+  Epoch 14/100, Training Loss: 0.0014, Validation Loss: 2.2652
+  Epoch 15/100, Training Loss: 0.0018, Validation Loss: 2.2536
+  Epoch 16/100, Training Loss: 0.0011, Validation Loss: 2.2346
+  Epoch 17/100, Training Loss: 0.0022, Validation Loss: 2.2115
+  Epoch 18/100, Training Loss: 0.0011, Validation Loss: 2.2222
+  Epoch 19/100, Training Loss: 0.0008, Validation Loss: 2.1841
+  Epoch 20/100, Training Loss: 0.0008, Validation Loss: 2.1663
+  Epoch 21/100, Training Loss: 0.0004, Validation Loss: 2.1678
+  Epoch 22/100, Training Loss: 0.0004, Validation Loss: 2.1636
+  Epoch 23/100, Training Loss: 0.0005, Validation Loss: 2.1668
+  Epoch 24/100, Training Loss: 0.0004, Validation Loss: 2.1696
+  Epoch 00025: reducing learning rate of group 0 to 1.0000e-03.
+  Epoch 25/100, Training Loss: 0.0004, Validation Loss: 2.1576
+  Epoch 26/100, Training Loss: 0.0007, Validation Loss: 2.1585
+  Epoch 27/100, Training Loss: 0.0004, Validation Loss: 2.1604
+  Epoch 28/100, Training Loss: 0.0004, Validation Loss: 2.1593
+  Epoch 29/100, Training Loss: 0.0004, Validation Loss: 2.1602
+  Epoch 30/100, Training Loss: 0.0004, Validation Loss: 2.1609
+  Epoch 31/100, Training Loss: 0.0007, Validation Loss: 2.1591
+  Epoch 32/100, Training Loss: 0.0005, Validation Loss: 2.1602
+  Epoch 33/100, Training Loss: 0.0005, Validation Loss: 2.1606
+  Epoch 34/100, Training Loss: 0.0006, Validation Loss: 2.1610
+  Epoch 35/100, Training Loss: 0.0006, Validation Loss: 2.1609
+  Epoch 00036: reducing learning rate of group 0 to 1.0000e-04.
+  Epoch 36/100, Training Loss: 0.0004, Validation Loss: 2.1585
+  Epoch 37/100, Training Loss: 0.0005, Validation Loss: 2.1593
+  Epoch 38/100, Training Loss: 0.0005, Validation Loss: 2.1592
+  Epoch 39/100, Training Loss: 0.0007, Validation Loss: 2.1601
+  Epoch 40/100, Training Loss: 0.0004, Validation Loss: 2.1603
+  Epoch 41/100, Training Loss: 0.0005, Validation Loss: 2.1601
+  Epoch 42/100, Training Loss: 0.0004, Validation Loss: 2.1595
+  Epoch 43/100, Training Loss: 0.0003, Validation Loss: 2.1597
+  Epoch 44/100, Training Loss: 0.0009, Validation Loss: 2.1603
+  Epoch 45/100, Training Loss: 0.0004, Validation Loss: 2.1609
+  Epoch 46/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 00047: reducing learning rate of group 0 to 1.0000e-05.
+  Epoch 47/100, Training Loss: 0.0005, Validation Loss: 2.1604
+  Epoch 48/100, Training Loss: 0.0004, Validation Loss: 2.1602
+  Epoch 49/100, Training Loss: 0.0007, Validation Loss: 2.1598
+  Epoch 50/100, Training Loss: 0.0005, Validation Loss: 2.1597
+  Epoch 51/100, Training Loss: 0.0006, Validation Loss: 2.1595
+  Epoch 52/100, Training Loss: 0.0007, Validation Loss: 2.1596
+  Epoch 53/100, Training Loss: 0.0006, Validation Loss: 2.1600
+  Epoch 54/100, Training Loss: 0.0004, Validation Loss: 2.1600
+  Epoch 55/100, Training Loss: 0.0004, Validation Loss: 2.1602
+  Epoch 56/100, Training Loss: 0.0004, Validation Loss: 2.1603
+  Epoch 57/100, Training Loss: 0.0003, Validation Loss: 2.1602
+  Epoch 00058: reducing learning rate of group 0 to 1.0000e-06.
+  Epoch 58/100, Training Loss: 0.0003, Validation Loss: 2.1605
+  Epoch 59/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 60/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 61/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 62/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 63/100, Training Loss: 0.0003, Validation Loss: 2.1604
+  Epoch 64/100, Training Loss: 0.0006, Validation Loss: 2.1604
+  Epoch 65/100, Training Loss: 0.0006, Validation Loss: 2.1604
+  Epoch 66/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 67/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 68/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 00069: reducing learning rate of group 0 to 1.0000e-07.
+  Epoch 69/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 70/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 71/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 72/100, Training Loss: 0.0007, Validation Loss: 2.1605
+  Epoch 73/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 74/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 75/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 76/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 77/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 78/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 79/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 00080: reducing learning rate of group 0 to 1.0000e-08.
+  Epoch 80/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 81/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 82/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 83/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 84/100, Training Loss: 0.0003, Validation Loss: 2.1605
+  Epoch 85/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 86/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 87/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 88/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 89/100, Training Loss: 0.0007, Validation Loss: 2.1605
+  Epoch 90/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 91/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 92/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 93/100, Training Loss: 0.0007, Validation Loss: 2.1605
+  Epoch 94/100, Training Loss: 0.0003, Validation Loss: 2.1605
+  Epoch 95/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 96/100, Training Loss: 0.0005, Validation Loss: 2.1605
+  Epoch 97/100, Training Loss: 0.0007, Validation Loss: 2.1605
+  Epoch 98/100, Training Loss: 0.0004, Validation Loss: 2.1605
+  Epoch 99/100, Training Loss: 0.0006, Validation Loss: 2.1605
+  Epoch 100/100, Training Loss: 0.0004, Validation Loss: 2.1605
+#+end_example
+
+#+begin_src ipython
+  plt.plot(loss)
+  plt.plot(val_loss)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/84082312e233382a700765f725ae47f0d5e9ea10.png]]
+
+#+begin_src ipython
+  model.eval()  # Put the model in evaluation mode
+  with torch.no_grad():  # Disable gradient computation
+      predictions = model(torch.tensor(X_test.astype(np.float32), device='cuda'))
+      print(predictions.shape)
+#+end_src
+
+#+RESULTS:
+: torch.Size([58, 72])
+
+#+begin_src ipython
+  print(y_test.shape)
+#+end_src
+
+#+RESULTS:
+: (58, 72)
+
+#+begin_src ipython
+  y_pred_labels = (predictions.cpu().detach().numpy() > 0.5).astype(int)  # threshold might be 0.5 for sigmoid
+  accuracy = (y_pred_labels == y_test.astype(int)).mean((0))
+  print(accuracy.shape)
+#+end_src
+
+#+RESULTS:
+: (72,)
+
+#+begin_src ipython
+  plt.plot(times[:-12], accuracy)
+  add_vlines()
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/45c7d10ae40ae0d8582ab712d1e6a8e2ea552a34.png]]
 
 #+begin_src ipython
   from sklearn.model_selection import StratifiedKFold
+  from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
-  kf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-  splits = list(kf.split(X, y))  # Assuming X and y are your dataset and labels  
+  def cross_val_optim(model, X, y, criterion, optimizer, num_epochs):
+      folds = StratifiedKFold(n_splits=5, shuffle=True)
+
+      dataset = TensorDataset(torch.tensor(X.astype(np.float32), device='cuda'), torch.tensor(y.astype(np.float32), device='cuda'))
+
+      accuracy = []
+      for fold, (train_ids, val_ids) in enumerate(folds.split(X, y_data)):
+
+          train_subsampler = SubsetRandomSampler(train_ids)
+          val_subsampler = SubsetRandomSampler(val_ids)
+
+          train_loader = DataLoader(dataset, batch_size=8, sampler=train_subsampler)
+          val_loader = DataLoader(dataset, batch_size=8, sampler=val_subsampler)
+
+          model = SequenceTagger(num_features=X_data.shape[1], hidden_dim=1000, num_classes=1)
+          loss, val_loss = run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs)
+
+          X_test = X[val_ids]
+          y_test = y[val_ids]
+
+          model.eval()  # Put the model in evaluation mode
+          with torch.no_grad():  # Disable gradient computation
+              y_pred = model(torch.tensor(X_test.astype(np.float32), device='cuda'))
+              y_pred_labels = (y_pred.cpu().detach().numpy() > 0.5).astype(int)  # threshold might be 0.5 for sigmoid
+
+              accuracy.append( (y_pred_labels == y_test.astype(int)).mean((0)))
+              
+      return np.array(accuracy)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  def train_and_evaluate(fold_data):
-      train_indices, val_indices = fold_data
-      X_train, X_val = X[train_indices], X[val_indices]
-      y_train, y_val = y[train_indices], y[val_indices]
-
-      net = NeuralNetClassifier(  # Define Skorch NeuralNetClassifier as before
-          module=Perceptron,
-          criterion=nn.BCELoss,
-          optimizer=optim.SGD,
-          optimizer__lr=0.01,
-          max_epochs=100,
-          device='cuda',  # or 'cpu'
-      )
-
-      net.partial_fit(X_train, y_train)
-      score = net.score(X_val, y_val)
-
-      return score
+  accuracy = cross_val_optim(model, X, y, criterion, optimizer, 100)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  from torch.multiprocessing import Pool, set_start_method
+  print(accuracy.shape)
+  plt.plot(times[:-12], accuracy.mean(0))
+  add_vlines()
+  plt.show()
+#+end_src
 
-  def run_parallel_cv():
-      # Use 'spawn' or 'forkserver' when working with CUDA
-      set_start_method('spawn', force=True)
+#+RESULTS:
+:RESULTS:
+: (5, 72)
+[[file:./.ob-jupyter/f906d15dc3875b855b7beeb7acdd27bd455ca45a.png]]
+:END:
 
-      with Pool(processes=84) as pool:  # Adjust 'processes' based on your system
-          scores = pool.map(train_and_evaluate, splits)
-          
-      print(f"Cross-validated scores: {scores}")
-      print(f"Mean CV Score: {np.mean(scores)}")
+#+begin_src ipython
 
+#+end_src
+
+#+RESULTS:
+
+* RNN Using skorch
+
+#+begin_src ipython
+  from skorch import NeuralNetRegressor
+  from skorch import NeuralNetBinaryClassifier
+  import torch
+  import numpy as np
+  from sklearn.datasets import make_regression
+  from sklearn.model_selection import train_test_split
+  from sklearn.preprocessing import StandardScaler
+
+  # Assuming SequenceTagger is the model you defined earlier
+  model = SequenceTagger(num_features=X_data.shape[1], hidden_dim=1000, num_classes=1)
+
+  # Wrap the PyTorch model with Skorch
+  net = NeuralNetBinaryClassifier(
+      module=model,
+      criterion=torch.nn.BCELoss,  # Use MSE Loss for the regression task
+      optimizer=torch.optim.Adam,
+      lr=0.01,
+      batch_size=32,
+      max_epochs=100,
+      device='cuda',
+  )
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  if __name__ == '__main__':
-      run_parallel_cv()
+  y = (y_data * np.ones((X_data.shape[0], X_data.shape[2])).T).T
+  print(y.shape)  
 #+end_src
 
 #+RESULTS:
-: 4beb1cf5-376f-478f-b9fb-6281d7752a28
+: (96, 84)
 
+#+begin_src ipython
+  X = np.swapaxes(X_data, 1, 2)
+  # y = np.swapaxes(y, 1, 2)
+  print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 84, 693) (96, 84)
+
+#+begin_src ipython
+  # Split data into training and test sets
+  X_train, X_test, y_train, y_test = train_test_split(X, y_data, test_size=0.2, random_state=42)
+
+  print(X_train.shape, y_train.shape)
+  # Fit the model
+  net.fit(X_train.astype(np.float32), y_train.astype(np.float32))
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (76, 84, 693) (76,)
+: Re-initializing module.
+: Re-initializing criterion.
+: Re-initializing optimizer.
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  ValueError                                Traceback (most recent call last)
+  Cell In[24], line 6
+        4 print(X_train.shape, y_train.shape)
+        5 # Fit the model
+  ----> 6 net.fit(X_train.astype(np.float32), y_train.astype(np.float32))
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/classifier.py:348, in NeuralNetBinaryClassifier.fit(self, X, y, **fit_params)
+      337 """See ``NeuralNet.fit``.
+      338 
+      339 In contrast to ``NeuralNet.fit``, ``y`` is non-optional to
+     (...)
+      343 
+      344 """
+      345 # pylint: disable=useless-super-delegation
+      346 # this is actually a pylint bug:
+      347 # https://github.com/PyCQA/pylint/issues/1085
+  --> 348 return super().fit(X, y, **fit_params)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:1319, in NeuralNet.fit(self, X, y, **fit_params)
+     1316 if not self.warm_start or not self.initialized_:
+     1317     self.initialize()
+  -> 1319 self.partial_fit(X, y, **fit_params)
+     1320 return self
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:1278, in NeuralNet.partial_fit(self, X, y, classes, **fit_params)
+     1276 self.notify('on_train_begin', X=X, y=y)
+     1277 try:
+  -> 1278     self.fit_loop(X, y, **fit_params)
+     1279 except KeyboardInterrupt:
+     1280     pass
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:1190, in NeuralNet.fit_loop(self, X, y, epochs, **fit_params)
+     1187 for _ in range(epochs):
+     1188     self.notify('on_epoch_begin', **on_epoch_kwargs)
+  -> 1190     self.run_single_epoch(iterator_train, training=True, prefix="train",
+     1191                           step_fn=self.train_step, **fit_params)
+     1193     self.run_single_epoch(iterator_valid, training=False, prefix="valid",
+     1194                           step_fn=self.validation_step, **fit_params)
+     1196     self.notify("on_epoch_end", **on_epoch_kwargs)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:1226, in NeuralNet.run_single_epoch(self, iterator, training, prefix, step_fn, **fit_params)
+     1224 for batch in iterator:
+     1225     self.notify("on_batch_begin", batch=batch, training=training)
+  -> 1226     step = step_fn(batch, **fit_params)
+     1227     self.history.record_batch(prefix + "_loss", step["loss"].item())
+     1228     batch_size = (get_len(batch[0]) if isinstance(batch, (tuple, list))
+     1229                   else get_len(batch))
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:1105, in NeuralNet.train_step(self, batch, **fit_params)
+     1097     self.notify(
+     1098         'on_grad_computed',
+     1099         named_parameters=TeeGenerator(self.get_all_learnable_params()),
+     1100         batch=batch,
+     1101         training=True,
+     1102     )
+     1103     return step['loss']
+  -> 1105 self._step_optimizer(step_fn)
+     1106 return step_accumulator.get_step()
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:1060, in NeuralNet._step_optimizer(self, step_fn)
+     1058     optimizer.step()
+     1059 else:
+  -> 1060     optimizer.step(step_fn)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/optimizer.py:373, in Optimizer.profile_hook_step.<locals>.wrapper(*args, **kwargs)
+      368         else:
+      369             raise RuntimeError(
+      370                 f"{func} must return None or a tuple of (new_args, new_kwargs), but got {result}."
+      371             )
+  --> 373 out = func(*args, **kwargs)
+      374 self._optimizer_step_code()
+      376 # call optimizer step post hooks
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/optimizer.py:76, in _use_grad_for_differentiable.<locals>._use_grad(self, *args, **kwargs)
+       74     torch.set_grad_enabled(self.defaults['differentiable'])
+       75     torch._dynamo.graph_break()
+  ---> 76     ret = func(self, *args, **kwargs)
+       77 finally:
+       78     torch._dynamo.graph_break()
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/adam.py:143, in Adam.step(self, closure)
+      141 if closure is not None:
+      142     with torch.enable_grad():
+  --> 143         loss = closure()
+      145 for group in self.param_groups:
+      146     params_with_grad = []
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:1094, in NeuralNet.train_step.<locals>.step_fn()
+     1092 def step_fn():
+     1093     self._zero_grad_optimizer()
+  -> 1094     step = self.train_step_single(batch, **fit_params)
+     1095     step_accumulator.store_step(step)
+     1097     self.notify(
+     1098         'on_grad_computed',
+     1099         named_parameters=TeeGenerator(self.get_all_learnable_params()),
+     1100         batch=batch,
+     1101         training=True,
+     1102     )
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py:993, in NeuralNet.train_step_single(self, batch, **fit_params)
+      991 self._set_training(True)
+      992 Xi, yi = unpack_data(batch)
+  --> 993 y_pred = self.infer(Xi, **fit_params)
+      994 loss = self.get_loss(y_pred, yi, X=Xi, training=True)
+      995 loss.backward()
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/classifier.py:326, in NeuralNetBinaryClassifier.infer(self, x, **fit_params)
+      323     y_infer, *rest = y_infer
+      325 if (y_infer.dim() > 2) or ((y_infer.dim() == 2) and (y_infer.shape[1] != 1)):
+  --> 326     raise ValueError(
+      327         "Expected module output to have shape (n,) or "
+      328         "(n, 1), got {} instead".format(tuple(y_infer.shape)))
+      330 y_infer = y_infer.reshape(-1)
+      331 if rest is None:
+
+  ValueError: Expected module output to have shape (n,) or (n, 1), got (32, 84) instead
+#+end_example
+:END:
+
+#+begin_src ipython
+  print(X_test.shape, y_test.shape)
+  # Predict with the fitted model
+  y_pred = net.predict(X_test.astype(np.float32))
+  print(y_pred.shape)
+#+end_src
+
+#+RESULTS:
+: (20, 84, 693) (20, 84)
+: (20, 2, 84)
+
+#+begin_src ipython
+  from sklearn.model_selection import cross_val_score, cross_validate
+  scores = cross_val_score(net, X, y, cv=5, scoring='f1_weighted')
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  ValueError                                Traceback (most recent call last)
+  Cell In[232], line 2
+        1 from sklearn.model_selection import cross_val_score, cross_validate
+  ----> 2 scores = cross_val_score(net, X, y, cv=5, scoring='f1_weighted')
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_validation.py:562, in cross_val_score(estimator, X, y, groups, scoring, cv, n_jobs, verbose, fit_params, pre_dispatch, error_score)
+      559 # To ensure multimetric format is not supported
+      560 scorer = check_scoring(estimator, scoring=scoring)
+  --> 562 cv_results = cross_validate(
+      563     estimator=estimator,
+      564     X=X,
+      565     y=y,
+      566     groups=groups,
+      567     scoring={"score": scorer},
+      568     cv=cv,
+      569     n_jobs=n_jobs,
+      570     verbose=verbose,
+      571     fit_params=fit_params,
+      572     pre_dispatch=pre_dispatch,
+      573     error_score=error_score,
+      574 )
+      575 return cv_results["test_score"]
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/utils/_param_validation.py:214, in validate_params.<locals>.decorator.<locals>.wrapper(*args, **kwargs)
+      208 try:
+      209     with config_context(
+      210         skip_parameter_validation=(
+      211             prefer_skip_nested_validation or global_skip_validation
+      212         )
+      213     ):
+  --> 214         return func(*args, **kwargs)
+      215 except InvalidParameterError as e:
+      216     # When the function is just a wrapper around an estimator, we allow
+      217     # the function to delegate validation to the estimator, but we replace
+      218     # the name of the estimator by the name of the function in the error
+      219     # message to avoid confusion.
+      220     msg = re.sub(
+      221         r"parameter of \w+ must be",
+      222         f"parameter of {func.__qualname__} must be",
+      223         str(e),
+      224     )
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_validation.py:328, in cross_validate(estimator, X, y, groups, scoring, cv, n_jobs, verbose, fit_params, pre_dispatch, return_train_score, return_estimator, return_indices, error_score)
+      308 parallel = Parallel(n_jobs=n_jobs, verbose=verbose, pre_dispatch=pre_dispatch)
+      309 results = parallel(
+      310     delayed(_fit_and_score)(
+      311         clone(estimator),
+     (...)
+      325     for train, test in indices
+      326 )
+  --> 328 _warn_or_raise_about_fit_failures(results, error_score)
+      330 # For callable scoring, the return type is only know after calling. If the
+      331 # return type is a dictionary, the error scores can now be inserted with
+      332 # the correct key.
+      333 if callable(scoring):
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_validation.py:414, in _warn_or_raise_about_fit_failures(results, error_score)
+      407 if num_failed_fits == num_fits:
+      408     all_fits_failed_message = (
+      409         f"\nAll the {num_fits} fits failed.\n"
+      410         "It is very likely that your model is misconfigured.\n"
+      411         "You can try to debug the error by setting error_score='raise'.\n\n"
+      412         f"Below are more details about the failures:\n{fit_errors_summary}"
+      413     )
+  --> 414     raise ValueError(all_fits_failed_message)
+      416 else:
+      417     some_fits_failed_message = (
+      418         f"\n{num_failed_fits} fits failed out of a total of {num_fits}.\n"
+      419         "The score on these train-test partitions for these parameters"
+     (...)
+      423         f"Below are more details about the failures:\n{fit_errors_summary}"
+      424     )
+
+  ValueError: 
+  All the 5 fits failed.
+  It is very likely that your model is misconfigured.
+  You can try to debug the error by setting error_score='raise'.
+
+  Below are more details about the failures:
+  --------------------------------------------------------------------------------
+  5 fits failed with the following error:
+  Traceback (most recent call last):
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_validation.py", line 729, in _fit_and_score
+      estimator.fit(X_train, y_train, **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/regressor.py", line 82, in fit
+      return super(NeuralNetRegressor, self).fit(X, y, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1319, in fit
+      self.partial_fit(X, y, **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1278, in partial_fit
+      self.fit_loop(X, y, **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1190, in fit_loop
+      self.run_single_epoch(iterator_train, training=True, prefix="train",
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1226, in run_single_epoch
+      step = step_fn(batch, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1105, in train_step
+      self._step_optimizer(step_fn)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1060, in _step_optimizer
+      optimizer.step(step_fn)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/optimizer.py", line 373, in wrapper
+      out = func(*args, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/optimizer.py", line 76, in _use_grad
+      ret = func(self, *args, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/adam.py", line 143, in step
+      loss = closure()
+             ^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1094, in step_fn
+      step = self.train_step_single(batch, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 993, in train_step_single
+      y_pred = self.infer(Xi, **fit_params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1521, in infer
+      return self.module_(x, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+      return self._call_impl(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+      return forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/tmp/ipykernel_467281/1746822122.py", line 15, in forward
+      lstm_out,  (h_n, c_n) = self.lstm(sequence)
+                              ^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+      return self._call_impl(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+      return forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/rnn.py", line 879, in forward
+      result = _VF.lstm(input, hx, self._flat_weights, self.bias, self.num_layers,
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  RuntimeError: Input and parameter tensors are not the same dtype, found input tensor with Double and parameter tensor with Float
+#+end_example
+:END:
+
+#+begin_src ipython
+  from sklearn.metrics import accuracy_score
+  accuracy_score(y_test, y_pred)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  ValueError                                Traceback (most recent call last)
+  Cell In[16], line 2
+        1 from sklearn.metrics import accuracy_score
+  ----> 2 accuracy_score(y_test, y_pred)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/utils/_param_validation.py:214, in validate_params.<locals>.decorator.<locals>.wrapper(*args, **kwargs)
+      208 try:
+      209     with config_context(
+      210         skip_parameter_validation=(
+      211             prefer_skip_nested_validation or global_skip_validation
+      212         )
+      213     ):
+  --> 214         return func(*args, **kwargs)
+      215 except InvalidParameterError as e:
+      216     # When the function is just a wrapper around an estimator, we allow
+      217     # the function to delegate validation to the estimator, but we replace
+      218     # the name of the estimator by the name of the function in the error
+      219     # message to avoid confusion.
+      220     msg = re.sub(
+      221         r"parameter of \w+ must be",
+      222         f"parameter of {func.__qualname__} must be",
+      223         str(e),
+      224     )
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/metrics/_classification.py:220, in accuracy_score(y_true, y_pred, normalize, sample_weight)
+      154 """Accuracy classification score.
+      155 
+      156 In multilabel classification, this function computes subset accuracy:
+     (...)
+      216 0.5
+      217 """
+      219 # Compute accuracy for each possible representation
+  --> 220 y_type, y_true, y_pred = _check_targets(y_true, y_pred)
+      221 check_consistent_length(y_true, y_pred, sample_weight)
+      222 if y_type.startswith("multilabel"):
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/metrics/_classification.py:93, in _check_targets(y_true, y_pred)
+       90     y_type = {"multiclass"}
+       92 if len(y_type) > 1:
+  ---> 93     raise ValueError(
+       94         "Classification metrics can't handle a mix of {0} and {1} targets".format(
+       95             type_true, type_pred
+       96         )
+       97     )
+       99 # We can't have more than one value on y_type => The set is no more needed
+      100 y_type = y_type.pop()
+
+  ValueError: Classification metrics can't handle a mix of multilabel-indicator and unknown targets
+#+end_example
+:END:
+
+#+begin_src ipython
+  print(y_pred.shape)
+  y_pred_labels = (y_pred[:, 0] > 0.5).astype(int)  # threshold might be 0.5 for sigmoid outputs
+  accuracy = (y_pred_labels == y_test.astype(int)).mean(0)
+  print(accuracy.shape)
+  plt.plot(accuracy)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (20, 2, 84)
+: (84,)
+| <matplotlib.lines.Line2D | at | 0x7fda58653f90> |
+[[file:./.ob-jupyter/bc2c1505bb4f6e35f6f6850d156033f56d2ab352.png]]
+:END:
+
+#+begin_src ipython
+model.eval()  # Put the model in evaluation mode
+with torch.no_grad():  # Disable gradient computation
+    predictions = model(torch.tensor(X_test.astype(np.float32), device='cuda'))
+    print(predictions.shape)
+#+end_src
+#+RESULTS:
+: torch.Size([20, 84])
+
+#+begin_src ipython
+  y_pred_labels = (predictions.cpu().detach().numpy() > 0.5).astype(int)  # threshold might be 0.5 for sigmoid
+  accuracy = (y_pred_labels == y_test.astype(int)).mean((0))
+  print(accuracy.shape)
+#+end_src
+
+#+RESULTS:
+: (84,)
+
+#+begin_src ipython
+  plt.plot(accuracy)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/598af02e7f0a8137bd39e27e7ec3f9297cf1f499.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

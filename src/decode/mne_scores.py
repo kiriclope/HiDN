@@ -91,7 +91,7 @@ def get_boots_score(estimator, X, y, cv, n_jobs=-1):
     X1 = resample(X1, n_samples=X1.shape[0])
 
     X_boot = np.vstack((X0, X1))
-
+    
     # calling mne.cross_val_multiscore to compute diagonal score at each time point
     scores = cross_val_multiscore(
         estimator, X_boot, y, cv=cv, n_jobs=n_jobs, verbose=False
@@ -185,6 +185,9 @@ def run_mne_scores(**kwargs):
     scoring = options["outer_score"]
     
     estimator = SlidingEstimator(model, n_jobs=-1, scoring=scoring, verbose=False)
+
+    # X = np.float32(X)
+    # y = np.float32(y)
     
     start_time = time.time()
     scores, ci_scores = get_cv_score(estimator, X, y, cv, n_jobs=-1)

@@ -1,3 +1,7 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
 import numpy as np
 import pandas as pd
 from imblearn.under_sampling import RandomUnderSampler
@@ -20,9 +24,14 @@ from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 from sklearn.svm import LinearSVC
 from mne.decoding import Scaler, Vectorizer
 
+from skorch import NeuralNetClassifier
+from skorch.callbacks import EarlyStopping
+from skorch import NeuralNetClassifier
+
 from src.decode.bolasso_sklearn import bolasso
 from src.decode.SGDClassifierCV import SGDClassifierCV
 from src.decode.LinearSVCCV import LinearSVCCV
+from src.decode.perceptron import Perceptron
 
 # from sklearn.pipeline import Pipeline
 from scipy.stats import pearsonr
@@ -165,6 +174,27 @@ def get_clf(**kwargs):
         kwargs["l1_ratios"] = np.linspace(0, 1, kwargs["n_alpha"])
         kwargs["solver"] = "saga"
 
+    if kwargs["clf"] == "perceptron":
+        early_stopping = EarlyStopping(
+            monitor='valid_loss', # Metric to monitor
+            patience=5, # Number of epochs to wait for improvement
+            threshold=0.001, # Minimum change to qualify as an improvement
+            threshold_mode='rel', # 'rel' for relative change, 'abs' for absolute change
+            lower_is_better=True # Set to True if lower metric values are better
+        )
+                
+        clf = NeuralNetClassifier(
+            module=Perceptron(kwargs['num_feat']),
+            criterion=nn.BCELoss,
+            optimizer=optim.Adam,
+            optimizer__lr=0.01,
+            max_epochs=100,
+            callbacks=[early_stopping],  # Add the EarlyStopping callback here
+            verbose=0,
+            iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+        )
+                        
     if kwargs["clf"] == "log_loss":
         clf = LogisticRegressionCV(
             Cs=kwargs["Cs"],
@@ -258,7 +288,7 @@ def get_clf(**kwargs):
             warm_start=False,
             average=False,
         )
-
+        
     pipe = []
     
     # resampling data

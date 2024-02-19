@@ -31,14 +31,15 @@ def get_coef_feat(X_days, y_days, **options):
     
     if options["features"] == "sample":
         options["task"] = "all"
-
+        
         if options["overlap"] == "ED":
             options["epochs"] = ["ED"]
         elif options["overlap"] == "MD":
             options["epochs"] = ["MD"]
         elif options["overlap"] == "LD":
             options["epochs"] = ["LD"]
-            
+        else:
+            options["epochs"] = ["ED"]
         options["overlap"] = "sample"
         
     elif options["features"] == "distractor":
@@ -55,13 +56,23 @@ def get_coef_feat(X_days, y_days, **options):
         options["task"] = "Dual"
         options["epochs"] = ["TEST"]
         options["overlap"] = "test"
-    
+
+    elif options["features"] == "choice":
+        options["task"] = "all"
+        options["epochs"] = ["CHOICE"]
+        options["overlap"] = "readout"
+        
+    elif options["features"] == "paired":
+        options["task"] = "all"
+        options["epochs"] = ["TEST"]
+        options["overlap"] = "readout"
+        
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     X_avg = avg_epochs(X, **options)
     
     coefs, model = get_coefs(model, X_avg, y, **options)
     
-    # coefs = coefs / np.linalg.norm(coefs)
+    coefs = coefs / np.linalg.norm(coefs)
     return coefs, model
 
 
@@ -145,7 +156,7 @@ def run_get_overlap(**kwargs):
             n_samples=1000,
         )
 
-    if options["show_AB"]=="A":        
+    if options["show_AB"]=="A":
         plot_overlap(data=A, ci=overlap_ci, **options)
     elif options["show_AB"] =="B":
         if options["overlap"] == "sample":
