@@ -64,7 +64,10 @@ def run_mne_coefs(**kwargs):
 
     options["method"] = "bolasso"
 
-    model = get_clf(**options)
+    if options["model"] == None:
+        model = get_clf(**options)
+    else:
+        model = options["model"]
 
     scoring = options["inner_score"]
     estimator = SlidingEstimator(model, n_jobs=-1, scoring=scoring, verbose=False)

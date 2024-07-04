@@ -44,11 +44,11 @@ def get_coef_feat(X_days, y_days, **options):
         
     elif options["features"] == "distractor":
         options["task"] = "Dual"
-
+        
         if options["overlap"] == 'rwd':
-            options["epochs"] = ["MD"]
-        else:
             options["epochs"] = ["RWD"]
+        else:
+            options["epochs"] = ["MD"]
         
         options["overlap"] = "distractor"
         
@@ -59,12 +59,10 @@ def get_coef_feat(X_days, y_days, **options):
 
     elif options["features"] == "choice":
         options["task"] = "all"
-        options["epochs"] = ["CHOICE"]
         options["overlap"] = "readout"
         
     elif options["features"] == "paired":
-        options["task"] = "all"
-        options["epochs"] = ["TEST"]
+        options["task"] = "Dual"
         options["overlap"] = "readout"
         
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
@@ -73,6 +71,8 @@ def get_coef_feat(X_days, y_days, **options):
     coefs, model = get_coefs(model, X_avg, y, **options)
     
     coefs = coefs / np.linalg.norm(coefs)
+    if options['features']=='paired':
+        coefs = coefs*(-1)
     return coefs, model
 
 

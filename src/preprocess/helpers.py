@@ -190,10 +190,10 @@ def preprocess_X(
     scale=None,
     avg_mean=0,
     avg_noise=0,
-    unit_var=0,    
+    unit_var=0,
 ):
     # X = savgol_filter(X, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
-    
+
     if scaler == "standard":
         X_scale, center, scale = standard_scaler_BL(
             X, center, scale, avg_mean, avg_noise
@@ -208,7 +208,7 @@ def preprocess_X(
         X_scale = minmax_X_y(X, y)
     else:
         X_scale = X
-    
+
     # X_scale = savgol_filter(X_scale, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
 
     # X_scale = detrend(X_scale, bp=[gv.bins_STIM[0], gv.bins_DIST[0]])
@@ -237,25 +237,25 @@ def deconvolve_trial_neuron(X):
 def dcvl_df(X):
     print('Deconvolve Fluo')
     n_trials, n_neurons, n_time = X.shape
-    
+
     # Initialize an array to hold the deconvolved data
     results = Parallel(n_jobs=-1)(
         delayed(deconvolve_trial_neuron)(X[trial, neuron])
         for trial in range(n_trials) for neuron in range(n_neurons)
     )
-    
+
     spike_estimates = np.array(results).reshape(n_trials, n_neurons, n_time)
-    
+
     return spike_estimates
 
 
 def preprocess_df(X, y, **kwargs):
     n_days = kwargs["n_days"]
     days = np.arange(1, n_days + 1)
-    
+
     if kwargs['DCVL']:
         X = dcvl_df(X)
-    
+
     X_scaled = np.zeros(X.shape)
     for day in days:
         idx = y.day == day
@@ -267,15 +267,15 @@ def preprocess_df(X, y, **kwargs):
             avg_noise=kwargs["avg_noise_BL"],
             unit_var=kwargs["unit_var_BL"],
         )
-    
+
     return X_scaled
 
 
 def avg_epochs(X, **kwargs):
     X_avg = np.nanmean(X, axis=-1)
-    
+
     X_epochs = np.empty(tuple([len(kwargs["epochs"])]) + X_avg.shape)
-    
+
     for i_epoch, epoch in enumerate(kwargs["epochs"]):
         if epoch == "BL":
             X_BL = np.nanmean(X[..., kwargs["bins_BL"]], axis=-1)
@@ -291,6 +291,9 @@ def avg_epochs(X, **kwargs):
             X_epochs[i_epoch] = X_STIM
         elif epoch == "DIST":
             X_DIST = np.nanmean(X[..., kwargs["bins_DIST"]], axis=-1)
+            X_epochs[i_epoch] = X_DIST
+        elif epoch == "PRE_DIST":
+            X_DIST = np.nanmean(X[..., kwargs["bins_PRE_DIST"]], axis=-1)
             X_epochs[i_epoch] = X_DIST
         elif epoch == "MD":
             X_MD = np.nanmean(X[..., kwargs["bins_MD"]], axis=-1)
@@ -328,7 +331,7 @@ def avg_epochs(X, **kwargs):
 
 def avg_phase_epochs(X, **kwargs):
     X_avg = np.nanmean(X, axis=-1)
-    
+
     X_epochs = np.empty(tuple([len(epochs)]) + X_avg.shape)
     # print('X', X_epochs.shape, 'X_avg', X_avg.shape)
     # print('start', gv.bin_start, 'epochs', gv.epochs)

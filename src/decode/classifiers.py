@@ -31,7 +31,7 @@ from skorch import NeuralNetClassifier
 from src.decode.bolasso_sklearn import bolasso
 from src.decode.SGDClassifierCV import SGDClassifierCV
 from src.decode.LinearSVCCV import LinearSVCCV
-from src.decode.perceptron import Perceptron
+from src.decode.perceptron import Perceptron, RegularizedNet
 
 # from sklearn.pipeline import Pipeline
 from scipy.stats import pearsonr
@@ -53,7 +53,7 @@ class PearsonCorrSelector(BaseEstimator, TransformerMixin):
             corrected_alpha = self.alpha
         else:
             raise ValueError("Unsupported correction method provided: {}".format(self.correction_method))
-        
+
         self.support_ = p_values <= corrected_alpha
         return self
 
@@ -74,7 +74,7 @@ class safeSelector(BaseEstimator, TransformerMixin):
     def __init__(self, method='fpr', alpha=0.05):
         self.method = method
         self.alpha = alpha
-        
+
         if 'fpr' in method:
             self.selector = SelectFpr(f_classif, alpha=alpha)
         elif 'fdr' in method:
@@ -89,9 +89,9 @@ class safeSelector(BaseEstimator, TransformerMixin):
             self.selector = VarianceThreshold(threshold=alpha)
         elif 'corr' in method:
             self.selector = PearsonCorrSelector(alpha=alpha)
-            
+
         self.feature_indices_ = None
-        
+
     def fit(self, X, y=None):
         self.selector.fit(X, y)
         return self
@@ -104,7 +104,7 @@ class safeSelector(BaseEstimator, TransformerMixin):
         else:
             self.feature_indices_ = self.selector.get_support(indices=True)
             return X_t
-    
+
     def _get_support_mask(self):
         return self.selector._get_support_mask()
 
@@ -179,22 +179,25 @@ def get_clf(**kwargs):
             monitor='valid_loss', # Metric to monitor
             patience=5, # Number of epochs to wait for improvement
             threshold=0.001, # Minimum change to qualify as an improvement
-            threshold_mode='rel', # 'rel' for relative change, 'abs' for absolute change
+            threshold_mode='rel', # 'rel' for relative change
             lower_is_better=True # Set to True if lower metric values are better
         )
-                
-        clf = NeuralNetClassifier(
-            module=Perceptron(kwargs['num_feat']),
-            criterion=nn.BCELoss,
+
+        clf = RegularizedNet(
+            module=Perceptron,
+            module__num_features=kwargs['num_feat'],
+            module__dropout_rate=0.5,
+            criterion=nn.BCEWithLogitsLoss,
             optimizer=optim.Adam,
-            optimizer__lr=0.01,
-            max_epochs=100,
-            callbacks=[early_stopping],  # Add the EarlyStopping callback here
+            optimizer__lr=0.1,
+            max_epochs=1000,
+            callbacks=[early_stopping],
             verbose=0,
-            iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+            # train_split=None,
+            # iterator_train__shuffle=True,
             device='cuda' if torch.cuda.is_available() else 'cpu',
         )
-                        
+
     if kwargs["clf"] == "log_loss":
         clf = LogisticRegressionCV(
             Cs=kwargs["Cs"],
@@ -261,7 +264,7 @@ def get_clf(**kwargs):
             warm_start=False,
             average=False,
         )
-    
+
     if kwargs["clf"] == "SGDCV":
         clf = SGDClassifierCV(
             cv=cv,
@@ -288,18 +291,18 @@ def get_clf(**kwargs):
             warm_start=False,
             average=False,
         )
-        
+
     pipe = []
-    
+
     # resampling data
     if kwargs['balance'] == 'under':
-        pipe.append(("sampler", RandomUnderSampler(random_state=kwargs['random_state']))) 
+        pipe.append(("sampler", RandomUnderSampler(random_state=kwargs['random_state'])))
     elif kwargs['balance'] == 'over':
-        pipe.append(("sampler", RandomOverSampler(random_state=kwargs['random_state']))) 
+        pipe.append(("sampler", RandomOverSampler(random_state=kwargs['random_state'])))
     elif kwargs['balance'] == 'aug':
         # data augmantation
         pipe.append(("sampler", SVMSMOTE(random_state=kwargs["random_state"])))
-        
+
     # scaling
     if kwargs["scaler"] == "custom":
         pipe.append(("scaler", CustomScaler()))
@@ -323,7 +326,7 @@ def get_clf(**kwargs):
     # prescreen
     if kwargs["prescreen"] is not None:
         pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
-    
+
     # dim red
     if kwargs["pca"]:
         pipe.append(("pca", PCA(n_components=kwargs["n_comp"])))
@@ -355,6 +358,14 @@ def get_clf(**kwargs):
                 param_grid = dict(
                     clf__alpha=kwargs["Cs"], clf__l1_ratio=kwargs["l1_ratios"]
                 )
+            elif kwargs["clf"] == "perceptron":
+
+                param_grid = {
+                    'clf__alpha': np.logspace(-4, 4, 10),
+                    'clf__l1_ratio': np.linspace(0, 1, 10),
+                    'clf__module__dropout_rate': np.linspace(0, 1, 10),
+                }
+
             else:
                 param_grid = dict(clf__C=kwargs["Cs"])
 

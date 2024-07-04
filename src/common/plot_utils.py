@@ -78,6 +78,7 @@ def add_vlines(ax=None, mouse=""):
 
     time_periods = [t_STIM, t_DIST, t_TEST, t_CUE]
     colors = ["b", "b", "b", "g"]
+    
     if ax is None:
         for period, color in zip(time_periods, colors):
             plt.axvspan(period[0], period[1], alpha=0.1, color=color)
@@ -300,6 +301,36 @@ def plot_grid(
         count += 1
     plt.tight_layout()
     plt.show()
+
+def add_vdashed(ax):
+    # STIM
+    ax.axvline(2, color="w", ls="--", lw=0.5)
+    ax.axhline(2, color="w", ls="--", lw=0.5)
+
+    ax.axvline(3, color="w", ls="--", lw=0.5)
+    ax.axhline(3, color="w", ls="--", lw=0.5)
+
+    # Dist
+    ax.axvline(4.5, color="w", ls="--", lw=0.5)
+    ax.axhline(4.5, color="w", ls="--", lw=0.5)
+
+    ax.axvline(5.5, color="w", ls="--", lw=0.5)
+    ax.axhline(5.5, color="w", ls="--", lw=0.5)
+
+    # Cue
+    ax.axvline(6.5, color="w", ls="--", lw=0.5)
+    ax.axhline(6.5, color="w", ls="--", lw=0.5)
+
+    ax.axvline(7, color="w", ls="--", lw=0.5)
+    ax.axhline(7, color="w", ls="--", lw=0.5)
+
+    # Test
+    ax.axvline(9, color="w", ls="--", lw=0.5)
+    ax.axhline(9, color="w", ls="--", lw=0.5)
+
+    ax.axvline(10, color="w", ls="--", lw=0.5)
+    ax.axhline(10, color="w", ls="--", lw=0.5)
+
 
 
 if __name__ == "__main__":
