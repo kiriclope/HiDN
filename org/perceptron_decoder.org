@@ -1,0 +1,1134 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session skorch :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+  from time import perf_counter
+
+  from scipy.stats import uniform, loguniform
+  from sklearn.base import clone
+  from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+  from sklearn.preprocessing import StandardScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import StratifiedKFold, cross_val_score, cross_validate
+
+  from mne.decoding import SlidingEstimator, get_coef, cross_val_multiscore, GeneralizingEstimator
+  from src.decode.my_mne import my_cross_val_multiscore
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.preprocess.helpers import avg_epochs
+
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader
+  DEVICE = 'cuda'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Optimization
+
+#+begin_src ipython
+  def train(dataloader, model, loss_fn, optimizer, penalty=None, lbd=1, clip_grad=0):
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      model.train()
+      for batch, (X, y) in enumerate(dataloader):
+          X, y = X.to(device), y.to(device)
+          # Compute prediction error
+          y_pred = model(X)
+
+          # if y.ndim==y_pred.ndim:
+          loss = loss_fn(y_pred, y)
+
+          if penalty is not None:
+              reg_loss = 0
+              for param in model.parameters():
+                  if penalty=='l1':
+                      reg_loss += torch.sum(torch.abs(param))
+                  else:
+                      reg_loss += torch.sum(torch.square(param))
+
+                  loss = loss + lbd * reg_loss
+
+          # Backpropagation
+          loss.backward()
+
+          # Clip gradients
+          if clip_grad:
+              torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+              #torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
+
+          optimizer.step()
+          optimizer.zero_grad()
+
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def test(dataloader, model, loss_fn):
+      size = len(dataloader.dataset)
+      num_batches = len(dataloader)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      # Validation loop.
+      model.eval()
+      val_loss = 0.0
+      with torch.no_grad():
+          for data, targets in dataloader:
+              data, targets = data.to(device), targets.to(device)
+
+              outputs = model(data)
+              loss = loss_fn(outputs, targets)
+              val_loss += loss.item() * data.size(0)
+
+          val_loss /= size
+
+      return val_loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, penalty=None, lbd=1, thresh=.005):
+      scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+      # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
+      # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else 'cpu')
+      model.to(device)
+
+      loss_list = []
+      val_loss_list = []
+
+      # Training loop.
+      for epoch in range(num_epochs):
+          loss = train(train_loader, model, loss_fn, optimizer, penalty, lbd)
+          val_loss = test(val_loader, model, loss_fn)
+          scheduler.step(val_loss)
+
+          loss_list.append(loss.item())
+          val_loss_list.append(val_loss)
+
+          # if epoch % int(num_epochs  / 10) == 0:
+          print(f'Epoch {epoch+1}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
+
+          if val_loss < thresh:
+              print(f'Stopping training as loss has fallen below the threshold: {val_loss}')
+              break
+
+          if val_loss > 300:
+              print(f'Stopping training as loss is too high: {val_loss}')
+              break
+
+          if torch.isnan(loss):
+              print(f'Stopping training as loss is NaN.')
+              break
+
+      return loss_list, val_loss_list
+#+end_src
+
+#+RESULTS:
+
+** Loss
+
+#+begin_src ipython
+  def correlation_loss(output, target):
+      # Subtract the mean of each vector
+      output_mean = output - torch.mean(output)
+      target_mean = target - torch.mean(target)
+
+      # Compute the covariance between output and target
+      covariance = torch.mean(output_mean * target_mean)
+
+      # Compute the standard deviations of the vectors
+      output_std = torch.std(output)
+      target_std = torch.std(target)
+
+      # Calculate the Pearson correlation coefficient
+      correlation = covariance / (output_std * target_std)
+
+      # Since we want to increase the correlation, we minimize its negative
+      loss = -correlation  # Maximizing correlation by minimizing its negative
+
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+    import torch
+    import torch.nn as nn
+
+    def sign_constrained_loss(output, xi, target_sign):
+        dot_product = torch.dot(output.flatten(), xi.flatten())
+        if target_sign > 0:
+            loss = torch.relu(-dot_product)  # Encourages positive dot product
+        else:
+            loss = torch.relu(dot_product)   # Encourages negative dot product
+        return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class CosineLoss(nn.Module):
+      def __init__(self):
+          super(CosineLoss, self).__init__()
+          self.cosine_similarity = nn.CosineSimilarity(dim=-1)
+
+      def forward(self, input1, input2):
+          # Calculate cosine similarity
+          cosine_sim = self.cosine_similarity(input1, input2)
+          # Calculate the loss as 1 - cosine_similarity
+          loss = 1 - cosine_sim
+          # Return the mean loss over the batch
+          return loss.mean()
+#+end_src
+
+#+RESULTS:
+
+
+#+RESULTS:
+
+** Other
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          v = b - np.dot(b, a) / np.dot(a, a) * a
+
+      if IF_NORM:
+          u = a / np.linalg.norm(a)
+          v = b / np.linalg.norm(b)
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_idx(model, rank=2):
+      ksi = torch.hstack((model.low_rank.U, model.low_rank.V)).T
+      ksi = ksi[:, :model.Na[0]]
+
+      readout = model.low_rank.linear.weight.data
+      ksi = torch.vstack((ksi, readout))
+
+      print('ksi', ksi.shape)
+
+      ksi = ksi.cpu().detach().numpy()
+      theta = get_theta(ksi[0], ksi[rank])
+
+      return theta.argsort()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_overlap(model, rates):
+      ksi = model.odors.cpu().detach().numpy()
+      return rates @ ksi.T / rates.shape[-1]
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import scipy.stats as stats
+
+  def plot_smooth(data, ax, color):
+      mean = data.mean(axis=0)
+      ci = smooth.std(axis=0, ddof=1) * 1.96
+
+      # Plot
+      ax.plot(mean, color=color)
+      ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+** plots
+
+#+begin_src ipython
+  def circcvl(signal, windowSize=10, axis=-1):
+      """
+      Compute the circular convolution of a signal with a smooth kernel.
+
+      Parameters:
+      signal (ndarray): The input signal.
+      windowSize (int): The length of the smoothing window. Defaults to 10.
+      axis (int): The axis along which the operation is performed. Default is -1.
+
+      Returns:
+      ndarray: Returns the smoothed signal after circular convolution.
+      """
+
+      signal_copy = signal
+
+      if axis != -1 and signal.ndim != 1:
+          signal_copy = np.swapaxes(signal, axis, -1)
+
+      ker = np.concatenate(
+          (np.ones((windowSize,)), np.zeros((signal_copy.shape[-1] - windowSize,)))
+          )
+
+      smooth_signal = np.real(
+          np.fft.ifft(
+              np.fft.fft(signal_copy, axis=-1) * np.fft.fft(ker, axis=-1), axis=-1
+          )
+      ) * (1.0 / float(windowSize))
+
+      if axis != -1 and signal.ndim != 1:
+          smooth_signal = np.swapaxes(smooth_signal, axis, -1)
+
+      return smooth_signal
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_rates_selec(rates, idx, thresh=0.5, figname='fig.svg'):
+        ordered = rates[..., idx]
+        fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+        r_max = thresh * np.max(rates[0])
+
+        ax[0].imshow(rates[0].T, aspect='auto', cmap='jet', vmin=0, vmax=r_max)
+        ax[0].set_ylabel('Neuron #')
+        ax[0].set_xlabel('Step')
+
+        ax[1].imshow(ordered[0].T, aspect='auto', cmap='jet', vmin=0, vmax=r_max)
+        ax[1].set_yticks(np.linspace(0, model.Na[0].cpu().detach(), 5), np.linspace(0, 360, 5).astype(int))
+        ax[1].set_ylabel('Pref. Location (°)')
+        ax[1].set_xlabel('Step')
+        plt.savefig(figname, dpi=300)
+        plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_overlap(rates, memory, readout, labels=['A', 'B'], figname='fig.svg'):
+      fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+      overlap =(rates @ memory) / rates.shape[-1]
+
+      if overlap.shape[0]>2:
+          ax[0].plot(overlap.T[..., :2], label=labels[0])
+          ax[0].plot(overlap.T[..., 2:], '--', label=labels[1])
+      else:
+          ax[0].plot(overlap.T[..., 0], label=labels[0])
+          ax[0].plot(overlap.T[..., 1], '--', label=labels[1])
+
+      ax[0].set_xlabel('Step')
+      ax[0].set_ylabel('Overlap')
+      ax[0].set_title('Memory')
+
+      overlap =(rates @ readout) / rates.shape[-1]
+
+      if overlap.shape[0]>2:
+          ax[1].plot(overlap.T[..., :2], label=labels[0])
+          ax[1].plot(overlap.T[..., 2:], '--', label=labels[1])
+      else:
+          ax[1].plot(overlap.T[..., 0], label=labels[0])
+          ax[1].plot(overlap.T[..., 1], '--', label=labels[1])
+
+      ax[1].set_xlabel('Step')
+      ax[1].set_ylabel('Overlap')
+      ax[1].set_title('Readout')
+
+      # plt.legend(fontsize=10, frameon=False)
+      plt.savefig(figname, dpi=300)
+      plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_m0_m1_phi(rates, idx, figname='fig.svg'):
+
+      m0, m1, phi = decode_bump(rates[..., idx], axis=-1)
+      fig, ax = plt.subplots(1, 3, figsize=[2*width, height])
+
+      ax[0].plot(m0[:2].T)
+      ax[0].plot(m0[2:].T, '--')
+      #ax[0].set_ylim([0, 360])
+      #ax[0].set_yticks([0, 90, 180, 270, 360])
+      ax[0].set_ylabel('$\mathcal{F}_0$ (Hz)')
+      ax[0].set_xlabel('Step')
+
+      ax[1].plot(m1[:2].T)
+      ax[1].plot(m1[2:].T, '--')
+      # ax[1].set_ylim([0, 360])
+      # ax[1].set_yticks([0, 90, 180, 270, 360])
+      ax[1].set_ylabel('$\mathcal{F}_1$ (Hz)')
+      ax[1].set_xlabel('Step')
+
+      ax[2].plot(phi[:2].T * 180 / np.pi)
+      ax[2].plot(phi[2:].T * 180 / np.pi, '--')
+      ax[2].set_ylim([0, 360])
+      ax[2].set_yticks([0, 90, 180, 270, 360])
+      ax[2].set_ylabel('Phase (°)')
+      ax[2].set_xlabel('Step')
+
+      plt.savefig(figname, dpi=300)
+      plt.show()
+    #+end_src
+
+#+RESULTS:
+
+* Perceptron
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  class Perceptron(nn.Module):
+      def __init__(self, num_features, dropout_rate=0.0):
+          super(Perceptron, self).__init__()
+          self.linear = nn.Linear(num_features, 1)
+          self.dropout = nn.Dropout(dropout_rate)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          hidden = self.linear(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=32, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+        x = self.relu(self.linear(x))
+        x = self.dropout(x)
+        hidden = self.linear2(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class Autoencoder(nn.Module):
+      def __init__(self, num_features, encoding_dim=64):
+          super(Autoencoder, self).__init__()
+          # Encoder
+          self.encoder = nn.Sequential(
+              nn.Linear(num_features, 128),
+              nn.ReLU(True),
+              nn.Linear(128, encoding_dim),
+              nn.ReLU(True)
+          )
+          # Decoder
+          self.decoder = nn.Sequential(
+              nn.Linear(encoding_dim, 128),
+              nn.ReLU(True),
+              nn.Linear(128, num_features),
+              nn.ReLU(True)
+          )
+
+      def forward(self, x):
+          x = self.encoder(x)
+          x = self.decoder(x)
+          return x
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from skorch.callbacks import Callback
+  from skorch.callbacks import EarlyStopping
+  from skorch.callbacks import EpochScoring
+
+  early_stopping = EarlyStopping(
+      monitor='train_loss',    # Metric to monitor
+      patience=5,              # Number of epochs to wait for improvement
+      threshold=0.001,       # Minimum change to qualify as an improvement
+      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+      lower_is_better=True     # Set to True if lower metric values are better
+  )
+
+  auc = EpochScoring(scoring='roc_auc', lower_is_better=False)
+  accuracy = EpochScoring(scoring='accuracy', lower_is_better=False)
+
+  class CaptureWeightsCallback(Callback):
+      def __init__(self):
+          super().__init__()  # Ensure to call the superclass initializer if needed
+          self.weights = []
+
+      def on_train_end(self, net, **kwargs):
+          # Capture the linear layer's weights after training ends
+          self.weights.append(net.module_.linear.weight.data.cpu().numpy())
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  class RegularizedNet(NeuralNetClassifier):
+      def __init__(self, module, alpha=0.01, l1_ratio=0.95, **kwargs):
+          self.alpha = alpha  # Regularization strength
+          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+          super().__init__(module, **kwargs)
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          # Call super method to compute primary loss
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+          if self.alpha>0:
+              elastic_net_reg = 0
+              for param in self.module_.parameters():
+                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2) / 2
+
+          # Add the elastic net regularization term to the primary loss
+          return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from sklearn.metrics import make_scorer
+
+  def overlap_scoring_function(estimator, X, y_true):
+      y = y_true.copy()
+      y[y==0] = 1
+
+      try:
+          weights = estimator['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      except:
+          weights = estimator.module_.linear.weight.data.cpu().detach().numpy()[0]
+
+      overlap = (y[:,0] * (X @ weights.T)) / X.shape[1]
+
+      size = int(y.shape[0] / 2)
+      # result = np.array((overlap[:size].mean(),overlap[size:].mean()))
+      # print(result.shape)
+
+      return -overlap.mean()
+
+  # Make our custom scorer compatible with sklearn
+  overlap_scorer = make_scorer(overlap_scoring_function, greater_is_better=True)
+#+end_src
+
+#+RESULTS:
+
+* Load Data
+** Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '../')
+
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.common.options import set_options
+#+end_src
+
+#+RESULTS:
+
+** Parameters
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = [1, 2, 3, 4, 5, 6]
+
+  kwargs = dict()
+  kwargs = {'prescreen': None, 'pval': 0.05, 'trials': '', 'balance': 'under',
+            'method': 'bootstrap', 'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
+            'bootstrap': True, 'n_boots': 1000,
+            'preprocess': False, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l2',
+            'out_fold': 'stratified', 'n_out': 5,
+            'in_fold': 'stratified', 'n_in': 5,
+            'random_state': None, 'n_repeats': 10,
+            'n_lambda': 20, 'T_WINDOW': 0.5,
+            'features': 'sample',
+            'day': 'last'
+            }
+#+end_src
+
+#+RESULTS:
+
+** Load X, y
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['reload'] = 0
+  options['data_type'] = 'dF'
+
+  options['mouse'] = 'JawsM15'
+  options['features'] = 'choice'
+  options['trials'] = ''
+
+  X_list = []
+  y_list = []
+  tasks = ["all"]
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X_list.append(X_dum)
+      y_list.append(y_dum)
+
+  print('X', X_data.shape, 'y', y_data.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (57, 693, 84) X_S2 (39, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (43, 693, 84) X_S2 (53, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (47, 693, 84) X_S2 (49, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (47, 693, 84) X_S2 (49, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (24, 693, 84) X_S2 (72, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (46, 693, 84) X_S2 (50, 693, 84)
+  X (96, 693, 84) y (96,)
+#+end_example
+
+#+begin_src ipython
+  X_list = np.array(X_list)
+  y_list = np.array(y_list)
+  print(X_list.shape, y_list.shape)
+#+end_src
+
+#+RESULTS:
+: (1, 6, 96, 693, 84) (1, 6, 96)
+
+* Decoding across days
+
+#+begin_src ipython
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.0,
+      criterion=nn.BCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      verbose=0,
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+  #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def hyper_tune(model, X, y, epoch, params, scoring):
+      options['epochs'] = [epoch]
+      X_avg = avg_epochs(X, **options).astype(np.float32)
+      print('X', X.shape, 'y', y.shape)
+
+      # Perform grid search
+      grid = GridSearchCV(model, params, refit=True, cv=5, scoring=scoring, n_jobs=10)
+      start = perf_counter()
+      print('hyperparam fitting ...')
+      grid.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      best_model = grid.best_estimator_
+      best_params = grid.best_params_
+      print(best_params)
+      return best_model
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  task = 0
+  day = 0
+
+  cv = StratifiedKFold(n_splits=5)
+
+  params = {
+      'net__alpha': np.logspace(-3, 3, 10),
+      'net__l1_ratio': np.linspace(0, 1, 10),
+      # 'net__module__dropout_rate': np.linspace(0, 1, 10),  # Example dropout rates
+  }
+
+  score_day = []
+  for day in range(6):
+      X = X_list[task, day]
+      y = y_list[task, day]
+
+      X = X.astype(np.float32)
+      y = np.float32(y[:, np.newaxis])
+
+      model = hyper_tune(pipe, X, y, epoch='CHOICE', params=params, scoring='f1_weighted')
+      estimator = SlidingEstimator(clone(model), n_jobs=1, scoring='f1_weighted', verbose=False)
+      scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=-1, verbose=False)
+
+      score_day.append(scores)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  X (96, 693, 84) y (96, 1)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {}
+  X (96, 693, 84) y (96, 1)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {}
+  X (96, 693, 84) y (96, 1)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {}
+  X (96, 693, 84) y (96, 1)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {}
+  X (96, 693, 84) y (96, 1)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {}
+  X (96, 693, 84) y (96, 1)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {}
+#+end_example
+
+#+begin_src ipython
+  score_day = np.array(score_day)
+  print(score_day.shape)
+#+end_src
+
+#+RESULTS:
+: (6, 5, 84)
+
+#+begin_src ipython
+  plt.plot(circcvl(score_day.mean(1), windowSize=2).T);
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/5da5bce068792788d15e51aba942e0807156cdc7.png]]
+
+#+begin_src ipython
+  options['epochs'] = ['CHOICE']
+  score_avg = avg_epochs(score_day, **options)
+  print(score_avg.shape)
+  plt.plot(np.arange(1, 7), score_avg.mean(1), '-o')
+  plt.xticks(np.arange(1, 7))
+  plt.yticks([0.5, 0.6, 0.7, 0.8])
+  plt.xlabel('Day')
+  plt.ylabel('Choice')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (6, 5)
+[[file:./.ob-jupyter/83a3e7752d5a4f9f548cc9fe4b9cce9e08a56ca9.png]]
+:END:
+
+* Model Fit
+** Parameters
+
+#+begin_src ipython
+  task = 0
+  day = -1
+#+end_src
+
+#+RESULTS:
+
+** GridSearchCV
+
+#+begin_src ipython
+  print(X_data.shape)
+#+end_src
+
+#+RESULTS:
+: (32, 693, 84)
+
+#+begin_src ipython
+
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.5,
+      criterion=nn.BCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      verbose=0,
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  # net.set_params(train_split=False, verbose=0)
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  options['epochs'] = ['CHOICE']
+  X = avg_epochs(X_list[task][day], **options)
+  X = X.astype(np.float32)
+
+  y = np.float32(y_list[task][day][:, np.newaxis])
+  print('X', X.shape, 'y', y.shape)
+#+end_src
+
+#+RESULTS:
+: X (32, 693) y (32, 1)
+
+#+begin_src ipython
+  params = {
+      'net__alpha': np.logspace(-3, 3, 10),
+      'net__l1_ratio': np.linspace(0, 1, 10),
+      'net__module__dropout_rate': np.linspace(0, 1, 10),  # Example dropout rates
+  }
+
+  net.set_params(train_split=None, verbose=0)
+
+  # Perform grid search
+  model = GridSearchCV(pipe, params, refit=True, cv=5, scoring='f1_weighted', n_jobs=10)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  start = perf_counter()
+  print('hyperparam fitting ...')
+  model.fit(X, y)
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+
+#+RESULTS:
+: hyperparam fitting ...
+: Elapsed (with compilation) = 0h 0m 26s
+
+#+begin_src ipython
+  best_model = model.best_estimator_
+  best_params = model.best_params_
+  print(best_params)
+#+end_src
+
+#+RESULTS:
+: {'net__alpha': 0.001, 'net__l1_ratio': 0.1111111111111111, 'net__module__dropout_rate': 0.3333333333333333}
+
+#+begin_src ipython
+  weights = best_model['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+  plt.hist(weights, bins=100)
+  plt.xlabel('Weights')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/8c1a4b5c1a76bf27d0fdafd0415e8b6b1aebbcb3.png]]
+
+#+begin_src ipython
+  #  print(weights)
+#+end_src
+
+#+RESULTS:
+
+** Overlap
+
+#+begin_src ipython
+  X_first = X_list[task][day].astype(np.float32).swapaxes(-1,1)
+  overlap = -X_first @ weights
+  print(overlap.shape)
+#+end_src
+
+#+RESULTS:
+: (32, 84)
+
+#+begin_src ipython
+  y_first = y_list[task][day][:, np.newaxis].astype(np.float32)
+  print(y_first.shape)
+  print((y_first==1).shape)
+#+end_src
+
+#+RESULTS:
+: (32, 1)
+: (32, 1)
+
+#+begin_src ipython
+  plt.plot(overlap[(y_first==0).T[0]].mean(0));
+  plt.plot(overlap[(y_first==1).T[0]].mean(0));
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/3bf2015806e3a7f945cd011e019eea3716d00298.png]]
+
+* GeneralizingEstimator
+
+#+begin_src ipython
+  # For some reason I need to reinitialize the model otherwise mne crashes
+
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_list.shape[-2],
+      alpha=best_params['net__alpha'],
+      l1_ratio=best_params['net__l1_ratio'],
+      criterion=nn.BCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.05,
+      max_epochs=100,
+      callbacks=[early_stopping],  # Add the EarlyStopping callback here
+      verbose=0,
+      train_split=None,
+      # iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  model = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  start = perf_counter()
+  # model = net
+  cv = StratifiedKFold(n_splits=5)
+
+  estimator = GeneralizingEstimator(model, n_jobs=-1, scoring='f1', verbose=False)
+
+  X_first = X_list[task][0].astype(np.float32)
+  y_first = y_list[task][0][:, np.newaxis].astype(np.float32)
+
+  X_last = X_list[task][-1].astype(np.float32)
+  y_last = y_list[task][-1][:, np.newaxis].astype(np.float32)
+
+  print('running cross temp fit...')
+  scores_first = cross_val_multiscore(estimator, X_first, y_first, cv=cv, n_jobs=-1, verbose=False)
+  scores_last = cross_val_multiscore(estimator, X_last, y_last, cv=cv, n_jobs=-1, verbose=False)
+
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+
+#+RESULTS:
+: running cross temp fit...
+: Elapsed (with compilation) = 0h 1m 40s
+
+#+begin_src ipython
+  fig, ax = plt.subplots(1, 3, figsize=[3*width, height])
+
+  im = ax[0].imshow(
+      scores_first.mean(0) ,
+      interpolation="lanczos",
+      origin="lower",
+      cmap="jet",
+      extent=[0, 14, 0, 14],
+      vmin=0.5,
+      vmax=1.0,
+  )
+
+  add_vdashed(ax[0])
+  ax[0].set_xlim([2, 12])
+  ax[0].set_xticks([2, 4, 6, 8, 10, 12])
+  ax[0].set_ylim([2, 12])
+  ax[0].set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax[0].set_xlabel("Testing Time (s)")
+  ax[0].set_ylabel("Training Time (s)")
+
+  im = ax[1].imshow(
+      scores_last.mean(0) ,
+      interpolation="lanczos",
+      origin="lower",
+      cmap="jet",
+      extent=[0, 14, 0, 14],
+      vmin=0.5,
+      vmax=1.0,
+  )
+
+  add_vdashed(ax[1])
+  ax[1].set_xlim([2, 12])
+  ax[1].set_xticks([2, 4, 6, 8, 10, 12])
+  ax[1].set_ylim([2, 12])
+  ax[1].set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax[1].set_xlabel("Testing Time (s)")
+  ax[1].set_ylabel("Training Time (s)")
+
+  im = ax[2].imshow(
+      scores_last.mean(0) - scores_first.mean(0),
+      interpolation="lanczos",
+      origin="lower",
+      cmap="jet",
+      extent=[0, 14, 0, 14],
+      vmin=-0.5,
+      vmax=1,
+  )
+
+  add_vdashed(ax[2])
+  ax[2].set_xlim([2, 12])
+  ax[2].set_xticks([2, 4, 6, 8, 10, 12])
+  ax[2].set_ylim([2, 12])
+  ax[2].set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax[2].set_xlabel("Testing Time (s)")
+  ax[2].set_ylabel("Training Time (s)")
+
+  plt.savefig('%s_%s_score_mat.svg' % (options['mouse'], tasks[task]), dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/c548b065e7ad7bb4797cb98c4f1c760b41966730.png]]
+
+#+begin_src ipython
+  times = np.linspace(0, 14, 84)
+  fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+
+  ax[0].plot(times, np.diag(scores_first.mean(0)))
+  ax[0].plot(times, np.diag(scores_last.mean(0)))
+  ax[0].hlines(0.5, 0, 14, 'k', '--')
+  ax[0].set_xticks([2, 4, 6, 8, 10, 12])
+
+  add_vlines(ax[0])
+  ax[0].set_xlabel('Time (s)')
+  ax[0].set_ylabel('Score')
+
+  plt.savefig('compose_score_day_%d.svg' % day, dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/53bbebb0816888f902a96c292cd5d98f9fbd83fe.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

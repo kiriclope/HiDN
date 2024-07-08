@@ -1,0 +1,1068 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session skorch :kernel torch
+
+* BaggingClassifier
+
+#+begin_src ipython
+  from skorch import NeuralNetClassifier
+  from sklearn.ensemble import BaggingClassifier
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+
+  # Define a simple neural network model
+  class MyModule(nn.Module):
+      def __init__(self):
+          super(MyModule, self).__init__()
+          self.dense0 = nn.Linear(20, 100)
+          self.nonlin = nn.ReLU()
+          self.dense1 = nn.Linear(100, 2)
+
+      def forward(self, X):
+          X = self.nonlin(self.dense0(X))
+          X = F.softmax(self.dense1(X), dim=-1)
+          return X
+
+  # Wrap the neural network with skorch
+  net = NeuralNetClassifier(MyModule, max_epochs=10, lr=0.1, verbose=0)
+
+  # Use skorch-wrapped model with BaggingClassifier
+  bagging_clf = BaggingClassifier(base_estimator=net, n_estimators=10)
+
+  # Now you can fit and predict using bagging_clf just like any other sklearn model
+  # Example:
+  X, y = make_classification(n_samples=100, n_features=20, n_classes=2)
+  X = X.astype('float32')  # Convert to float32 for compatibility with torchensemble
+  y = y.astype('int64')
+
+  bagging_clf.fit(X, y)
+  y_pred = bagging_clf.predict(X)
+
+  scores = cross_val_score(bagging_clf, X, y, cv=5, scoring='accuracy')
+  print("Cross-validation scores: ", scores)
+  print("Mean accuracy: ", scores.mean())
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from skorch import NeuralNetClassifier
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.model_selection import GridSearchCV
+  from sklearn.datasets import make_classification
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+
+  # Define the neural network model
+  class MyModule(nn.Module):
+      def __init__(self):
+          super(MyModule, self).__init__()
+          self.dense0 = nn.Linear(20, 100)
+          self.nonlin = nn.ReLU()
+          self.dense1 = nn.Linear(100, 2)
+
+      def forward(self, X):
+          X = self.nonlin(self.dense0(X))
+          X = F.softmax(self.dense1(X), dim=-1)
+          return X
+
+  # Create a dataset
+  X, y = make_classification(1000, 20, n_informative=15, n_classes=2, random_state=42)
+  X = X.astype('float32')
+  y = y.astype('int64')
+
+  # Wrap the neural network with skorch
+  net = NeuralNetClassifier(MyModule, max_epochs=10, lr=0.1)
+
+  # Use skorch-wrapped model with BaggingClassifier
+  bagging_clf = BaggingClassifier(base_estimator=net, n_estimators=10)
+
+  # Define the parameter grid for GridSearchCV
+  param_grid = {
+      'base_estimator__module__dense0__out_features': [100, 200],
+      'base_estimator__lr': [0.01, 0.1],
+      'n_estimators': [10, 20]
+  }
+
+  # Perform grid search
+  grid_search = GridSearchCV(bagging_clf, param_grid, cv=5, scoring='accuracy')
+  grid_search.fit(X, y)
+
+  # Print best parameters and best score
+  print("Best parameters: ", grid_search.best_params_)
+  print("Best score: ", grid_search.best_score_)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  ValueError                                Traceback (most recent call last)
+  Cell In[47], line 42
+       40 # Perform grid search
+       41 grid_search = GridSearchCV(bagging_clf, param_grid, cv=5, scoring='accuracy')
+  ---> 42 grid_search.fit(X, y)
+       44 # Print best parameters and best score
+       45 print("Best parameters: ", grid_search.best_params_)
+
+  File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/base.py:1152, in _fit_context.<locals>.decorator.<locals>.wrapper(estimator, *args, **kwargs)
+     1145     estimator._validate_params()
+     1147 with config_context(
+     1148     skip_parameter_validation=(
+     1149         prefer_skip_nested_validation or global_skip_validation
+     1150     )
+     1151 ):
+  -> 1152     return fit_method(estimator, *args, **kwargs)
+
+  File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/model_selection/_search.py:898, in BaseSearchCV.fit(self, X, y, groups, **fit_params)
+      892     results = self._format_results(
+      893         all_candidate_params, n_splits, all_out, all_more_results
+      894     )
+      896     return results
+  --> 898 self._run_search(evaluate_candidates)
+      900 # multimetric is determined here because in the case of a callable
+      901 # self.scoring the return type is only known after calling
+      902 first_test_score = all_out[0]["test_scores"]
+
+  File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/model_selection/_search.py:1422, in GridSearchCV._run_search(self, evaluate_candidates)
+     1420 def _run_search(self, evaluate_candidates):
+     1421     """Search all candidates in param_grid"""
+  -> 1422     evaluate_candidates(ParameterGrid(self.param_grid))
+
+  File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/model_selection/_search.py:875, in BaseSearchCV.fit.<locals>.evaluate_candidates(candidate_params, cv, more_results)
+      868 elif len(out) != n_candidates * n_splits:
+      869     raise ValueError(
+      870         "cv.split and cv.get_n_splits returned "
+      871         "inconsistent results. Expected {} "
+      872         "splits, got {}".format(n_splits, len(out) // n_candidates)
+      873     )
+  --> 875 _warn_or_raise_about_fit_failures(out, self.error_score)
+      877 # For callable self.scoring, the return type is only know after
+      878 # calling. If the return type is a dictionary, the error scores
+      879 # can now be inserted with the correct key. The type checking
+      880 # of out will be done in `_insert_error_scores`.
+      881 if callable(self.scoring):
+
+  File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/model_selection/_validation.py:414, in _warn_or_raise_about_fit_failures(results, error_score)
+      407 if num_failed_fits == num_fits:
+      408     all_fits_failed_message = (
+      409         f"\nAll the {num_fits} fits failed.\n"
+      410         "It is very likely that your model is misconfigured.\n"
+      411         "You can try to debug the error by setting error_score='raise'.\n\n"
+      412         f"Below are more details about the failures:\n{fit_errors_summary}"
+      413     )
+  --> 414     raise ValueError(all_fits_failed_message)
+      416 else:
+      417     some_fits_failed_message = (
+      418         f"\n{num_failed_fits} fits failed out of a total of {num_fits}.\n"
+      419         "The score on these train-test partitions for these parameters"
+     (...)
+      423         f"Below are more details about the failures:\n{fit_errors_summary}"
+      424     )
+
+  ValueError:
+  All the 40 fits failed.
+  It is very likely that your model is misconfigured.
+  You can try to debug the error by setting error_score='raise'.
+
+  Below are more details about the failures:
+  --------------------------------------------------------------------------------
+  40 fits failed with the following error:
+  Traceback (most recent call last):
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/model_selection/_validation.py", line 729, in _fit_and_score
+      estimator.fit(X_train, y_train, **fit_params)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/base.py", line 1152, in wrapper
+      return fit_method(estimator, *args, **kwargs)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/ensemble/_bagging.py", line 338, in fit
+      return self._fit(X, y, self.max_samples, sample_weight=sample_weight)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/ensemble/_bagging.py", line 473, in _fit
+      all_results = Parallel(
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/parallel.py", line 65, in __call__
+      return super().__call__(iterable_with_config)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/joblib/parallel.py", line 1863, in __call__
+      return output if self.return_generator else list(output)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/joblib/parallel.py", line 1792, in _get_sequential_output
+      res = func(*args, **kwargs)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/parallel.py", line 127, in __call__
+      return self.function(*args, **kwargs)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/ensemble/_bagging.py", line 144, in _parallel_build_estimators
+      estimator_fit(X_, y[indices])
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/skorch/classifier.py", line 165, in fit
+      return super(NeuralNetClassifier, self).fit(X, y, **fit_params)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/skorch/net.py", line 1317, in fit
+      self.initialize()
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/skorch/net.py", line 903, in initialize
+      self._initialize_module()
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/skorch/net.py", line 747, in _initialize_module
+      self.initialize_module()
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/skorch/net.py", line 594, in initialize_module
+      module = self.initialized_instance(self.module, kwargs)
+    File "/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/skorch/net.py", line 571, in initialized_instance
+      return instance_or_cls(**kwargs)
+  TypeError: MyModule.__init__() got an unexpected keyword argument 'dense0__out_features'
+#+end_example
+:END:
+
+#+begin_src ipython
+  from skorch import NeuralNetClassifier
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.model_selection import GridSearchCV
+  from sklearn.datasets import make_classification
+  import torch
+  import torch.nn as nn
+  import torch.nn.functional as F
+  import numpy as np
+
+  # Define the neural network model
+  class MyModule(nn.Module):
+      def __init__(self, num_units=100):
+          super(MyModule, self).__init__()
+          self.dense0 = nn.Linear(20, num_units)
+          self.nonlin = nn.ReLU()
+          self.dense1 = nn.Linear(num_units, 2)# Adjust the output as per the number of classes
+
+      def forward(self, X):
+          X = self.nonlin(self.dense0(X))
+          X = F.softmax(self.dense1(X), dim=-1)
+          return X
+
+  # Create a dataset
+  X, y = make_classification(1000, 20, n_informative=15, n_classes=2, random_state=42)
+  X = X.astype('float32')
+  y = y.astype('int64')
+
+  # Wrap the neural network with skorch
+  net = NeuralNetClassifier(MyModule, max_epochs=10, lr=0.1, module__num_units=100)
+
+  # Use skorch-wrapped model with BaggingClassifier
+  bagging_clf = BaggingClassifier(base_estimator=net, n_estimators=10)
+
+  # Define the parameter grid for GridSearchCV
+  param_grid = {
+      'base_estimator__module__num_units': [100, 200],
+      'base_estimator__lr': [0.01, 0.1],
+      'n_estimators': [10, 20]
+  }
+
+  # Perform grid search
+  grid_search = GridSearchCV(bagging_clf, param_grid, cv=5, scoring='accuracy')
+  grid_search.fit(X, y)
+
+  # Print best parameters and best score
+  print("Best parameters: ", grid_search.best_params_)
+  print("Best score: ", grid_search.best_score_)
+#+end_src
+
+#+RESULTS:
+
+* Torchensemble
+
+#+begin_src ipython
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from sklearn.model_selection import cross_val_score
+  from skorch import NeuralNetClassifier
+  from torchensemble import BaggingClassifier
+  from sklearn.datasets import make_classification
+
+  # Define a simple PyTorch model
+  class SimpleModel(nn.Module):
+      def __init__(self):
+          super(SimpleModel, self).__init__()
+          self.fc1 = nn.Linear(10, 50)
+          self.fc2 = nn.Linear(50, 2)
+
+      def forward(self, x):
+          x = torch.relu(self.fc1(x))
+          return self.fc2(x)
+
+  # Generate a sample dataset
+  X, y = make_classification(n_samples=100, n_features=10, n_classes=2)
+  X = X.astype('float32')  # Convert to float32 for compatibility with torchensemble
+  y = y.astype('int64')
+
+  # Initialize skorch's NeuralNetClassifier
+  base_net = NeuralNetClassifier(
+      SimpleModel,
+      criterion=nn.CrossEntropyLoss,
+      optimizer=optim.SGD,
+      lr=0.1,
+      max_epochs=10,
+      iterator_train__shuffle=True,
+      verbose=0,
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  # Fit the base model to get it ready for training
+  base_net.fit(X, y);
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from torch.utils.data import TensorDataset, DataLoader
+  from torchensemble.utils.logging import set_logger
+
+  X_tensor = torch.tensor(X, device='cuda')
+  y_tensor = torch.tensor(y, dtype=torch.long, device='cuda')
+
+  train_dataset = TensorDataset(X_tensor, y_tensor)
+  train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+
+  ensemble_model = BaggingClassifier(
+      estimator=SimpleModel,
+      n_estimators=10,
+      cuda=True,
+  )
+
+  logger = set_logger(log_console_level='warning')
+
+  ensemble_model.set_optimizer("SGD", lr=0.1)
+  ensemble_model.fit(train_loader, epochs=10, log_interval=1)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  Estimator: 000 | Epoch: 000 | Batch: 000 | Loss: 0.61929 | Correct: 12/16
+  Estimator: 000 | Epoch: 000 | Batch: 001 | Loss: 0.66885 | Correct: 7/16
+  Estimator: 000 | Epoch: 000 | Batch: 002 | Loss: 0.57511 | Correct: 14/16
+  Estimator: 000 | Epoch: 000 | Batch: 003 | Loss: 0.59427 | Correct: 12/16
+  Estimator: 000 | Epoch: 000 | Batch: 004 | Loss: 0.49734 | Correct: 14/16
+  Estimator: 000 | Epoch: 000 | Batch: 005 | Loss: 0.53262 | Correct: 13/16
+  Estimator: 000 | Epoch: 000 | Batch: 006 | Loss: 0.48464 | Correct: 3/4
+  Estimator: 001 | Epoch: 000 | Batch: 000 | Loss: 0.75866 | Correct: 5/16
+  Estimator: 001 | Epoch: 000 | Batch: 001 | Loss: 0.76181 | Correct: 4/16
+  Estimator: 001 | Epoch: 000 | Batch: 002 | Loss: 0.69066 | Correct: 9/16
+  Estimator: 001 | Epoch: 000 | Batch: 003 | Loss: 0.66277 | Correct: 10/16
+  Estimator: 001 | Epoch: 000 | Batch: 004 | Loss: 0.58728 | Correct: 12/16
+  Estimator: 001 | Epoch: 000 | Batch: 005 | Loss: 0.54687 | Correct: 14/16
+  Estimator: 001 | Epoch: 000 | Batch: 006 | Loss: 0.59048 | Correct: 3/4
+  Estimator: 002 | Epoch: 000 | Batch: 000 | Loss: 0.89339 | Correct: 5/16
+  Estimator: 002 | Epoch: 000 | Batch: 001 | Loss: 0.79729 | Correct: 5/16
+  Estimator: 002 | Epoch: 000 | Batch: 002 | Loss: 0.69061 | Correct: 7/16
+  Estimator: 002 | Epoch: 000 | Batch: 003 | Loss: 0.60915 | Correct: 12/16
+  Estimator: 002 | Epoch: 000 | Batch: 004 | Loss: 0.54398 | Correct: 14/16
+  Estimator: 002 | Epoch: 000 | Batch: 005 | Loss: 0.49121 | Correct: 13/16
+  Estimator: 002 | Epoch: 000 | Batch: 006 | Loss: 0.49191 | Correct: 4/4
+  Estimator: 003 | Epoch: 000 | Batch: 000 | Loss: 0.72269 | Correct: 6/16
+  Estimator: 003 | Epoch: 000 | Batch: 001 | Loss: 0.63639 | Correct: 11/16
+  Estimator: 003 | Epoch: 000 | Batch: 002 | Loss: 0.55774 | Correct: 11/16
+  Estimator: 003 | Epoch: 000 | Batch: 003 | Loss: 0.65083 | Correct: 9/16
+  Estimator: 003 | Epoch: 000 | Batch: 004 | Loss: 0.50020 | Correct: 14/16
+  Estimator: 003 | Epoch: 000 | Batch: 005 | Loss: 0.48450 | Correct: 14/16
+  Estimator: 003 | Epoch: 000 | Batch: 006 | Loss: 0.45150 | Correct: 4/4
+  Estimator: 004 | Epoch: 000 | Batch: 000 | Loss: 0.71201 | Correct: 9/16
+  Estimator: 004 | Epoch: 000 | Batch: 001 | Loss: 0.58463 | Correct: 13/16
+  Estimator: 004 | Epoch: 000 | Batch: 002 | Loss: 0.68190 | Correct: 8/16
+  Estimator: 004 | Epoch: 000 | Batch: 003 | Loss: 0.54217 | Correct: 13/16
+  Estimator: 004 | Epoch: 000 | Batch: 004 | Loss: 0.62901 | Correct: 10/16
+  Estimator: 004 | Epoch: 000 | Batch: 005 | Loss: 0.62573 | Correct: 14/16
+  Estimator: 004 | Epoch: 000 | Batch: 006 | Loss: 0.61468 | Correct: 4/4
+  Estimator: 005 | Epoch: 000 | Batch: 000 | Loss: 0.65215 | Correct: 9/16
+  Estimator: 005 | Epoch: 000 | Batch: 001 | Loss: 0.67748 | Correct: 8/16
+  Estimator: 005 | Epoch: 000 | Batch: 002 | Loss: 0.51777 | Correct: 14/16
+  Estimator: 005 | Epoch: 000 | Batch: 003 | Loss: 0.57303 | Correct: 12/16
+  Estimator: 005 | Epoch: 000 | Batch: 004 | Loss: 0.43113 | Correct: 14/16
+  Estimator: 005 | Epoch: 000 | Batch: 005 | Loss: 0.35579 | Correct: 15/16
+  Estimator: 005 | Epoch: 000 | Batch: 006 | Loss: 0.42355 | Correct: 4/4
+  Estimator: 006 | Epoch: 000 | Batch: 000 | Loss: 0.76120 | Correct: 5/16
+  Estimator: 006 | Epoch: 000 | Batch: 001 | Loss: 0.73028 | Correct: 6/16
+  Estimator: 006 | Epoch: 000 | Batch: 002 | Loss: 0.79343 | Correct: 4/16
+  Estimator: 006 | Epoch: 000 | Batch: 003 | Loss: 0.66172 | Correct: 9/16
+  Estimator: 006 | Epoch: 000 | Batch: 004 | Loss: 0.58208 | Correct: 12/16
+  Estimator: 006 | Epoch: 000 | Batch: 005 | Loss: 0.51399 | Correct: 12/16
+  Estimator: 006 | Epoch: 000 | Batch: 006 | Loss: 0.58125 | Correct: 4/4
+  Estimator: 007 | Epoch: 000 | Batch: 000 | Loss: 0.86120 | Correct: 6/16
+  Estimator: 007 | Epoch: 000 | Batch: 001 | Loss: 0.65041 | Correct: 12/16
+  Estimator: 007 | Epoch: 000 | Batch: 002 | Loss: 0.67485 | Correct: 11/16
+  Estimator: 007 | Epoch: 000 | Batch: 003 | Loss: 0.53770 | Correct: 15/16
+  Estimator: 007 | Epoch: 000 | Batch: 004 | Loss: 0.55867 | Correct: 12/16
+  Estimator: 007 | Epoch: 000 | Batch: 005 | Loss: 0.49607 | Correct: 16/16
+  Estimator: 007 | Epoch: 000 | Batch: 006 | Loss: 0.50434 | Correct: 4/4
+  Estimator: 008 | Epoch: 000 | Batch: 000 | Loss: 0.78024 | Correct: 4/16
+  Estimator: 008 | Epoch: 000 | Batch: 001 | Loss: 0.60580 | Correct: 13/16
+  Estimator: 008 | Epoch: 000 | Batch: 002 | Loss: 0.46031 | Correct: 16/16
+  Estimator: 008 | Epoch: 000 | Batch: 003 | Loss: 0.46760 | Correct: 14/16
+  Estimator: 008 | Epoch: 000 | Batch: 004 | Loss: 0.45938 | Correct: 14/16
+  Estimator: 008 | Epoch: 000 | Batch: 005 | Loss: 0.45814 | Correct: 12/16
+  Estimator: 008 | Epoch: 000 | Batch: 006 | Loss: 0.40416 | Correct: 4/4
+  Estimator: 009 | Epoch: 000 | Batch: 000 | Loss: 0.76631 | Correct: 6/16
+  Estimator: 009 | Epoch: 000 | Batch: 001 | Loss: 0.72744 | Correct: 11/16
+  Estimator: 009 | Epoch: 000 | Batch: 002 | Loss: 0.64959 | Correct: 11/16
+  Estimator: 009 | Epoch: 000 | Batch: 003 | Loss: 0.50366 | Correct: 13/16
+  Estimator: 009 | Epoch: 000 | Batch: 004 | Loss: 0.53980 | Correct: 13/16
+  Estimator: 009 | Epoch: 000 | Batch: 005 | Loss: 0.53117 | Correct: 13/16
+  Estimator: 009 | Epoch: 000 | Batch: 006 | Loss: 0.58889 | Correct: 3/4
+  Estimator: 000 | Epoch: 001 | Batch: 000 | Loss: 0.44858 | Correct: 15/16
+  Estimator: 000 | Epoch: 001 | Batch: 001 | Loss: 0.46602 | Correct: 14/16
+  Estimator: 000 | Epoch: 001 | Batch: 002 | Loss: 0.44148 | Correct: 13/16
+  Estimator: 000 | Epoch: 001 | Batch: 003 | Loss: 0.41471 | Correct: 12/16
+  Estimator: 000 | Epoch: 001 | Batch: 004 | Loss: 0.41379 | Correct: 13/16
+  Estimator: 000 | Epoch: 001 | Batch: 005 | Loss: 0.31483 | Correct: 14/16
+  Estimator: 000 | Epoch: 001 | Batch: 006 | Loss: 0.34749 | Correct: 4/4
+  Estimator: 001 | Epoch: 001 | Batch: 000 | Loss: 0.50077 | Correct: 15/16
+  Estimator: 001 | Epoch: 001 | Batch: 001 | Loss: 0.53395 | Correct: 13/16
+  Estimator: 001 | Epoch: 001 | Batch: 002 | Loss: 0.50382 | Correct: 15/16
+  Estimator: 001 | Epoch: 001 | Batch: 003 | Loss: 0.47983 | Correct: 14/16
+  Estimator: 001 | Epoch: 001 | Batch: 004 | Loss: 0.38394 | Correct: 15/16
+  Estimator: 001 | Epoch: 001 | Batch: 005 | Loss: 0.32391 | Correct: 15/16
+  Estimator: 001 | Epoch: 001 | Batch: 006 | Loss: 0.65977 | Correct: 3/4
+  Estimator: 002 | Epoch: 001 | Batch: 000 | Loss: 0.44498 | Correct: 15/16
+  Estimator: 002 | Epoch: 001 | Batch: 001 | Loss: 0.46770 | Correct: 14/16
+  Estimator: 002 | Epoch: 001 | Batch: 002 | Loss: 0.32030 | Correct: 15/16
+  Estimator: 002 | Epoch: 001 | Batch: 003 | Loss: 0.33954 | Correct: 15/16
+  Estimator: 002 | Epoch: 001 | Batch: 004 | Loss: 0.25073 | Correct: 16/16
+  Estimator: 002 | Epoch: 001 | Batch: 005 | Loss: 0.37093 | Correct: 13/16
+  Estimator: 002 | Epoch: 001 | Batch: 006 | Loss: 0.38980 | Correct: 4/4
+  Estimator: 003 | Epoch: 001 | Batch: 000 | Loss: 0.44816 | Correct: 15/16
+  Estimator: 003 | Epoch: 001 | Batch: 001 | Loss: 0.37966 | Correct: 16/16
+  Estimator: 003 | Epoch: 001 | Batch: 002 | Loss: 0.37672 | Correct: 16/16
+  Estimator: 003 | Epoch: 001 | Batch: 003 | Loss: 0.40955 | Correct: 16/16
+  Estimator: 003 | Epoch: 001 | Batch: 004 | Loss: 0.33217 | Correct: 16/16
+  Estimator: 003 | Epoch: 001 | Batch: 005 | Loss: 0.33792 | Correct: 14/16
+  Estimator: 003 | Epoch: 001 | Batch: 006 | Loss: 0.38514 | Correct: 3/4
+  Estimator: 004 | Epoch: 001 | Batch: 000 | Loss: 0.37600 | Correct: 16/16
+  Estimator: 004 | Epoch: 001 | Batch: 001 | Loss: 0.42199 | Correct: 15/16
+  Estimator: 004 | Epoch: 001 | Batch: 002 | Loss: 0.39683 | Correct: 15/16
+  Estimator: 004 | Epoch: 001 | Batch: 003 | Loss: 0.48689 | Correct: 14/16
+  Estimator: 004 | Epoch: 001 | Batch: 004 | Loss: 0.34826 | Correct: 16/16
+  Estimator: 004 | Epoch: 001 | Batch: 005 | Loss: 0.43898 | Correct: 14/16
+  Estimator: 004 | Epoch: 001 | Batch: 006 | Loss: 0.36730 | Correct: 3/4
+  Estimator: 005 | Epoch: 001 | Batch: 000 | Loss: 0.44516 | Correct: 16/16
+  Estimator: 005 | Epoch: 001 | Batch: 001 | Loss: 0.26115 | Correct: 15/16
+  Estimator: 005 | Epoch: 001 | Batch: 002 | Loss: 0.32670 | Correct: 16/16
+  Estimator: 005 | Epoch: 001 | Batch: 003 | Loss: 0.27843 | Correct: 16/16
+  Estimator: 005 | Epoch: 001 | Batch: 004 | Loss: 0.30014 | Correct: 16/16
+  Estimator: 005 | Epoch: 001 | Batch: 005 | Loss: 0.30513 | Correct: 15/16
+  Estimator: 005 | Epoch: 001 | Batch: 006 | Loss: 0.29672 | Correct: 4/4
+  Estimator: 006 | Epoch: 001 | Batch: 000 | Loss: 0.47942 | Correct: 14/16
+  Estimator: 006 | Epoch: 001 | Batch: 001 | Loss: 0.45010 | Correct: 14/16
+  Estimator: 006 | Epoch: 001 | Batch: 002 | Loss: 0.43247 | Correct: 15/16
+  Estimator: 006 | Epoch: 001 | Batch: 003 | Loss: 0.46395 | Correct: 13/16
+  Estimator: 006 | Epoch: 001 | Batch: 004 | Loss: 0.41016 | Correct: 15/16
+  Estimator: 006 | Epoch: 001 | Batch: 005 | Loss: 0.31681 | Correct: 15/16
+  Estimator: 006 | Epoch: 001 | Batch: 006 | Loss: 0.29880 | Correct: 4/4
+  Estimator: 007 | Epoch: 001 | Batch: 000 | Loss: 0.46066 | Correct: 12/16
+  Estimator: 007 | Epoch: 001 | Batch: 001 | Loss: 0.49503 | Correct: 15/16
+  Estimator: 007 | Epoch: 001 | Batch: 002 | Loss: 0.46738 | Correct: 15/16
+  Estimator: 007 | Epoch: 001 | Batch: 003 | Loss: 0.38722 | Correct: 15/16
+  Estimator: 007 | Epoch: 001 | Batch: 004 | Loss: 0.37551 | Correct: 14/16
+  Estimator: 007 | Epoch: 001 | Batch: 005 | Loss: 0.40656 | Correct: 16/16
+  Estimator: 007 | Epoch: 001 | Batch: 006 | Loss: 0.66500 | Correct: 2/4
+  Estimator: 008 | Epoch: 001 | Batch: 000 | Loss: 0.36115 | Correct: 13/16
+  Estimator: 008 | Epoch: 001 | Batch: 001 | Loss: 0.32295 | Correct: 15/16
+  Estimator: 008 | Epoch: 001 | Batch: 002 | Loss: 0.33342 | Correct: 15/16
+  Estimator: 008 | Epoch: 001 | Batch: 003 | Loss: 0.36312 | Correct: 15/16
+  Estimator: 008 | Epoch: 001 | Batch: 004 | Loss: 0.28631 | Correct: 15/16
+  Estimator: 008 | Epoch: 001 | Batch: 005 | Loss: 0.36632 | Correct: 14/16
+  Estimator: 008 | Epoch: 001 | Batch: 006 | Loss: 0.40278 | Correct: 3/4
+  Estimator: 009 | Epoch: 001 | Batch: 000 | Loss: 0.49799 | Correct: 12/16
+  Estimator: 009 | Epoch: 001 | Batch: 001 | Loss: 0.49769 | Correct: 13/16
+  Estimator: 009 | Epoch: 001 | Batch: 002 | Loss: 0.42160 | Correct: 15/16
+  Estimator: 009 | Epoch: 001 | Batch: 003 | Loss: 0.44043 | Correct: 12/16
+  Estimator: 009 | Epoch: 001 | Batch: 004 | Loss: 0.32194 | Correct: 15/16
+  Estimator: 009 | Epoch: 001 | Batch: 005 | Loss: 0.23308 | Correct: 16/16
+  Estimator: 009 | Epoch: 001 | Batch: 006 | Loss: 0.35941 | Correct: 4/4
+  Estimator: 000 | Epoch: 002 | Batch: 000 | Loss: 0.41680 | Correct: 13/16
+  Estimator: 000 | Epoch: 002 | Batch: 001 | Loss: 0.33102 | Correct: 14/16
+  Estimator: 000 | Epoch: 002 | Batch: 002 | Loss: 0.33144 | Correct: 15/16
+  Estimator: 000 | Epoch: 002 | Batch: 003 | Loss: 0.27034 | Correct: 15/16
+  Estimator: 000 | Epoch: 002 | Batch: 004 | Loss: 0.30766 | Correct: 13/16
+  Estimator: 000 | Epoch: 002 | Batch: 005 | Loss: 0.32016 | Correct: 15/16
+  Estimator: 000 | Epoch: 002 | Batch: 006 | Loss: 0.28958 | Correct: 3/4
+  Estimator: 001 | Epoch: 002 | Batch: 000 | Loss: 0.38072 | Correct: 15/16
+  Estimator: 001 | Epoch: 002 | Batch: 001 | Loss: 0.33344 | Correct: 15/16
+  Estimator: 001 | Epoch: 002 | Batch: 002 | Loss: 0.47098 | Correct: 13/16
+  Estimator: 001 | Epoch: 002 | Batch: 003 | Loss: 0.43634 | Correct: 14/16
+  Estimator: 001 | Epoch: 002 | Batch: 004 | Loss: 0.35194 | Correct: 15/16
+  Estimator: 001 | Epoch: 002 | Batch: 005 | Loss: 0.29466 | Correct: 16/16
+  Estimator: 001 | Epoch: 002 | Batch: 006 | Loss: 0.32757 | Correct: 4/4
+  Estimator: 002 | Epoch: 002 | Batch: 000 | Loss: 0.35959 | Correct: 14/16
+  Estimator: 002 | Epoch: 002 | Batch: 001 | Loss: 0.27732 | Correct: 14/16
+  Estimator: 002 | Epoch: 002 | Batch: 002 | Loss: 0.18916 | Correct: 16/16
+  Estimator: 002 | Epoch: 002 | Batch: 003 | Loss: 0.19734 | Correct: 14/16
+  Estimator: 002 | Epoch: 002 | Batch: 004 | Loss: 0.32337 | Correct: 14/16
+  Estimator: 002 | Epoch: 002 | Batch: 005 | Loss: 0.27929 | Correct: 15/16
+  Estimator: 002 | Epoch: 002 | Batch: 006 | Loss: 0.21543 | Correct: 4/4
+  Estimator: 003 | Epoch: 002 | Batch: 000 | Loss: 0.29781 | Correct: 16/16
+  Estimator: 003 | Epoch: 002 | Batch: 001 | Loss: 0.32572 | Correct: 14/16
+  Estimator: 003 | Epoch: 002 | Batch: 002 | Loss: 0.33699 | Correct: 16/16
+  Estimator: 003 | Epoch: 002 | Batch: 003 | Loss: 0.23535 | Correct: 16/16
+  Estimator: 003 | Epoch: 002 | Batch: 004 | Loss: 0.20157 | Correct: 16/16
+  Estimator: 003 | Epoch: 002 | Batch: 005 | Loss: 0.31253 | Correct: 15/16
+  Estimator: 003 | Epoch: 002 | Batch: 006 | Loss: 0.22492 | Correct: 3/4
+  Estimator: 004 | Epoch: 002 | Batch: 000 | Loss: 0.27488 | Correct: 16/16
+  Estimator: 004 | Epoch: 002 | Batch: 001 | Loss: 0.32753 | Correct: 16/16
+  Estimator: 004 | Epoch: 002 | Batch: 002 | Loss: 0.46065 | Correct: 14/16
+  Estimator: 004 | Epoch: 002 | Batch: 003 | Loss: 0.36617 | Correct: 15/16
+  Estimator: 004 | Epoch: 002 | Batch: 004 | Loss: 0.25792 | Correct: 15/16
+  Estimator: 004 | Epoch: 002 | Batch: 005 | Loss: 0.24891 | Correct: 16/16
+  Estimator: 004 | Epoch: 002 | Batch: 006 | Loss: 0.24583 | Correct: 4/4
+  Estimator: 005 | Epoch: 002 | Batch: 000 | Loss: 0.34820 | Correct: 15/16
+  Estimator: 005 | Epoch: 002 | Batch: 001 | Loss: 0.26749 | Correct: 15/16
+  Estimator: 005 | Epoch: 002 | Batch: 002 | Loss: 0.19742 | Correct: 16/16
+  Estimator: 005 | Epoch: 002 | Batch: 003 | Loss: 0.24292 | Correct: 16/16
+  Estimator: 005 | Epoch: 002 | Batch: 004 | Loss: 0.21651 | Correct: 16/16
+  Estimator: 005 | Epoch: 002 | Batch: 005 | Loss: 0.17488 | Correct: 16/16
+  Estimator: 005 | Epoch: 002 | Batch: 006 | Loss: 0.08010 | Correct: 4/4
+  Estimator: 006 | Epoch: 002 | Batch: 000 | Loss: 0.49291 | Correct: 11/16
+  Estimator: 006 | Epoch: 002 | Batch: 001 | Loss: 0.38020 | Correct: 15/16
+  Estimator: 006 | Epoch: 002 | Batch: 002 | Loss: 0.33599 | Correct: 14/16
+  Estimator: 006 | Epoch: 002 | Batch: 003 | Loss: 0.26494 | Correct: 15/16
+  Estimator: 006 | Epoch: 002 | Batch: 004 | Loss: 0.29675 | Correct: 15/16
+  Estimator: 006 | Epoch: 002 | Batch: 005 | Loss: 0.25486 | Correct: 16/16
+  Estimator: 006 | Epoch: 002 | Batch: 006 | Loss: 0.14238 | Correct: 4/4
+  Estimator: 007 | Epoch: 002 | Batch: 000 | Loss: 0.48863 | Correct: 13/16
+  Estimator: 007 | Epoch: 002 | Batch: 001 | Loss: 0.36681 | Correct: 14/16
+  Estimator: 007 | Epoch: 002 | Batch: 002 | Loss: 0.34472 | Correct: 16/16
+  Estimator: 007 | Epoch: 002 | Batch: 003 | Loss: 0.32893 | Correct: 15/16
+  Estimator: 007 | Epoch: 002 | Batch: 004 | Loss: 0.38055 | Correct: 16/16
+  Estimator: 007 | Epoch: 002 | Batch: 005 | Loss: 0.34353 | Correct: 14/16
+  Estimator: 007 | Epoch: 002 | Batch: 006 | Loss: 0.18967 | Correct: 4/4
+  Estimator: 008 | Epoch: 002 | Batch: 000 | Loss: 0.36679 | Correct: 15/16
+  Estimator: 008 | Epoch: 002 | Batch: 001 | Loss: 0.26111 | Correct: 15/16
+  Estimator: 008 | Epoch: 002 | Batch: 002 | Loss: 0.24943 | Correct: 15/16
+  Estimator: 008 | Epoch: 002 | Batch: 003 | Loss: 0.33635 | Correct: 13/16
+  Estimator: 008 | Epoch: 002 | Batch: 004 | Loss: 0.20179 | Correct: 16/16
+  Estimator: 008 | Epoch: 002 | Batch: 005 | Loss: 0.20475 | Correct: 16/16
+  Estimator: 008 | Epoch: 002 | Batch: 006 | Loss: 0.43797 | Correct: 3/4
+  Estimator: 009 | Epoch: 002 | Batch: 000 | Loss: 0.30230 | Correct: 14/16
+  Estimator: 009 | Epoch: 002 | Batch: 001 | Loss: 0.30236 | Correct: 15/16
+  Estimator: 009 | Epoch: 002 | Batch: 002 | Loss: 0.36411 | Correct: 13/16
+  Estimator: 009 | Epoch: 002 | Batch: 003 | Loss: 0.33762 | Correct: 13/16
+  Estimator: 009 | Epoch: 002 | Batch: 004 | Loss: 0.34806 | Correct: 13/16
+  Estimator: 009 | Epoch: 002 | Batch: 005 | Loss: 0.25131 | Correct: 15/16
+  Estimator: 009 | Epoch: 002 | Batch: 006 | Loss: 0.24977 | Correct: 4/4
+  Estimator: 000 | Epoch: 003 | Batch: 000 | Loss: 0.29561 | Correct: 14/16
+  Estimator: 000 | Epoch: 003 | Batch: 001 | Loss: 0.34398 | Correct: 15/16
+  Estimator: 000 | Epoch: 003 | Batch: 002 | Loss: 0.26809 | Correct: 15/16
+  Estimator: 000 | Epoch: 003 | Batch: 003 | Loss: 0.25386 | Correct: 15/16
+  Estimator: 000 | Epoch: 003 | Batch: 004 | Loss: 0.21818 | Correct: 16/16
+  Estimator: 000 | Epoch: 003 | Batch: 005 | Loss: 0.26791 | Correct: 14/16
+  Estimator: 000 | Epoch: 003 | Batch: 006 | Loss: 0.32361 | Correct: 4/4
+  Estimator: 001 | Epoch: 003 | Batch: 000 | Loss: 0.34052 | Correct: 13/16
+  Estimator: 001 | Epoch: 003 | Batch: 001 | Loss: 0.39960 | Correct: 14/16
+  Estimator: 001 | Epoch: 003 | Batch: 002 | Loss: 0.25096 | Correct: 16/16
+  Estimator: 001 | Epoch: 003 | Batch: 003 | Loss: 0.23607 | Correct: 15/16
+  Estimator: 001 | Epoch: 003 | Batch: 004 | Loss: 0.31854 | Correct: 14/16
+  Estimator: 001 | Epoch: 003 | Batch: 005 | Loss: 0.32244 | Correct: 15/16
+  Estimator: 001 | Epoch: 003 | Batch: 006 | Loss: 0.30271 | Correct: 3/4
+  Estimator: 002 | Epoch: 003 | Batch: 000 | Loss: 0.25751 | Correct: 13/16
+  Estimator: 002 | Epoch: 003 | Batch: 001 | Loss: 0.26968 | Correct: 15/16
+  Estimator: 002 | Epoch: 003 | Batch: 002 | Loss: 0.18403 | Correct: 15/16
+  Estimator: 002 | Epoch: 003 | Batch: 003 | Loss: 0.23134 | Correct: 15/16
+  Estimator: 002 | Epoch: 003 | Batch: 004 | Loss: 0.12624 | Correct: 15/16
+  Estimator: 002 | Epoch: 003 | Batch: 005 | Loss: 0.24986 | Correct: 15/16
+  Estimator: 002 | Epoch: 003 | Batch: 006 | Loss: 0.25884 | Correct: 4/4
+  Estimator: 003 | Epoch: 003 | Batch: 000 | Loss: 0.25887 | Correct: 16/16
+  Estimator: 003 | Epoch: 003 | Batch: 001 | Loss: 0.26777 | Correct: 16/16
+  Estimator: 003 | Epoch: 003 | Batch: 002 | Loss: 0.13921 | Correct: 16/16
+  Estimator: 003 | Epoch: 003 | Batch: 003 | Loss: 0.16132 | Correct: 16/16
+  Estimator: 003 | Epoch: 003 | Batch: 004 | Loss: 0.30493 | Correct: 14/16
+  Estimator: 003 | Epoch: 003 | Batch: 005 | Loss: 0.17626 | Correct: 16/16
+  Estimator: 003 | Epoch: 003 | Batch: 006 | Loss: 0.16651 | Correct: 4/4
+  Estimator: 004 | Epoch: 003 | Batch: 000 | Loss: 0.33074 | Correct: 14/16
+  Estimator: 004 | Epoch: 003 | Batch: 001 | Loss: 0.21867 | Correct: 16/16
+  Estimator: 004 | Epoch: 003 | Batch: 002 | Loss: 0.30400 | Correct: 15/16
+  Estimator: 004 | Epoch: 003 | Batch: 003 | Loss: 0.21396 | Correct: 16/16
+  Estimator: 004 | Epoch: 003 | Batch: 004 | Loss: 0.21654 | Correct: 16/16
+  Estimator: 004 | Epoch: 003 | Batch: 005 | Loss: 0.29494 | Correct: 14/16
+  Estimator: 004 | Epoch: 003 | Batch: 006 | Loss: 0.20810 | Correct: 4/4
+  Estimator: 005 | Epoch: 003 | Batch: 000 | Loss: 0.19876 | Correct: 16/16
+  Estimator: 005 | Epoch: 003 | Batch: 001 | Loss: 0.24209 | Correct: 15/16
+  Estimator: 005 | Epoch: 003 | Batch: 002 | Loss: 0.12598 | Correct: 16/16
+  Estimator: 005 | Epoch: 003 | Batch: 003 | Loss: 0.14459 | Correct: 16/16
+  Estimator: 005 | Epoch: 003 | Batch: 004 | Loss: 0.27135 | Correct: 15/16
+  Estimator: 005 | Epoch: 003 | Batch: 005 | Loss: 0.15330 | Correct: 16/16
+  Estimator: 005 | Epoch: 003 | Batch: 006 | Loss: 0.07894 | Correct: 4/4
+  Estimator: 006 | Epoch: 003 | Batch: 000 | Loss: 0.44291 | Correct: 14/16
+  Estimator: 006 | Epoch: 003 | Batch: 001 | Loss: 0.22695 | Correct: 15/16
+  Estimator: 006 | Epoch: 003 | Batch: 002 | Loss: 0.30436 | Correct: 14/16
+  Estimator: 006 | Epoch: 003 | Batch: 003 | Loss: 0.17179 | Correct: 16/16
+  Estimator: 006 | Epoch: 003 | Batch: 004 | Loss: 0.27839 | Correct: 14/16
+  Estimator: 006 | Epoch: 003 | Batch: 005 | Loss: 0.25401 | Correct: 15/16
+  Estimator: 006 | Epoch: 003 | Batch: 006 | Loss: 0.37532 | Correct: 3/4
+  Estimator: 007 | Epoch: 003 | Batch: 000 | Loss: 0.24706 | Correct: 15/16
+  Estimator: 007 | Epoch: 003 | Batch: 001 | Loss: 0.23411 | Correct: 14/16
+  Estimator: 007 | Epoch: 003 | Batch: 002 | Loss: 0.32732 | Correct: 15/16
+  Estimator: 007 | Epoch: 003 | Batch: 003 | Loss: 0.45294 | Correct: 13/16
+  Estimator: 007 | Epoch: 003 | Batch: 004 | Loss: 0.34764 | Correct: 14/16
+  Estimator: 007 | Epoch: 003 | Batch: 005 | Loss: 0.17767 | Correct: 16/16
+  Estimator: 007 | Epoch: 003 | Batch: 006 | Loss: 0.54067 | Correct: 2/4
+  Estimator: 008 | Epoch: 003 | Batch: 000 | Loss: 0.36350 | Correct: 14/16
+  Estimator: 008 | Epoch: 003 | Batch: 001 | Loss: 0.26708 | Correct: 15/16
+  Estimator: 008 | Epoch: 003 | Batch: 002 | Loss: 0.18365 | Correct: 16/16
+  Estimator: 008 | Epoch: 003 | Batch: 003 | Loss: 0.16261 | Correct: 15/16
+  Estimator: 008 | Epoch: 003 | Batch: 004 | Loss: 0.17513 | Correct: 16/16
+  Estimator: 008 | Epoch: 003 | Batch: 005 | Loss: 0.28189 | Correct: 14/16
+  Estimator: 008 | Epoch: 003 | Batch: 006 | Loss: 0.24726 | Correct: 3/4
+  Estimator: 009 | Epoch: 003 | Batch: 000 | Loss: 0.35825 | Correct: 14/16
+  Estimator: 009 | Epoch: 003 | Batch: 001 | Loss: 0.23133 | Correct: 14/16
+  Estimator: 009 | Epoch: 003 | Batch: 002 | Loss: 0.36472 | Correct: 15/16
+  Estimator: 009 | Epoch: 003 | Batch: 003 | Loss: 0.24829 | Correct: 15/16
+  Estimator: 009 | Epoch: 003 | Batch: 004 | Loss: 0.22463 | Correct: 15/16
+  Estimator: 009 | Epoch: 003 | Batch: 005 | Loss: 0.21136 | Correct: 15/16
+  Estimator: 009 | Epoch: 003 | Batch: 006 | Loss: 0.11153 | Correct: 4/4
+  Estimator: 000 | Epoch: 004 | Batch: 000 | Loss: 0.24757 | Correct: 15/16
+  Estimator: 000 | Epoch: 004 | Batch: 001 | Loss: 0.26478 | Correct: 16/16
+  Estimator: 000 | Epoch: 004 | Batch: 002 | Loss: 0.35493 | Correct: 12/16
+  Estimator: 000 | Epoch: 004 | Batch: 003 | Loss: 0.27435 | Correct: 15/16
+  Estimator: 000 | Epoch: 004 | Batch: 004 | Loss: 0.10137 | Correct: 16/16
+  Estimator: 000 | Epoch: 004 | Batch: 005 | Loss: 0.16365 | Correct: 16/16
+  Estimator: 000 | Epoch: 004 | Batch: 006 | Loss: 0.36171 | Correct: 3/4
+  Estimator: 001 | Epoch: 004 | Batch: 000 | Loss: 0.21885 | Correct: 15/16
+  Estimator: 001 | Epoch: 004 | Batch: 001 | Loss: 0.25036 | Correct: 15/16
+  Estimator: 001 | Epoch: 004 | Batch: 002 | Loss: 0.29864 | Correct: 15/16
+  Estimator: 001 | Epoch: 004 | Batch: 003 | Loss: 0.28559 | Correct: 16/16
+  Estimator: 001 | Epoch: 004 | Batch: 004 | Loss: 0.41947 | Correct: 14/16
+  Estimator: 001 | Epoch: 004 | Batch: 005 | Loss: 0.21211 | Correct: 16/16
+  Estimator: 001 | Epoch: 004 | Batch: 006 | Loss: 0.13346 | Correct: 4/4
+  Estimator: 002 | Epoch: 004 | Batch: 000 | Loss: 0.22722 | Correct: 15/16
+  Estimator: 002 | Epoch: 004 | Batch: 001 | Loss: 0.26955 | Correct: 13/16
+  Estimator: 002 | Epoch: 004 | Batch: 002 | Loss: 0.21464 | Correct: 14/16
+  Estimator: 002 | Epoch: 004 | Batch: 003 | Loss: 0.15867 | Correct: 16/16
+  Estimator: 002 | Epoch: 004 | Batch: 004 | Loss: 0.11235 | Correct: 15/16
+  Estimator: 002 | Epoch: 004 | Batch: 005 | Loss: 0.22523 | Correct: 14/16
+  Estimator: 002 | Epoch: 004 | Batch: 006 | Loss: 0.11670 | Correct: 4/4
+  Estimator: 003 | Epoch: 004 | Batch: 000 | Loss: 0.19374 | Correct: 16/16
+  Estimator: 003 | Epoch: 004 | Batch: 001 | Loss: 0.15297 | Correct: 16/16
+  Estimator: 003 | Epoch: 004 | Batch: 002 | Loss: 0.24399 | Correct: 14/16
+  Estimator: 003 | Epoch: 004 | Batch: 003 | Loss: 0.16544 | Correct: 16/16
+  Estimator: 003 | Epoch: 004 | Batch: 004 | Loss: 0.15618 | Correct: 15/16
+  Estimator: 003 | Epoch: 004 | Batch: 005 | Loss: 0.13955 | Correct: 16/16
+  Estimator: 003 | Epoch: 004 | Batch: 006 | Loss: 0.09527 | Correct: 4/4
+  Estimator: 004 | Epoch: 004 | Batch: 000 | Loss: 0.17837 | Correct: 16/16
+  Estimator: 004 | Epoch: 004 | Batch: 001 | Loss: 0.19252 | Correct: 16/16
+  Estimator: 004 | Epoch: 004 | Batch: 002 | Loss: 0.30160 | Correct: 14/16
+  Estimator: 004 | Epoch: 004 | Batch: 003 | Loss: 0.25591 | Correct: 14/16
+  Estimator: 004 | Epoch: 004 | Batch: 004 | Loss: 0.15052 | Correct: 16/16
+  Estimator: 004 | Epoch: 004 | Batch: 005 | Loss: 0.25407 | Correct: 15/16
+  Estimator: 004 | Epoch: 004 | Batch: 006 | Loss: 0.18689 | Correct: 4/4
+  Estimator: 005 | Epoch: 004 | Batch: 000 | Loss: 0.08123 | Correct: 16/16
+  Estimator: 005 | Epoch: 004 | Batch: 001 | Loss: 0.15272 | Correct: 15/16
+  Estimator: 005 | Epoch: 004 | Batch: 002 | Loss: 0.12509 | Correct: 16/16
+  Estimator: 005 | Epoch: 004 | Batch: 003 | Loss: 0.16780 | Correct: 16/16
+  Estimator: 005 | Epoch: 004 | Batch: 004 | Loss: 0.11839 | Correct: 16/16
+  Estimator: 005 | Epoch: 004 | Batch: 005 | Loss: 0.28494 | Correct: 15/16
+  Estimator: 005 | Epoch: 004 | Batch: 006 | Loss: 0.11252 | Correct: 4/4
+  Estimator: 006 | Epoch: 004 | Batch: 000 | Loss: 0.29371 | Correct: 14/16
+  Estimator: 006 | Epoch: 004 | Batch: 001 | Loss: 0.18812 | Correct: 16/16
+  Estimator: 006 | Epoch: 004 | Batch: 002 | Loss: 0.21822 | Correct: 15/16
+  Estimator: 006 | Epoch: 004 | Batch: 003 | Loss: 0.36157 | Correct: 14/16
+  Estimator: 006 | Epoch: 004 | Batch: 004 | Loss: 0.14643 | Correct: 15/16
+  Estimator: 006 | Epoch: 004 | Batch: 005 | Loss: 0.33232 | Correct: 13/16
+  Estimator: 006 | Epoch: 004 | Batch: 006 | Loss: 0.20997 | Correct: 4/4
+  Estimator: 007 | Epoch: 004 | Batch: 000 | Loss: 0.20296 | Correct: 16/16
+  Estimator: 007 | Epoch: 004 | Batch: 001 | Loss: 0.18753 | Correct: 16/16
+  Estimator: 007 | Epoch: 004 | Batch: 002 | Loss: 0.25596 | Correct: 16/16
+  Estimator: 007 | Epoch: 004 | Batch: 003 | Loss: 0.25595 | Correct: 15/16
+  Estimator: 007 | Epoch: 004 | Batch: 004 | Loss: 0.31193 | Correct: 15/16
+  Estimator: 007 | Epoch: 004 | Batch: 005 | Loss: 0.39117 | Correct: 13/16
+  Estimator: 007 | Epoch: 004 | Batch: 006 | Loss: 0.36725 | Correct: 3/4
+  Estimator: 008 | Epoch: 004 | Batch: 000 | Loss: 0.27131 | Correct: 16/16
+  Estimator: 008 | Epoch: 004 | Batch: 001 | Loss: 0.26801 | Correct: 14/16
+  Estimator: 008 | Epoch: 004 | Batch: 002 | Loss: 0.31865 | Correct: 16/16
+  Estimator: 008 | Epoch: 004 | Batch: 003 | Loss: 0.17356 | Correct: 15/16
+  Estimator: 008 | Epoch: 004 | Batch: 004 | Loss: 0.18549 | Correct: 15/16
+  Estimator: 008 | Epoch: 004 | Batch: 005 | Loss: 0.09400 | Correct: 16/16
+  Estimator: 008 | Epoch: 004 | Batch: 006 | Loss: 0.18588 | Correct: 4/4
+  Estimator: 009 | Epoch: 004 | Batch: 000 | Loss: 0.17732 | Correct: 16/16
+  Estimator: 009 | Epoch: 004 | Batch: 001 | Loss: 0.22991 | Correct: 15/16
+  Estimator: 009 | Epoch: 004 | Batch: 002 | Loss: 0.33748 | Correct: 14/16
+  Estimator: 009 | Epoch: 004 | Batch: 003 | Loss: 0.18318 | Correct: 15/16
+  Estimator: 009 | Epoch: 004 | Batch: 004 | Loss: 0.31150 | Correct: 13/16
+  Estimator: 009 | Epoch: 004 | Batch: 005 | Loss: 0.19868 | Correct: 16/16
+  Estimator: 009 | Epoch: 004 | Batch: 006 | Loss: 0.12001 | Correct: 4/4
+  Estimator: 000 | Epoch: 005 | Batch: 000 | Loss: 0.15013 | Correct: 16/16
+  Estimator: 000 | Epoch: 005 | Batch: 001 | Loss: 0.25777 | Correct: 15/16
+  Estimator: 000 | Epoch: 005 | Batch: 002 | Loss: 0.17307 | Correct: 16/16
+  Estimator: 000 | Epoch: 005 | Batch: 003 | Loss: 0.28845 | Correct: 14/16
+  Estimator: 000 | Epoch: 005 | Batch: 004 | Loss: 0.17722 | Correct: 15/16
+  Estimator: 000 | Epoch: 005 | Batch: 005 | Loss: 0.20165 | Correct: 16/16
+  Estimator: 000 | Epoch: 005 | Batch: 006 | Loss: 0.34974 | Correct: 4/4
+  Estimator: 001 | Epoch: 005 | Batch: 000 | Loss: 0.38095 | Correct: 13/16
+  Estimator: 001 | Epoch: 005 | Batch: 001 | Loss: 0.22992 | Correct: 15/16
+  Estimator: 001 | Epoch: 005 | Batch: 002 | Loss: 0.16889 | Correct: 16/16
+  Estimator: 001 | Epoch: 005 | Batch: 003 | Loss: 0.28708 | Correct: 15/16
+  Estimator: 001 | Epoch: 005 | Batch: 004 | Loss: 0.16475 | Correct: 16/16
+  Estimator: 001 | Epoch: 005 | Batch: 005 | Loss: 0.29377 | Correct: 15/16
+  Estimator: 001 | Epoch: 005 | Batch: 006 | Loss: 0.17396 | Correct: 4/4
+  Estimator: 002 | Epoch: 005 | Batch: 000 | Loss: 0.21156 | Correct: 14/16
+  Estimator: 002 | Epoch: 005 | Batch: 001 | Loss: 0.17074 | Correct: 15/16
+  Estimator: 002 | Epoch: 005 | Batch: 002 | Loss: 0.23882 | Correct: 14/16
+  Estimator: 002 | Epoch: 005 | Batch: 003 | Loss: 0.22848 | Correct: 13/16
+  Estimator: 002 | Epoch: 005 | Batch: 004 | Loss: 0.10152 | Correct: 16/16
+  Estimator: 002 | Epoch: 005 | Batch: 005 | Loss: 0.15650 | Correct: 15/16
+  Estimator: 002 | Epoch: 005 | Batch: 006 | Loss: 0.02622 | Correct: 4/4
+  Estimator: 003 | Epoch: 005 | Batch: 000 | Loss: 0.23551 | Correct: 14/16
+  Estimator: 003 | Epoch: 005 | Batch: 001 | Loss: 0.11454 | Correct: 16/16
+  Estimator: 003 | Epoch: 005 | Batch: 002 | Loss: 0.11324 | Correct: 16/16
+  Estimator: 003 | Epoch: 005 | Batch: 003 | Loss: 0.13319 | Correct: 16/16
+  Estimator: 003 | Epoch: 005 | Batch: 004 | Loss: 0.18125 | Correct: 15/16
+  Estimator: 003 | Epoch: 005 | Batch: 005 | Loss: 0.09185 | Correct: 16/16
+  Estimator: 003 | Epoch: 005 | Batch: 006 | Loss: 0.10640 | Correct: 4/4
+  Estimator: 004 | Epoch: 005 | Batch: 000 | Loss: 0.33776 | Correct: 13/16
+  Estimator: 004 | Epoch: 005 | Batch: 001 | Loss: 0.17745 | Correct: 16/16
+  Estimator: 004 | Epoch: 005 | Batch: 002 | Loss: 0.09695 | Correct: 16/16
+  Estimator: 004 | Epoch: 005 | Batch: 003 | Loss: 0.20450 | Correct: 15/16
+  Estimator: 004 | Epoch: 005 | Batch: 004 | Loss: 0.17073 | Correct: 16/16
+  Estimator: 004 | Epoch: 005 | Batch: 005 | Loss: 0.12898 | Correct: 16/16
+  Estimator: 004 | Epoch: 005 | Batch: 006 | Loss: 0.38500 | Correct: 3/4
+  Estimator: 005 | Epoch: 005 | Batch: 000 | Loss: 0.11773 | Correct: 16/16
+  Estimator: 005 | Epoch: 005 | Batch: 001 | Loss: 0.09788 | Correct: 16/16
+  Estimator: 005 | Epoch: 005 | Batch: 002 | Loss: 0.07390 | Correct: 16/16
+  Estimator: 005 | Epoch: 005 | Batch: 003 | Loss: 0.11317 | Correct: 16/16
+  Estimator: 005 | Epoch: 005 | Batch: 004 | Loss: 0.22283 | Correct: 14/16
+  Estimator: 005 | Epoch: 005 | Batch: 005 | Loss: 0.18168 | Correct: 16/16
+  Estimator: 005 | Epoch: 005 | Batch: 006 | Loss: 0.07311 | Correct: 4/4
+  Estimator: 006 | Epoch: 005 | Batch: 000 | Loss: 0.18761 | Correct: 15/16
+  Estimator: 006 | Epoch: 005 | Batch: 001 | Loss: 0.22136 | Correct: 14/16
+  Estimator: 006 | Epoch: 005 | Batch: 002 | Loss: 0.27651 | Correct: 15/16
+  Estimator: 006 | Epoch: 005 | Batch: 003 | Loss: 0.10501 | Correct: 16/16
+  Estimator: 006 | Epoch: 005 | Batch: 004 | Loss: 0.33053 | Correct: 14/16
+  Estimator: 006 | Epoch: 005 | Batch: 005 | Loss: 0.16292 | Correct: 15/16
+  Estimator: 006 | Epoch: 005 | Batch: 006 | Loss: 0.72915 | Correct: 2/4
+  Estimator: 007 | Epoch: 005 | Batch: 000 | Loss: 0.22106 | Correct: 14/16
+  Estimator: 007 | Epoch: 005 | Batch: 001 | Loss: 0.13023 | Correct: 16/16
+  Estimator: 007 | Epoch: 005 | Batch: 002 | Loss: 0.22834 | Correct: 16/16
+  Estimator: 007 | Epoch: 005 | Batch: 003 | Loss: 0.25959 | Correct: 13/16
+  Estimator: 007 | Epoch: 005 | Batch: 004 | Loss: 0.17884 | Correct: 16/16
+  Estimator: 007 | Epoch: 005 | Batch: 005 | Loss: 0.35748 | Correct: 12/16
+  Estimator: 007 | Epoch: 005 | Batch: 006 | Loss: 0.51731 | Correct: 3/4
+  Estimator: 008 | Epoch: 005 | Batch: 000 | Loss: 0.14003 | Correct: 16/16
+  Estimator: 008 | Epoch: 005 | Batch: 001 | Loss: 0.12052 | Correct: 16/16
+  Estimator: 008 | Epoch: 005 | Batch: 002 | Loss: 0.35002 | Correct: 15/16
+  Estimator: 008 | Epoch: 005 | Batch: 003 | Loss: 0.18734 | Correct: 16/16
+  Estimator: 008 | Epoch: 005 | Batch: 004 | Loss: 0.27638 | Correct: 15/16
+  Estimator: 008 | Epoch: 005 | Batch: 005 | Loss: 0.13192 | Correct: 16/16
+  Estimator: 008 | Epoch: 005 | Batch: 006 | Loss: 0.11788 | Correct: 4/4
+  Estimator: 009 | Epoch: 005 | Batch: 000 | Loss: 0.24979 | Correct: 15/16
+  Estimator: 009 | Epoch: 005 | Batch: 001 | Loss: 0.13155 | Correct: 16/16
+  Estimator: 009 | Epoch: 005 | Batch: 002 | Loss: 0.13868 | Correct: 16/16
+  Estimator: 009 | Epoch: 005 | Batch: 003 | Loss: 0.14553 | Correct: 15/16
+  Estimator: 009 | Epoch: 005 | Batch: 004 | Loss: 0.19552 | Correct: 15/16
+  Estimator: 009 | Epoch: 005 | Batch: 005 | Loss: 0.43003 | Correct: 12/16
+  Estimator: 009 | Epoch: 005 | Batch: 006 | Loss: 0.21651 | Correct: 4/4
+  Estimator: 000 | Epoch: 006 | Batch: 000 | Loss: 0.16697 | Correct: 16/16
+  Estimator: 000 | Epoch: 006 | Batch: 001 | Loss: 0.14469 | Correct: 16/16
+  Estimator: 000 | Epoch: 006 | Batch: 002 | Loss: 0.24833 | Correct: 15/16
+  Estimator: 000 | Epoch: 006 | Batch: 003 | Loss: 0.25390 | Correct: 15/16
+  Estimator: 000 | Epoch: 006 | Batch: 004 | Loss: 0.15518 | Correct: 15/16
+  Estimator: 000 | Epoch: 006 | Batch: 005 | Loss: 0.19677 | Correct: 15/16
+  Estimator: 000 | Epoch: 006 | Batch: 006 | Loss: 0.20082 | Correct: 4/4
+  Estimator: 001 | Epoch: 006 | Batch: 000 | Loss: 0.19516 | Correct: 15/16
+  Estimator: 001 | Epoch: 006 | Batch: 001 | Loss: 0.24030 | Correct: 15/16
+  Estimator: 001 | Epoch: 006 | Batch: 002 | Loss: 0.35519 | Correct: 14/16
+  Estimator: 001 | Epoch: 006 | Batch: 003 | Loss: 0.19876 | Correct: 16/16
+  Estimator: 001 | Epoch: 006 | Batch: 004 | Loss: 0.21388 | Correct: 15/16
+  Estimator: 001 | Epoch: 006 | Batch: 005 | Loss: 0.22073 | Correct: 15/16
+  Estimator: 001 | Epoch: 006 | Batch: 006 | Loss: 0.15480 | Correct: 4/4
+  Estimator: 002 | Epoch: 006 | Batch: 000 | Loss: 0.07601 | Correct: 16/16
+  Estimator: 002 | Epoch: 006 | Batch: 001 | Loss: 0.21132 | Correct: 14/16
+  Estimator: 002 | Epoch: 006 | Batch: 002 | Loss: 0.13845 | Correct: 15/16
+  Estimator: 002 | Epoch: 006 | Batch: 003 | Loss: 0.10034 | Correct: 16/16
+  Estimator: 002 | Epoch: 006 | Batch: 004 | Loss: 0.20054 | Correct: 14/16
+  Estimator: 002 | Epoch: 006 | Batch: 005 | Loss: 0.25564 | Correct: 12/16
+  Estimator: 002 | Epoch: 006 | Batch: 006 | Loss: 0.18169 | Correct: 4/4
+  Estimator: 003 | Epoch: 006 | Batch: 000 | Loss: 0.20150 | Correct: 14/16
+  Estimator: 003 | Epoch: 006 | Batch: 001 | Loss: 0.08973 | Correct: 16/16
+  Estimator: 003 | Epoch: 006 | Batch: 002 | Loss: 0.06757 | Correct: 16/16
+  Estimator: 003 | Epoch: 006 | Batch: 003 | Loss: 0.11741 | Correct: 16/16
+  Estimator: 003 | Epoch: 006 | Batch: 004 | Loss: 0.10126 | Correct: 16/16
+  Estimator: 003 | Epoch: 006 | Batch: 005 | Loss: 0.16191 | Correct: 15/16
+  Estimator: 003 | Epoch: 006 | Batch: 006 | Loss: 0.11674 | Correct: 4/4
+  Estimator: 004 | Epoch: 006 | Batch: 000 | Loss: 0.19964 | Correct: 15/16
+  Estimator: 004 | Epoch: 006 | Batch: 001 | Loss: 0.24820 | Correct: 14/16
+  Estimator: 004 | Epoch: 006 | Batch: 002 | Loss: 0.18423 | Correct: 16/16
+  Estimator: 004 | Epoch: 006 | Batch: 003 | Loss: 0.09638 | Correct: 16/16
+  Estimator: 004 | Epoch: 006 | Batch: 004 | Loss: 0.18415 | Correct: 15/16
+  Estimator: 004 | Epoch: 006 | Batch: 005 | Loss: 0.08881 | Correct: 16/16
+  Estimator: 004 | Epoch: 006 | Batch: 006 | Loss: 0.26209 | Correct: 4/4
+  Estimator: 005 | Epoch: 006 | Batch: 000 | Loss: 0.22794 | Correct: 15/16
+  Estimator: 005 | Epoch: 006 | Batch: 001 | Loss: 0.07746 | Correct: 16/16
+  Estimator: 005 | Epoch: 006 | Batch: 002 | Loss: 0.09818 | Correct: 15/16
+  Estimator: 005 | Epoch: 006 | Batch: 003 | Loss: 0.06920 | Correct: 16/16
+  Estimator: 005 | Epoch: 006 | Batch: 004 | Loss: 0.14284 | Correct: 16/16
+  Estimator: 005 | Epoch: 006 | Batch: 005 | Loss: 0.06325 | Correct: 16/16
+  Estimator: 005 | Epoch: 006 | Batch: 006 | Loss: 0.21971 | Correct: 4/4
+  Estimator: 006 | Epoch: 006 | Batch: 000 | Loss: 0.24332 | Correct: 14/16
+  Estimator: 006 | Epoch: 006 | Batch: 001 | Loss: 0.24482 | Correct: 15/16
+  Estimator: 006 | Epoch: 006 | Batch: 002 | Loss: 0.21474 | Correct: 15/16
+  Estimator: 006 | Epoch: 006 | Batch: 003 | Loss: 0.17626 | Correct: 15/16
+  Estimator: 006 | Epoch: 006 | Batch: 004 | Loss: 0.15993 | Correct: 15/16
+  Estimator: 006 | Epoch: 006 | Batch: 005 | Loss: 0.29453 | Correct: 14/16
+  Estimator: 006 | Epoch: 006 | Batch: 006 | Loss: 0.22291 | Correct: 3/4
+  Estimator: 007 | Epoch: 006 | Batch: 000 | Loss: 0.18879 | Correct: 15/16
+  Estimator: 007 | Epoch: 006 | Batch: 001 | Loss: 0.16563 | Correct: 15/16
+  Estimator: 007 | Epoch: 006 | Batch: 002 | Loss: 0.16743 | Correct: 15/16
+  Estimator: 007 | Epoch: 006 | Batch: 003 | Loss: 0.28031 | Correct: 14/16
+  Estimator: 007 | Epoch: 006 | Batch: 004 | Loss: 0.18292 | Correct: 15/16
+  Estimator: 007 | Epoch: 006 | Batch: 005 | Loss: 0.27384 | Correct: 13/16
+  Estimator: 007 | Epoch: 006 | Batch: 006 | Loss: 0.47566 | Correct: 2/4
+  Estimator: 008 | Epoch: 006 | Batch: 000 | Loss: 0.10005 | Correct: 16/16
+  Estimator: 008 | Epoch: 006 | Batch: 001 | Loss: 0.10549 | Correct: 16/16
+  Estimator: 008 | Epoch: 006 | Batch: 002 | Loss: 0.16490 | Correct: 15/16
+  Estimator: 008 | Epoch: 006 | Batch: 003 | Loss: 0.11616 | Correct: 16/16
+  Estimator: 008 | Epoch: 006 | Batch: 004 | Loss: 0.39543 | Correct: 13/16
+  Estimator: 008 | Epoch: 006 | Batch: 005 | Loss: 0.17458 | Correct: 16/16
+  Estimator: 008 | Epoch: 006 | Batch: 006 | Loss: 0.23223 | Correct: 4/4
+  Estimator: 009 | Epoch: 006 | Batch: 000 | Loss: 0.17041 | Correct: 16/16
+  Estimator: 009 | Epoch: 006 | Batch: 001 | Loss: 0.22813 | Correct: 14/16
+  Estimator: 009 | Epoch: 006 | Batch: 002 | Loss: 0.29425 | Correct: 14/16
+  Estimator: 009 | Epoch: 006 | Batch: 003 | Loss: 0.09834 | Correct: 15/16
+  Estimator: 009 | Epoch: 006 | Batch: 004 | Loss: 0.11506 | Correct: 16/16
+  Estimator: 009 | Epoch: 006 | Batch: 005 | Loss: 0.24362 | Correct: 14/16
+  Estimator: 009 | Epoch: 006 | Batch: 006 | Loss: 0.23337 | Correct: 4/4
+  Estimator: 000 | Epoch: 007 | Batch: 000 | Loss: 0.30542 | Correct: 13/16
+  Estimator: 000 | Epoch: 007 | Batch: 001 | Loss: 0.11916 | Correct: 16/16
+  Estimator: 000 | Epoch: 007 | Batch: 002 | Loss: 0.13029 | Correct: 15/16
+  Estimator: 000 | Epoch: 007 | Batch: 003 | Loss: 0.18632 | Correct: 16/16
+  Estimator: 000 | Epoch: 007 | Batch: 004 | Loss: 0.19452 | Correct: 16/16
+  Estimator: 000 | Epoch: 007 | Batch: 005 | Loss: 0.17201 | Correct: 16/16
+  Estimator: 000 | Epoch: 007 | Batch: 006 | Loss: 0.08004 | Correct: 4/4
+  Estimator: 001 | Epoch: 007 | Batch: 000 | Loss: 0.24542 | Correct: 15/16
+  Estimator: 001 | Epoch: 007 | Batch: 001 | Loss: 0.23191 | Correct: 15/16
+  Estimator: 001 | Epoch: 007 | Batch: 002 | Loss: 0.14878 | Correct: 16/16
+  Estimator: 001 | Epoch: 007 | Batch: 003 | Loss: 0.24983 | Correct: 15/16
+  Estimator: 001 | Epoch: 007 | Batch: 004 | Loss: 0.10358 | Correct: 16/16
+  Estimator: 001 | Epoch: 007 | Batch: 005 | Loss: 0.32774 | Correct: 14/16
+  Estimator: 001 | Epoch: 007 | Batch: 006 | Loss: 0.08121 | Correct: 4/4
+  Estimator: 002 | Epoch: 007 | Batch: 000 | Loss: 0.13576 | Correct: 15/16
+  Estimator: 002 | Epoch: 007 | Batch: 001 | Loss: 0.13683 | Correct: 15/16
+  Estimator: 002 | Epoch: 007 | Batch: 002 | Loss: 0.16059 | Correct: 14/16
+  Estimator: 002 | Epoch: 007 | Batch: 003 | Loss: 0.13672 | Correct: 15/16
+  Estimator: 002 | Epoch: 007 | Batch: 004 | Loss: 0.30729 | Correct: 13/16
+  Estimator: 002 | Epoch: 007 | Batch: 005 | Loss: 0.02674 | Correct: 16/16
+  Estimator: 002 | Epoch: 007 | Batch: 006 | Loss: 0.19414 | Correct: 4/4
+  Estimator: 003 | Epoch: 007 | Batch: 000 | Loss: 0.08093 | Correct: 16/16
+  Estimator: 003 | Epoch: 007 | Batch: 001 | Loss: 0.27223 | Correct: 13/16
+  Estimator: 003 | Epoch: 007 | Batch: 002 | Loss: 0.08193 | Correct: 16/16
+  Estimator: 003 | Epoch: 007 | Batch: 003 | Loss: 0.03818 | Correct: 16/16
+  Estimator: 003 | Epoch: 007 | Batch: 004 | Loss: 0.08254 | Correct: 16/16
+  Estimator: 003 | Epoch: 007 | Batch: 005 | Loss: 0.12748 | Correct: 16/16
+  Estimator: 003 | Epoch: 007 | Batch: 006 | Loss: 0.03642 | Correct: 4/4
+  Estimator: 004 | Epoch: 007 | Batch: 000 | Loss: 0.13274 | Correct: 16/16
+  Estimator: 004 | Epoch: 007 | Batch: 001 | Loss: 0.17685 | Correct: 15/16
+  Estimator: 004 | Epoch: 007 | Batch: 002 | Loss: 0.15720 | Correct: 16/16
+  Estimator: 004 | Epoch: 007 | Batch: 003 | Loss: 0.11266 | Correct: 16/16
+  Estimator: 004 | Epoch: 007 | Batch: 004 | Loss: 0.23271 | Correct: 14/16
+  Estimator: 004 | Epoch: 007 | Batch: 005 | Loss: 0.12575 | Correct: 16/16
+  Estimator: 004 | Epoch: 007 | Batch: 006 | Loss: 0.06754 | Correct: 4/4
+  Estimator: 005 | Epoch: 007 | Batch: 000 | Loss: 0.14309 | Correct: 15/16
+  Estimator: 005 | Epoch: 007 | Batch: 001 | Loss: 0.07702 | Correct: 16/16
+  Estimator: 005 | Epoch: 007 | Batch: 002 | Loss: 0.06392 | Correct: 16/16
+  Estimator: 005 | Epoch: 007 | Batch: 003 | Loss: 0.05800 | Correct: 16/16
+  Estimator: 005 | Epoch: 007 | Batch: 004 | Loss: 0.10048 | Correct: 16/16
+  Estimator: 005 | Epoch: 007 | Batch: 005 | Loss: 0.19656 | Correct: 15/16
+  Estimator: 005 | Epoch: 007 | Batch: 006 | Loss: 0.02129 | Correct: 4/4
+  Estimator: 006 | Epoch: 007 | Batch: 000 | Loss: 0.14009 | Correct: 16/16
+  Estimator: 006 | Epoch: 007 | Batch: 001 | Loss: 0.13151 | Correct: 15/16
+  Estimator: 006 | Epoch: 007 | Batch: 002 | Loss: 0.18125 | Correct: 15/16
+  Estimator: 006 | Epoch: 007 | Batch: 003 | Loss: 0.17377 | Correct: 15/16
+  Estimator: 006 | Epoch: 007 | Batch: 004 | Loss: 0.19604 | Correct: 15/16
+  Estimator: 006 | Epoch: 007 | Batch: 005 | Loss: 0.45954 | Correct: 13/16
+  Estimator: 006 | Epoch: 007 | Batch: 006 | Loss: 0.04522 | Correct: 4/4
+  Estimator: 007 | Epoch: 007 | Batch: 000 | Loss: 0.20206 | Correct: 16/16
+  Estimator: 007 | Epoch: 007 | Batch: 001 | Loss: 0.22034 | Correct: 15/16
+  Estimator: 007 | Epoch: 007 | Batch: 002 | Loss: 0.23638 | Correct: 15/16
+  Estimator: 007 | Epoch: 007 | Batch: 003 | Loss: 0.12933 | Correct: 16/16
+  Estimator: 007 | Epoch: 007 | Batch: 004 | Loss: 0.20183 | Correct: 14/16
+  Estimator: 007 | Epoch: 007 | Batch: 005 | Loss: 0.18128 | Correct: 15/16
+  Estimator: 007 | Epoch: 007 | Batch: 006 | Loss: 0.34888 | Correct: 4/4
+  Estimator: 008 | Epoch: 007 | Batch: 000 | Loss: 0.14283 | Correct: 16/16
+  Estimator: 008 | Epoch: 007 | Batch: 001 | Loss: 0.13962 | Correct: 16/16
+  Estimator: 008 | Epoch: 007 | Batch: 002 | Loss: 0.13863 | Correct: 16/16
+  Estimator: 008 | Epoch: 007 | Batch: 003 | Loss: 0.10581 | Correct: 16/16
+  Estimator: 008 | Epoch: 007 | Batch: 004 | Loss: 0.09875 | Correct: 16/16
+  Estimator: 008 | Epoch: 007 | Batch: 005 | Loss: 0.37617 | Correct: 13/16
+  Estimator: 008 | Epoch: 007 | Batch: 006 | Loss: 0.21609 | Correct: 4/4
+  Estimator: 009 | Epoch: 007 | Batch: 000 | Loss: 0.18103 | Correct: 15/16
+  Estimator: 009 | Epoch: 007 | Batch: 001 | Loss: 0.08006 | Correct: 16/16
+  Estimator: 009 | Epoch: 007 | Batch: 002 | Loss: 0.14788 | Correct: 15/16
+  Estimator: 009 | Epoch: 007 | Batch: 003 | Loss: 0.32632 | Correct: 14/16
+  Estimator: 009 | Epoch: 007 | Batch: 004 | Loss: 0.25514 | Correct: 13/16
+  Estimator: 009 | Epoch: 007 | Batch: 005 | Loss: 0.09403 | Correct: 16/16
+  Estimator: 009 | Epoch: 007 | Batch: 006 | Loss: 0.04777 | Correct: 4/4
+  Estimator: 000 | Epoch: 008 | Batch: 000 | Loss: 0.27848 | Correct: 14/16
+  Estimator: 000 | Epoch: 008 | Batch: 001 | Loss: 0.10024 | Correct: 15/16
+  Estimator: 000 | Epoch: 008 | Batch: 002 | Loss: 0.13552 | Correct: 15/16
+  Estimator: 000 | Epoch: 008 | Batch: 003 | Loss: 0.12067 | Correct: 16/16
+  Estimator: 000 | Epoch: 008 | Batch: 004 | Loss: 0.15334 | Correct: 16/16
+  Estimator: 000 | Epoch: 008 | Batch: 005 | Loss: 0.21523 | Correct: 15/16
+  Estimator: 000 | Epoch: 008 | Batch: 006 | Loss: 0.17073 | Correct: 4/4
+  Estimator: 001 | Epoch: 008 | Batch: 000 | Loss: 0.24380 | Correct: 15/16
+  Estimator: 001 | Epoch: 008 | Batch: 001 | Loss: 0.12515 | Correct: 16/16
+  Estimator: 001 | Epoch: 008 | Batch: 002 | Loss: 0.25368 | Correct: 15/16
+  Estimator: 001 | Epoch: 008 | Batch: 003 | Loss: 0.12741 | Correct: 16/16
+  Estimator: 001 | Epoch: 008 | Batch: 004 | Loss: 0.28410 | Correct: 14/16
+  Estimator: 001 | Epoch: 008 | Batch: 005 | Loss: 0.17176 | Correct: 15/16
+  Estimator: 001 | Epoch: 008 | Batch: 006 | Loss: 0.11534 | Correct: 4/4
+  Estimator: 002 | Epoch: 008 | Batch: 000 | Loss: 0.23061 | Correct: 14/16
+  Estimator: 002 | Epoch: 008 | Batch: 001 | Loss: 0.10983 | Correct: 16/16
+  Estimator: 002 | Epoch: 008 | Batch: 002 | Loss: 0.12794 | Correct: 15/16
+  Estimator: 002 | Epoch: 008 | Batch: 003 | Loss: 0.09142 | Correct: 16/16
+  Estimator: 002 | Epoch: 008 | Batch: 004 | Loss: 0.15225 | Correct: 15/16
+  Estimator: 002 | Epoch: 008 | Batch: 005 | Loss: 0.14495 | Correct: 15/16
+  Estimator: 002 | Epoch: 008 | Batch: 006 | Loss: 0.10769 | Correct: 4/4
+  Estimator: 003 | Epoch: 008 | Batch: 000 | Loss: 0.13798 | Correct: 15/16
+  Estimator: 003 | Epoch: 008 | Batch: 001 | Loss: 0.06221 | Correct: 16/16
+  Estimator: 003 | Epoch: 008 | Batch: 002 | Loss: 0.13609 | Correct: 15/16
+  Estimator: 003 | Epoch: 008 | Batch: 003 | Loss: 0.12726 | Correct: 15/16
+  Estimator: 003 | Epoch: 008 | Batch: 004 | Loss: 0.07263 | Correct: 16/16
+  Estimator: 003 | Epoch: 008 | Batch: 005 | Loss: 0.08574 | Correct: 16/16
+  Estimator: 003 | Epoch: 008 | Batch: 006 | Loss: 0.03304 | Correct: 4/4
+  Estimator: 004 | Epoch: 008 | Batch: 000 | Loss: 0.30569 | Correct: 14/16
+  Estimator: 004 | Epoch: 008 | Batch: 001 | Loss: 0.06834 | Correct: 16/16
+  Estimator: 004 | Epoch: 008 | Batch: 002 | Loss: 0.10479 | Correct: 16/16
+  Estimator: 004 | Epoch: 008 | Batch: 003 | Loss: 0.16852 | Correct: 15/16
+  Estimator: 004 | Epoch: 008 | Batch: 004 | Loss: 0.06220 | Correct: 16/16
+  Estimator: 004 | Epoch: 008 | Batch: 005 | Loss: 0.11959 | Correct: 16/16
+  Estimator: 004 | Epoch: 008 | Batch: 006 | Loss: 0.12868 | Correct: 4/4
+  Estimator: 005 | Epoch: 008 | Batch: 000 | Loss: 0.10904 | Correct: 16/16
+  Estimator: 005 | Epoch: 008 | Batch: 001 | Loss: 0.06360 | Correct: 16/16
+  Estimator: 005 | Epoch: 008 | Batch: 002 | Loss: 0.03539 | Correct: 16/16
+  Estimator: 005 | Epoch: 008 | Batch: 003 | Loss: 0.20805 | Correct: 15/16
+  Estimator: 005 | Epoch: 008 | Batch: 004 | Loss: 0.08602 | Correct: 15/16
+  Estimator: 005 | Epoch: 008 | Batch: 005 | Loss: 0.09050 | Correct: 16/16
+  Estimator: 005 | Epoch: 008 | Batch: 006 | Loss: 0.04941 | Correct: 4/4
+  Estimator: 006 | Epoch: 008 | Batch: 000 | Loss: 0.22530 | Correct: 14/16
+  Estimator: 006 | Epoch: 008 | Batch: 001 | Loss: 0.16476 | Correct: 15/16
+  Estimator: 006 | Epoch: 008 | Batch: 002 | Loss: 0.22418 | Correct: 15/16
+  Estimator: 006 | Epoch: 008 | Batch: 003 | Loss: 0.22248 | Correct: 15/16
+  Estimator: 006 | Epoch: 008 | Batch: 004 | Loss: 0.23847 | Correct: 15/16
+  Estimator: 006 | Epoch: 008 | Batch: 005 | Loss: 0.14387 | Correct: 15/16
+  Estimator: 006 | Epoch: 008 | Batch: 006 | Loss: 0.04697 | Correct: 4/4
+  Estimator: 007 | Epoch: 008 | Batch: 000 | Loss: 0.18425 | Correct: 16/16
+  Estimator: 007 | Epoch: 008 | Batch: 001 | Loss: 0.14118 | Correct: 16/16
+  Estimator: 007 | Epoch: 008 | Batch: 002 | Loss: 0.10535 | Correct: 15/16
+  Estimator: 007 | Epoch: 008 | Batch: 003 | Loss: 0.21539 | Correct: 15/16
+  Estimator: 007 | Epoch: 008 | Batch: 004 | Loss: 0.27100 | Correct: 14/16
+  Estimator: 007 | Epoch: 008 | Batch: 005 | Loss: 0.19793 | Correct: 15/16
+  Estimator: 007 | Epoch: 008 | Batch: 006 | Loss: 0.09699 | Correct: 4/4
+  Estimator: 008 | Epoch: 008 | Batch: 000 | Loss: 0.12976 | Correct: 16/16
+  Estimator: 008 | Epoch: 008 | Batch: 001 | Loss: 0.11231 | Correct: 15/16
+  Estimator: 008 | Epoch: 008 | Batch: 002 | Loss: 0.13662 | Correct: 16/16
+  Estimator: 008 | Epoch: 008 | Batch: 003 | Loss: 0.34514 | Correct: 14/16
+  Estimator: 008 | Epoch: 008 | Batch: 004 | Loss: 0.11135 | Correct: 16/16
+  Estimator: 008 | Epoch: 008 | Batch: 005 | Loss: 0.10212 | Correct: 16/16
+  Estimator: 008 | Epoch: 008 | Batch: 006 | Loss: 0.19748 | Correct: 3/4
+  Estimator: 009 | Epoch: 008 | Batch: 000 | Loss: 0.08727 | Correct: 16/16
+  Estimator: 009 | Epoch: 008 | Batch: 001 | Loss: 0.20285 | Correct: 15/16
+  Estimator: 009 | Epoch: 008 | Batch: 002 | Loss: 0.15559 | Correct: 15/16
+  Estimator: 009 | Epoch: 008 | Batch: 003 | Loss: 0.29925 | Correct: 13/16
+  Estimator: 009 | Epoch: 008 | Batch: 004 | Loss: 0.09092 | Correct: 15/16
+  Estimator: 009 | Epoch: 008 | Batch: 005 | Loss: 0.17556 | Correct: 15/16
+  Estimator: 009 | Epoch: 008 | Batch: 006 | Loss: 0.02898 | Correct: 4/4
+  Estimator: 000 | Epoch: 009 | Batch: 000 | Loss: 0.13895 | Correct: 15/16
+  Estimator: 000 | Epoch: 009 | Batch: 001 | Loss: 0.27741 | Correct: 15/16
+  Estimator: 000 | Epoch: 009 | Batch: 002 | Loss: 0.07820 | Correct: 16/16
+  Estimator: 000 | Epoch: 009 | Batch: 003 | Loss: 0.13488 | Correct: 15/16
+  Estimator: 000 | Epoch: 009 | Batch: 004 | Loss: 0.20726 | Correct: 15/16
+  Estimator: 000 | Epoch: 009 | Batch: 005 | Loss: 0.12454 | Correct: 16/16
+  Estimator: 000 | Epoch: 009 | Batch: 006 | Loss: 0.15687 | Correct: 4/4
+  Estimator: 001 | Epoch: 009 | Batch: 000 | Loss: 0.16173 | Correct: 16/16
+  Estimator: 001 | Epoch: 009 | Batch: 001 | Loss: 0.37064 | Correct: 13/16
+  Estimator: 001 | Epoch: 009 | Batch: 002 | Loss: 0.15440 | Correct: 16/16
+  Estimator: 001 | Epoch: 009 | Batch: 003 | Loss: 0.15840 | Correct: 16/16
+  Estimator: 001 | Epoch: 009 | Batch: 004 | Loss: 0.08004 | Correct: 16/16
+  Estimator: 001 | Epoch: 009 | Batch: 005 | Loss: 0.18292 | Correct: 15/16
+  Estimator: 001 | Epoch: 009 | Batch: 006 | Loss: 0.25887 | Correct: 3/4
+  Estimator: 002 | Epoch: 009 | Batch: 000 | Loss: 0.10424 | Correct: 16/16
+  Estimator: 002 | Epoch: 009 | Batch: 001 | Loss: 0.18710 | Correct: 15/16
+  Estimator: 002 | Epoch: 009 | Batch: 002 | Loss: 0.09817 | Correct: 16/16
+  Estimator: 002 | Epoch: 009 | Batch: 003 | Loss: 0.16553 | Correct: 15/16
+  Estimator: 002 | Epoch: 009 | Batch: 004 | Loss: 0.22172 | Correct: 15/16
+  Estimator: 002 | Epoch: 009 | Batch: 005 | Loss: 0.04569 | Correct: 16/16
+  Estimator: 002 | Epoch: 009 | Batch: 006 | Loss: 0.04590 | Correct: 4/4
+  Estimator: 003 | Epoch: 009 | Batch: 000 | Loss: 0.06865 | Correct: 16/16
+  Estimator: 003 | Epoch: 009 | Batch: 001 | Loss: 0.13596 | Correct: 15/16
+  Estimator: 003 | Epoch: 009 | Batch: 002 | Loss: 0.05657 | Correct: 16/16
+  Estimator: 003 | Epoch: 009 | Batch: 003 | Loss: 0.05318 | Correct: 16/16
+  Estimator: 003 | Epoch: 009 | Batch: 004 | Loss: 0.08445 | Correct: 16/16
+  Estimator: 003 | Epoch: 009 | Batch: 005 | Loss: 0.18399 | Correct: 14/16
+  Estimator: 003 | Epoch: 009 | Batch: 006 | Loss: 0.00724 | Correct: 4/4
+  Estimator: 004 | Epoch: 009 | Batch: 000 | Loss: 0.14858 | Correct: 15/16
+  Estimator: 004 | Epoch: 009 | Batch: 001 | Loss: 0.12300 | Correct: 16/16
+  Estimator: 004 | Epoch: 009 | Batch: 002 | Loss: 0.15656 | Correct: 15/16
+  Estimator: 004 | Epoch: 009 | Batch: 003 | Loss: 0.17828 | Correct: 15/16
+  Estimator: 004 | Epoch: 009 | Batch: 004 | Loss: 0.07471 | Correct: 16/16
+  Estimator: 004 | Epoch: 009 | Batch: 005 | Loss: 0.10560 | Correct: 16/16
+  Estimator: 004 | Epoch: 009 | Batch: 006 | Loss: 0.04206 | Correct: 4/4
+  Estimator: 005 | Epoch: 009 | Batch: 000 | Loss: 0.05246 | Correct: 16/16
+  Estimator: 005 | Epoch: 009 | Batch: 001 | Loss: 0.06657 | Correct: 16/16
+  Estimator: 005 | Epoch: 009 | Batch: 002 | Loss: 0.04252 | Correct: 16/16
+  Estimator: 005 | Epoch: 009 | Batch: 003 | Loss: 0.06383 | Correct: 16/16
+  Estimator: 005 | Epoch: 009 | Batch: 004 | Loss: 0.18768 | Correct: 15/16
+  Estimator: 005 | Epoch: 009 | Batch: 005 | Loss: 0.13516 | Correct: 15/16
+  Estimator: 005 | Epoch: 009 | Batch: 006 | Loss: 0.02332 | Correct: 4/4
+  Estimator: 006 | Epoch: 009 | Batch: 000 | Loss: 0.24665 | Correct: 15/16
+  Estimator: 006 | Epoch: 009 | Batch: 001 | Loss: 0.10189 | Correct: 15/16
+  Estimator: 006 | Epoch: 009 | Batch: 002 | Loss: 0.07198 | Correct: 16/16
+  Estimator: 006 | Epoch: 009 | Batch: 003 | Loss: 0.37746 | Correct: 14/16
+  Estimator: 006 | Epoch: 009 | Batch: 004 | Loss: 0.17234 | Correct: 15/16
+  Estimator: 006 | Epoch: 009 | Batch: 005 | Loss: 0.19765 | Correct: 14/16
+  Estimator: 006 | Epoch: 009 | Batch: 006 | Loss: 0.09816 | Correct: 4/4
+  Estimator: 007 | Epoch: 009 | Batch: 000 | Loss: 0.18687 | Correct: 15/16
+  Estimator: 007 | Epoch: 009 | Batch: 001 | Loss: 0.18913 | Correct: 15/16
+  Estimator: 007 | Epoch: 009 | Batch: 002 | Loss: 0.15123 | Correct: 16/16
+  Estimator: 007 | Epoch: 009 | Batch: 003 | Loss: 0.10433 | Correct: 16/16
+  Estimator: 007 | Epoch: 009 | Batch: 004 | Loss: 0.12118 | Correct: 16/16
+  Estimator: 007 | Epoch: 009 | Batch: 005 | Loss: 0.20691 | Correct: 14/16
+  Estimator: 007 | Epoch: 009 | Batch: 006 | Loss: 0.29999 | Correct: 3/4
+  Estimator: 008 | Epoch: 009 | Batch: 000 | Loss: 0.25587 | Correct: 15/16
+  Estimator: 008 | Epoch: 009 | Batch: 001 | Loss: 0.17632 | Correct: 15/16
+  Estimator: 008 | Epoch: 009 | Batch: 002 | Loss: 0.11715 | Correct: 16/16
+  Estimator: 008 | Epoch: 009 | Batch: 003 | Loss: 0.08461 | Correct: 16/16
+  Estimator: 008 | Epoch: 009 | Batch: 004 | Loss: 0.08440 | Correct: 16/16
+  Estimator: 008 | Epoch: 009 | Batch: 005 | Loss: 0.18829 | Correct: 15/16
+  Estimator: 008 | Epoch: 009 | Batch: 006 | Loss: 0.02286 | Correct: 4/4
+  Estimator: 009 | Epoch: 009 | Batch: 000 | Loss: 0.13935 | Correct: 15/16
+  Estimator: 009 | Epoch: 009 | Batch: 001 | Loss: 0.12810 | Correct: 15/16
+  Estimator: 009 | Epoch: 009 | Batch: 002 | Loss: 0.19610 | Correct: 14/16
+  Estimator: 009 | Epoch: 009 | Batch: 003 | Loss: 0.07935 | Correct: 16/16
+  Estimator: 009 | Epoch: 009 | Batch: 004 | Loss: 0.13900 | Correct: 15/16
+  Estimator: 009 | Epoch: 009 | Batch: 005 | Loss: 0.18111 | Correct: 15/16
+  Estimator: 009 | Epoch: 009 | Batch: 006 | Loss: 0.21887 | Correct: 3/4
+#+end_example
+
+#+begin_src ipython
+  # Define a custom wrapper for cross-validation
+  class EnsembleSklearnWrapper:
+      def __init__(self, ensemble_model):
+          self.ensemble_model = ensemble_model
+
+      def get_params(self, deep=True):
+          return {"ensemble_model": self.ensemble_model}
+
+      def set_params(self, **parameters):
+          for parameter, value in parameters.items():
+              setattr(self, parameter, value)
+          return self
+
+      def fit(self, X, y):
+          X_tensor = torch.tensor(X, dtype=torch.float32)
+          y_tensor = torch.tensor(y, dtype=torch.long)
+          train_dataset = TensorDataset(X_tensor, y_tensor)
+          train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+          self.ensemble_model.fit(train_loader, epochs=10)
+          return self
+
+      def predict(self, X):
+          X_tensor = torch.tensor(X, dtype=torch.float32)
+          return self.ensemble_model.predict(X_tensor)
+
+      def predict_proba(self, X):
+          X_tensor = torch.tensor(X, dtype=torch.float32)
+          return self.ensemble_model.predict_proba(X_tensor)
+
+
+  ensemble_wrapper = EnsembleSklearnWrapper(ensemble_model)
+
+  # Run cross-validation
+  scores = cross_val_score(ensemble_wrapper, X, y, cv=5, scoring='accuracy')
+  print("Cross-validation scores: ", scores)
+#+end_src

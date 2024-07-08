@@ -1,0 +1,1023 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session skorch :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+  from time import perf_counter
+
+  from sklearn.model_selection import StratifiedKFold
+  from sklearn.model_selection import cross_val_score, cross_validate
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
+  from src.decode.my_mne import my_cross_val_multiscore
+  from mne.decoding import SlidingEstimator, get_coef
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader
+  DEVICE = 'cuda'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Optimization
+#+begin_src ipython
+  def train(dataloader, model, loss_fn, optimizer, penalty=None, lbd=1, clip_grad=0):
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      model.train()
+      for batch, (X, y) in enumerate(dataloader):
+          X, y = X.to(device), y.to(device)
+          # Compute prediction error
+          y_pred = model(X)
+
+          # if y.ndim==y_pred.ndim:
+          loss = loss_fn(y_pred, y)
+
+          if penalty is not None:
+              reg_loss = 0
+              for param in model.parameters():
+                  if penalty=='l1':
+                      reg_loss += torch.sum(torch.abs(param))
+                  else:
+                      reg_loss += torch.sum(torch.square(param))
+
+                  loss = loss + lbd * reg_loss
+
+          # Backpropagation
+          loss.backward()
+
+          # Clip gradients
+          if clip_grad:
+              torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+              #torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
+
+          optimizer.step()
+          optimizer.zero_grad()
+
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def test(dataloader, model, loss_fn):
+      size = len(dataloader.dataset)
+      num_batches = len(dataloader)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      # Validation loop.
+      model.eval()
+      val_loss = 0.0
+      with torch.no_grad():
+          for data, targets in dataloader:
+              data, targets = data.to(device), targets.to(device)
+
+              outputs = model(data)
+              loss = loss_fn(outputs, targets)
+              val_loss += loss.item() * data.size(0)
+
+          val_loss /= size
+
+      return val_loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, penalty=None, lbd=1, thresh=.005):
+      scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+      # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
+      # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else 'cpu')
+      model.to(device)
+
+      loss_list = []
+      val_loss_list = []
+
+      # Training loop.
+      for epoch in range(num_epochs):
+          loss = train(train_loader, model, loss_fn, optimizer, penalty, lbd)
+          val_loss = test(val_loader, model, loss_fn)
+          scheduler.step(val_loss)
+
+          loss_list.append(loss.item())
+          val_loss_list.append(val_loss)
+
+          # if epoch % int(num_epochs  / 10) == 0:
+          print(f'Epoch {epoch+1}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
+
+          if val_loss < thresh:
+              print(f'Stopping training as loss has fallen below the threshold: {val_loss}')
+              break
+
+          if val_loss > 300:
+              print(f'Stopping training as loss is too high: {val_loss}')
+              break
+
+          if torch.isnan(loss):
+              print(f'Stopping training as loss is NaN.')
+              break
+
+      return loss_list, val_loss_list
+#+end_src
+
+#+RESULTS:
+
+** Loss
+#+begin_src ipython
+    import torch
+    import torch.nn as nn
+
+    def sign_constrained_loss(output, xi, target_sign):
+        dot_product = torch.dot(output.flatten(), xi.flatten())
+        if target_sign > 0:
+            loss = torch.relu(-dot_product)  # Encourages positive dot product
+        else:
+            loss = torch.relu(dot_product)   # Encourages negative dot product
+        return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class CosineLoss(nn.Module):
+      def __init__(self):
+          super(CosineLoss, self).__init__()
+          self.cosine_similarity = nn.CosineSimilarity(dim=-1)
+
+      def forward(self, input1, input2):
+          # Calculate cosine similarity
+          cosine_sim = self.cosine_similarity(input1, input2)
+          # Calculate the loss as 1 - cosine_similarity
+          loss = 1 - cosine_sim
+          # Return the mean loss over the batch
+          return loss.mean()
+#+end_src
+
+#+RESULTS:
+
+
+#+RESULTS:
+
+** Other
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          v = b - np.dot(b, a) / np.dot(a, a) * a
+
+      if IF_NORM:
+          u = a / np.linalg.norm(a)
+          v = b / np.linalg.norm(b)
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_idx(model, rank=2):
+      ksi = torch.hstack((model.low_rank.U, model.low_rank.V)).T
+      ksi = ksi[:, :model.Na[0]]
+
+      readout = model.low_rank.linear.weight.data
+      ksi = torch.vstack((ksi, readout))
+
+      print('ksi', ksi.shape)
+
+      ksi = ksi.cpu().detach().numpy()
+      theta = get_theta(ksi[0], ksi[rank])
+
+      return theta.argsort()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_overlap(model, rates):
+      ksi = model.odors.cpu().detach().numpy()
+      return rates @ ksi.T / rates.shape[-1]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import scipy.stats as stats
+
+  def plot_smooth(data, ax, color):
+      mean = data.mean(axis=0)
+      ci = smooth.std(axis=0, ddof=1) * 1.96
+
+      # Plot
+      ax.plot(mean, color=color)
+      ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+** plots
+
+#+begin_src ipython
+  def plot_rates_selec(rates, idx, thresh=0.5, figname='fig.svg'):
+        ordered = rates[..., idx]
+        fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+        r_max = thresh * np.max(rates[0])
+
+        ax[0].imshow(rates[0].T, aspect='auto', cmap='jet', vmin=0, vmax=r_max)
+        ax[0].set_ylabel('Neuron #')
+        ax[0].set_xlabel('Step')
+
+        ax[1].imshow(ordered[0].T, aspect='auto', cmap='jet', vmin=0, vmax=r_max)
+        ax[1].set_yticks(np.linspace(0, model.Na[0].cpu().detach(), 5), np.linspace(0, 360, 5).astype(int))
+        ax[1].set_ylabel('Pref. Location (°)')
+        ax[1].set_xlabel('Step')
+        plt.savefig(figname, dpi=300)
+        plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_overlap(rates, memory, readout, labels=['A', 'B'], figname='fig.svg'):
+      fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+      overlap =(rates @ memory) / rates.shape[-1]
+
+      if overlap.shape[0]>2:
+          ax[0].plot(overlap.T[..., :2], label=labels[0])
+          ax[0].plot(overlap.T[..., 2:], '--', label=labels[1])
+      else:
+          ax[0].plot(overlap.T[..., 0], label=labels[0])
+          ax[0].plot(overlap.T[..., 1], '--', label=labels[1])
+
+      ax[0].set_xlabel('Step')
+      ax[0].set_ylabel('Overlap')
+      ax[0].set_title('Memory')
+
+      overlap =(rates @ readout) / rates.shape[-1]
+
+      if overlap.shape[0]>2:
+          ax[1].plot(overlap.T[..., :2], label=labels[0])
+          ax[1].plot(overlap.T[..., 2:], '--', label=labels[1])
+      else:
+          ax[1].plot(overlap.T[..., 0], label=labels[0])
+          ax[1].plot(overlap.T[..., 1], '--', label=labels[1])
+
+      ax[1].set_xlabel('Step')
+      ax[1].set_ylabel('Overlap')
+      ax[1].set_title('Readout')
+
+      # plt.legend(fontsize=10, frameon=False)
+      plt.savefig(figname, dpi=300)
+      plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_m0_m1_phi(rates, idx, figname='fig.svg'):
+
+      m0, m1, phi = decode_bump(rates[..., idx], axis=-1)
+      fig, ax = plt.subplots(1, 3, figsize=[2*width, height])
+
+      ax[0].plot(m0[:2].T)
+      ax[0].plot(m0[2:].T, '--')
+      #ax[0].set_ylim([0, 360])
+      #ax[0].set_yticks([0, 90, 180, 270, 360])
+      ax[0].set_ylabel('$\mathcal{F}_0$ (Hz)')
+      ax[0].set_xlabel('Step')
+
+      ax[1].plot(m1[:2].T)
+      ax[1].plot(m1[2:].T, '--')
+      # ax[1].set_ylim([0, 360])
+      # ax[1].set_yticks([0, 90, 180, 270, 360])
+      ax[1].set_ylabel('$\mathcal{F}_1$ (Hz)')
+      ax[1].set_xlabel('Step')
+
+      ax[2].plot(phi[:2].T * 180 / np.pi)
+      ax[2].plot(phi[2:].T * 180 / np.pi, '--')
+      ax[2].set_ylim([0, 360])
+      ax[2].set_yticks([0, 90, 180, 270, 360])
+      ax[2].set_ylabel('Phase (°)')
+      ax[2].set_xlabel('Step')
+
+      plt.savefig(figname, dpi=300)
+      plt.show()
+    #+end_src
+
+#+RESULTS:
+
+* Perceptron
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  class Perceptron(nn.Module):
+      def __init__(self, num_features, dropout_rate=0.5):
+          super(Perceptron, self).__init__()
+          self.linear = nn.Linear(num_features, 1)
+          self.dropout = nn.Dropout(dropout_rate)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          hidden = self.linear(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from skorch.callbacks import Callback
+  from skorch.callbacks import EarlyStopping
+  from skorch.callbacks import EpochScoring
+
+  early_stopping = EarlyStopping(
+      monitor='train_loss',    # Metric to monitor
+      patience=5,              # Number of epochs to wait for improvement
+      threshold=0.001,       # Minimum change to qualify as an improvement
+      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+      lower_is_better=True     # Set to True if lower metric values are better
+  )
+
+  auc = EpochScoring(scoring='roc_auc', lower_is_better=False)
+  accuracy = EpochScoring(scoring='accuracy', lower_is_better=False)
+
+  class CaptureWeightsCallback(Callback):
+      def __init__(self):
+          super().__init__()  # Ensure to call the superclass initializer if needed
+          self.weights = []
+
+      def on_train_end(self, net, **kwargs):
+          # Capture the linear layer's weights after training ends
+          self.weights.append(net.module_.linear.weight.data.cpu().numpy())
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  class RegularizedNet(NeuralNetClassifier):
+      def __init__(self, module, lbd=0.01, alpha=0.01, l1_ratio=0.5, **kwargs):
+          self.alpha = alpha  # Regularization strength
+          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+          super().__init__(module, **kwargs)
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          # Call super method to compute primary loss
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+          if self.alpha>0:
+              elastic_net_reg = 0
+              for param in self.module_.parameters():
+                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2) / 2
+
+          # Add the elastic net regularization term to the primary loss
+          return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from sklearn.metrics import make_scorer
+
+  def overlap_scoring_function(estimator, X, y_true):
+      y = y_true.copy()
+      y[y==0] = 1
+
+      try:
+          weights = estimator['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      except:
+          weights = estimator.module_.linear.weight.data.cpu().detach().numpy()[0]
+
+      overlap = (y[:,0] * (X @ weights.T)) / X.shape[1]
+
+      size = int(y.shape[0] / 2)
+      # result = np.array((overlap[:size].mean(),overlap[size:].mean()))
+      # print(result.shape)
+
+      return -overlap.mean()
+
+  # Make our custom scorer compatible with sklearn
+  overlap_scorer = make_scorer(overlap_scoring_function, greater_is_better=True)
+#+end_src
+
+#+RESULTS:
+
+* Load Data
+** Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '../')
+
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.common.options import set_options
+#+end_src
+
+#+RESULTS:
+
+** Parameters
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = ['first', 'last']
+
+  kwargs = dict()
+  kwargs = {'prescreen': None, 'pval': 0.05, 'trials': '', 'balance': 'under', 'data_type': 'raw',
+            'method': 'bootstrap', 'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
+            'bootstrap': True, 'n_boots': 1000,
+            'preprocess': True, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l2',
+            'out_fold': 'stratified', 'n_out': 5,
+            'in_fold': 'stratified', 'n_in': 5,
+            'random_state': None, 'n_repeats': 10,
+            'n_lambda': 20, 'T_WINDOW': 0.5,
+            'features': 'sample',
+            'day': 'last'
+            }
+
+#+end_src
+
+#+RESULTS:
+
+** Load X, y
+*** Sample
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['reload'] = 0
+
+  options['mouse'] = 'ChRM04'
+  options['features'] = 'sample'
+  options['trials'] = ''
+
+  X_list = []
+  y_list = []
+  tasks = ["Dual"]
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X_list.append(X_dum)
+      y_list.append(y_dum)
+
+  print('X', X_data.shape, 'y', y_data.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 668, 84) X_S2 (96, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 668, 84) X_S2 (96, 668, 84)
+  X (192, 668, 84) y (192,)
+#+end_example
+
+#+begin_src ipython
+  X_list = np.array(X_list)[0]
+  y_list = np.array(y_list)[0]
+  print(X_list.shape, y_list.shape)
+#+end_src
+
+#+RESULTS:
+: (2, 192, 668, 84) (2, 192)
+
+*** Distractor
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['reload'] = 0
+
+  options['mouse'] = 'JawsM15'
+  options['features'] = 'distractor'
+  options['trials'] = ''
+
+  X2_list = []
+  y2_list = []
+  tasks = ["Dual"]
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X2_list.append(X_dum)
+      y2_list.append(y_dum)
+
+  print('X', X_data.shape, 'y', y_data.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  X (192, 693, 84) y (192,)
+#+end_example
+
+#+begin_src ipython
+  X2_list = np.array(X2_list)[0]
+  y2_list = np.array(y2_list)[0]
+  print(X2_list.shape, y2_list.shape)
+#+end_src
+
+#+RESULTS:
+: (2, 192, 693, 84) (2, 192)
+
+* Model Fit
+** GridSearchCV
+
+#+begin_src ipython
+  from sklearn.preprocessing import StandardScaler
+  from sklearn.pipeline import Pipeline
+
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.5,
+      criterion=nn.BCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      verbose=0,
+      device='cuda' if torch.cuda.is_available() else 'cpu',
+  )
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from scipy.stats import uniform, loguniform
+  from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+
+  params = {
+      'net__alpha': np.logspace(-3, 3, 10),
+      'net__l1_ratio': np.linspace(0, 1, 10),
+      'net__module__dropout_rate': np.linspace(0, 1, 10),  # Example dropout rates
+  }
+
+  net.set_params(train_split=None, verbose=0)
+  model = GridSearchCV(pipe, params, refit=True, cv=5, scoring='f1_weighted', n_jobs=10)
+#+end_src
+
+#+RESULTS:
+
+** Coefficients
+
+#+begin_src ipython
+  print(X_list.shape, y_list.shape)
+#+end_src
+
+#+RESULTS:
+: (2, 192, 668, 84) (2, 192)
+
+*** Sample
+**** First
+
+#+begin_src ipython
+  from src.preprocess.helpers import avg_epochs
+  options['epochs'] = ["ED"]
+  X = X_list[0].astype(np.float32)
+  X_avg = avg_epochs(X, **options).astype(np.float32)
+  print(X_avg.shape)
+  y = np.float32(y_list[0, :, np.newaxis])
+#+end_src
+
+#+RESULTS:
+: (192, 668)
+
+#+begin_src ipython
+  start = perf_counter()
+  print('hyperparam fitting ...')
+  model.fit(X_avg, y)
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+
+#+RESULTS:
+: hyperparam fitting ...
+
+#+begin_src ipython
+  best_model = model.best_estimator_
+  sample_first = best_model.named_steps['net'].module_.linear.weight[0]
+#+end_src
+#+RESULTS:
+: 1c20c451-17e7-436f-9e00-9fd5b87af150
+
+**** Last
+
+#+begin_src ipython
+  from src.preprocess.helpers import avg_epochs
+
+  X = X_list[1].astype(np.float32)
+  X_avg = avg_epochs(X, **options).astype(np.float32)
+  print(X_avg.shape)
+  y = np.float32(y_list[1, :, np.newaxis])
+#+end_src
+#+RESULTS:
+: de880df6-440b-4777-9084-8fb64825de5d
+
+#+begin_src ipython
+  start = perf_counter()
+  print('hyperparam fitting ...')
+  model.fit(X_avg, y)
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+#+RESULTS:
+: fa410828-99af-4c5f-a0ec-5e13e016f824
+
+#+begin_src ipython
+ best_model = model.best_estimator_
+ sample_last = best_model.named_steps['net'].module_.linear.weight[0]
+#+end_src
+#+RESULTS:
+: 1ef06ab0-4093-4db8-9981-6f2c9cebec1a
+
+*** Distractor
+**** First
+
+#+begin_src ipython
+  from src.preprocess.helpers import avg_epochs
+  options['epochs'] = ['MD']
+  X = X2_list[0].astype(np.float32)
+  X_avg = avg_epochs(X, **options).astype(np.float32)
+  print(X_avg.shape)
+  y = np.float32(y2_list[0, :, np.newaxis])
+#+end_src
+#+RESULTS:
+: 626ebb3d-859c-4e24-8ca8-5dc4df7fb10c
+
+#+begin_src ipython
+  start = perf_counter()
+  print('hyperparam fitting ...')
+  model.fit(X_avg, y)
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+#+RESULTS:
+: d41f57bf-0999-43bb-aebc-a067ee10f86e
+
+#+begin_src ipython
+   best_model = model.best_estimator_
+   dist_first = best_model.named_steps['net'].module_.linear.weight[0]
+#+end_src
+#+RESULTS:
+: 6897429f-8cbb-494b-ad79-47cd7cc0f7dc
+
+**** Last
+
+#+begin_src ipython
+  from src.preprocess.helpers import avg_epochs
+
+  X = X2_list[1].astype(np.float32)
+  X_avg = avg_epochs(X, **options).astype(np.float32)
+  print(X_avg.shape)
+  y = np.float32(y2_list[1, :, np.newaxis])
+#+end_src
+#+RESULTS:
+: 592c51e0-5f14-452c-879f-e6f1bc8d1356
+
+#+begin_src ipython
+  start = perf_counter()
+  print('hyperparam fitting ...')
+  model.fit(X_avg, y)
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+#+RESULTS:
+: d0a2cb85-37f5-43c1-83e3-94fc723a82c1
+
+#+begin_src ipython
+ best_model = model.best_estimator_
+ dist_last = best_model.named_steps['net'].module_.linear.weight[0]
+#+end_src
+
+#+RESULTS:
+: 8ed93177-46ca-4317-ad3d-434a6ad978e2
+
+*** Indices
+
+#+begin_src ipython
+  theta = get_theta(dist_first.cpu().detach(), sample_first.cpu().detach())
+  index_first = theta.argsort()
+  print(index_first.shape)
+#+end_src
+
+#+RESULTS:
+: 44ee1acf-47c5-41e0-b79b-06a44006b5e3
+
+#+begin_src ipython
+  theta = get_theta(dist_last.cpu().detach(), sample_last.cpu().detach())
+  index_last = theta.argsort()
+  print(index_last.shape)
+#+end_src
+
+#+RESULTS:
+: 894bd03c-8d41-4327-b67a-5ff75a28efb2
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['reload'] = 0
+
+  options['mouse'] = 'JawsM15'
+  options['features'] = 'sample'
+  options['trials'] = ''
+
+  X_list = []
+  y_list = []
+  tasks = ["DPA", "DualGo", "DualNoGo"]
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X_list.append(X_dum)
+      y_list.append(y_dum)
+
+  X_list = np.array(X_list)
+  y_list = np.array(y_list)
+
+  print(X_list.shape, y_list.shape)
+#+end_src
+
+#+RESULTS:
+: 8357bb5a-a0fa-4e51-ac8f-ad2ef8a55ab6
+
+#+begin_src ipython
+  X_first = X_list[:, 0, :, index_first, :].swapaxes(0, 1).swapaxes(1, 2)
+  y_first = 2 * np.array(y_list[:, 1]) -1
+  print(X_first.shape, y_first.shape)
+#+end_src
+
+#+RESULTS:
+: 25fc2191-ce8e-40d4-b1d2-7f782d470148
+
+#+begin_src ipython
+  X_last = X_list[:, 0, :, index_last, :].swapaxes(0, 1).swapaxes(1, 2)
+  y_last = 2 * np.array(y_list[:, 1]) -1
+  print(X_last.shape, y_last.shape)
+#+end_src
+
+#+RESULTS:
+: 462f9a28-9b8a-469b-bf4a-846327163047
+
+#+begin_src ipython
+  from src.overlap.get_cos import plot_bump
+  plot_bump(X_first[0], y_first[0], 'all', int(X_first.shape[1] * .1))
+#+end_src
+
+#+RESULTS:
+: 5070a24a-dae0-47d2-806a-290fa979b22e
+
+#+begin_src ipython
+  from src.overlap.get_cos import plot_bump
+  plot_bump(X_last[0], y_last[0], 'all', int(X_last.shape[1] * .1))
+#+end_src
+
+#+RESULTS:
+: 160ed31c-5b13-4d98-ae60-fca7238831d0
+
+* Energy Landscape
+
+#+begin_src ipython
+  from src.attractor.energy import run_energy, plot_energy
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+
+  opts = set_options(T_WINDOW=0.0)
+
+  bins = None
+  #bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_STIM'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
+  # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD']))
+  # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = opts['bins_PRE_DIST']
+  bins = opts['bins_DELAY']
+#+end_src
+
+#+RESULTS:
+: 91484a01-0e0b-461a-b80f-74678b3e2197
+
+** Parameters
+
+#+begin_src ipython
+  task = 0
+  kwargs['task'] = task
+
+  num_bins = int(0.1 * X_first[0].shape[1])
+  num_bins = 16
+  print('num_bins', num_bins)
+
+  window = 0.1
+  print('window', window)
+
+  IF_HMM = 0
+  n_iter = 100
+  IF_BOOT=0
+  IF_NORM=0
+#+end_src
+
+#+RESULTS:
+: d9e002ed-26d3-4551-b178-9cc28917b99a
+
+** Compute Energy
+
+#+begin_src ipython
+  def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
+    ci_ = None
+    energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+    if IF_BOOT:
+        _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
+    if ci_ is not None:
+      ci_ = ci_ / 2.0
+    return energy_, ci_
+#+end_src
+
+#+RESULTS:
+: bb1eb79c-a33e-416b-bcbc-140474405975
+
+#+begin_src ipython
+  def plot_landscape(energy_first, energy_last, ci_first, ci_last, SMOOTH=1, window=.1, **kwargs):
+    fig, ax = plt.subplots()
+
+    plot_energy(energy_first,  ci=ci_first, ax=ax, window=window, SMOOTH=SMOOTH, color='b')
+    plot_energy(energy_last, ci=ci_last, ax=ax, window=window, SMOOTH=SMOOTH, color='r')
+    # plt.ylim([0, .3])
+    # plt.xlim([0, 270])
+    plt.savefig("../figs/landscape/"+ kwargs['mouse'] + "_" + str(kwargs['task']) + '_trials_' + kwargs['penalty'] + '.svg', dpi=300)
+    plt.show()
+#+end_src
+
+#+RESULTS:
+: 732e0e20-5ff5-4bff-978b-0b6651887445
+
+#+begin_src ipython
+  X_first_rs = np.swapaxes(X_first, 0, 1)
+  energy_first, ci_first = get_energy(X_first_rs, y_first, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
+#+end_src
+
+#+RESULTS:
+: d6f65ef8-d3e9-4a57-9bf6-11a169881b9b
+
+#+begin_src ipython
+  X_last_rs = np.swapaxes(X_last, 0, 1)
+  energy_last, ci_last = get_energy(X_last_rs, y_last, task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
+#+end_src
+
+#+RESULTS:
+: 8cc3d952-491a-4c9f-bd6c-b1d7255e0623
+
+#+begin_src ipython
+  SMOOTH = 1
+  window = .1
+  kwargs['mouse'] = options['mouse']
+  plot_landscape(energy_first, energy_last, ci_first, ci_last, SMOOTH, window, **kwargs)
+#+end_src
+
+#+RESULTS:
+: 2bd139bd-444e-45ba-81e0-a7953d012727
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+: 9f407dea-fa1d-4d6a-a144-afbb9ece6ec2

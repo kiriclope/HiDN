@@ -1,0 +1,868 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session landscape :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+  from time import perf_counter
+
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  from sklearn.model_selection import StratifiedKFold
+  from sklearn.model_selection import cross_val_score, cross_validate
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
+  from src.decode.my_mne import my_cross_val_multiscore
+  from mne.decoding import SlidingEstimator, get_coef
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.attractor.energy import run_energy, plot_energy
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.common.options import set_options
+  from src.preprocess.helpers import avg_epochs
+
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader
+  DEVICE = 'cuda:1'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Optimization
+#+begin_src ipython
+  def train(dataloader, model, loss_fn, optimizer, penalty=None, lbd=1, clip_grad=0):
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      model.train()
+      for batch, (X, y) in enumerate(dataloader):
+          X, y = X.to(device), y.to(device)
+          # Compute prediction error
+          y_pred = model(X)
+
+          # if y.ndim==y_pred.ndim:
+          loss = loss_fn(y_pred, y)
+
+          if penalty is not None:
+              reg_loss = 0
+              for param in model.parameters():
+                  if penalty=='l1':
+                      reg_loss += torch.sum(torch.abs(param))
+                  else:
+                      reg_loss += torch.sum(torch.square(param))
+
+                  loss = loss + lbd * reg_loss
+
+          # Backpropagation
+          loss.backward()
+
+          # Clip gradients
+          if clip_grad:
+              torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+              #torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
+
+          optimizer.step()
+          optimizer.zero_grad()
+
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def test(dataloader, model, loss_fn):
+      size = len(dataloader.dataset)
+      num_batches = len(dataloader)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      # Validation loop.
+      model.eval()
+      val_loss = 0.0
+      with torch.no_grad():
+          for data, targets in dataloader:
+              data, targets = data.to(device), targets.to(device)
+
+              outputs = model(data)
+              loss = loss_fn(outputs, targets)
+              val_loss += loss.item() * data.size(0)
+
+          val_loss /= size
+
+      return val_loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, penalty=None, lbd=1, thresh=.005):
+      scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+      # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
+      # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else 'cpu')
+      model.to(device)
+
+      loss_list = []
+      val_loss_list = []
+
+      # Training loop.
+      for epoch in range(num_epochs):
+          loss = train(train_loader, model, loss_fn, optimizer, penalty, lbd)
+          val_loss = test(val_loader, model, loss_fn)
+          scheduler.step(val_loss)
+
+          loss_list.append(loss.item())
+          val_loss_list.append(val_loss)
+
+          # if epoch % int(num_epochs  / 10) == 0:
+          print(f'Epoch {epoch+1}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
+
+          if val_loss < thresh:
+              print(f'Stopping training as loss has fallen below the threshold: {val_loss}')
+              break
+
+          if val_loss > 300:
+              print(f'Stopping training as loss is too high: {val_loss}')
+              break
+
+          if torch.isnan(loss):
+              print(f'Stopping training as loss is NaN.')
+              break
+
+      return loss_list, val_loss_list
+#+end_src
+
+#+RESULTS:
+
+** Loss
+#+begin_src ipython
+    import torch
+    import torch.nn as nn
+
+    def sign_constrained_loss(output, xi, target_sign):
+        dot_product = torch.dot(output.flatten(), xi.flatten())
+        if target_sign > 0:
+            loss = torch.relu(-dot_product)  # Encourages positive dot product
+        else:
+            loss = torch.relu(dot_product)   # Encourages negative dot product
+        return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class CosineLoss(nn.Module):
+      def __init__(self):
+          super(CosineLoss, self).__init__()
+          self.cosine_similarity = nn.CosineSimilarity(dim=-1)
+
+      def forward(self, input1, input2):
+          # Calculate cosine similarity
+          cosine_sim = self.cosine_similarity(input1, input2)
+          # Calculate the loss as 1 - cosine_similarity
+          loss = 1 - cosine_sim
+          # Return the mean loss over the batch
+          return loss.mean()
+#+end_src
+
+#+RESULTS:
+
+
+#+RESULTS:
+
+** Other
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          v = b - np.dot(b, a) / np.dot(a, a) * a
+
+      if IF_NORM:
+          u = a / np.linalg.norm(a)
+          v = b / np.linalg.norm(b)
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_idx(model, rank=2):
+      ksi = torch.hstack((model.low_rank.U, model.low_rank.V)).T
+      ksi = ksi[:, :model.Na[0]]
+
+      readout = model.low_rank.linear.weight.data
+      ksi = torch.vstack((ksi, readout))
+
+      print('ksi', ksi.shape)
+
+      ksi = ksi.cpu().detach().numpy()
+      theta = get_theta(ksi[0], ksi[rank])
+
+      return theta.argsort()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_overlap(model, rates):
+      ksi = model.odors.cpu().detach().numpy()
+      return rates @ ksi.T / rates.shape[-1]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import scipy.stats as stats
+
+  def plot_smooth(data, ax, color):
+      mean = data.mean(axis=0)
+      ci = smooth.std(axis=0, ddof=1) * 1.96
+
+      # Plot
+      ax.plot(mean, color=color)
+      ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+** plots
+#+begin_src ipython
+  def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
+    ci_ = None
+    energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+    if IF_BOOT:
+        _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
+    if ci_ is not None:
+      ci_ = ci_ / 2.0
+    return energy_, ci_
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_theta_energy(theta, energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
+      if ax is None:
+          fig, ax = plt.subplots()
+
+      theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
+      energy = energy[1:]
+      theta = theta[1:]
+
+      windowSize = int(window * energy.shape[0])
+      if SMOOTH:
+          energy = circcvl(energy, windowSize=windowSize)
+
+      ax.plot(theta, energy * 100, lw=4, color=color)
+
+      if ci is not None:
+          ax.fill_between(
+              theta,
+              (energy - ci[:, 0]) * 100,
+              (energy + ci[:, 1]) * 100,
+              alpha=0.1, color=color
+          )
+
+      ax.set_ylabel('Energy')
+      ax.set_xlabel('Pref. Location (°)')
+      ax.set_xticks([0, 90, 180, 270, 360])
+#+end_src
+
+#+RESULTS:
+
+* Perceptron
+
+#+begin_src ipython
+  class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+      def forward(self, input, target):
+          target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+          return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  class Perceptron(nn.Module):
+      def __init__(self, num_features, dropout_rate=0.0):
+          super(Perceptron, self).__init__()
+          self.linear = nn.Linear(num_features, 1)
+          self.dropout = nn.Dropout(dropout_rate)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          hidden = self.linear(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+        x = self.dropout(x)
+        x = self.relu(self.linear(x))
+        x = self.dropout(x)
+        hidden = self.linear2(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+  from skorch.callbacks import Callback
+  from skorch.callbacks import EarlyStopping
+  from skorch.callbacks import EpochScoring
+
+  early_stopping = EarlyStopping(
+      monitor='train_loss',    # Metric to monitor
+      patience=5,              # Number of epochs to wait for improvement
+      threshold=0.001,       # Minimum change to qualify as an improvement
+      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+      lower_is_better=True     # Set to True if lower metric values are better
+  )
+
+  #+end_src
+
+  #+RESULTS:
+
+
+#+begin_src ipython
+  class RegularizedNet(NeuralNetClassifier):
+      def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
+          self.alpha = alpha  # Regularization strength
+          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+          super().__init__(module, **kwargs)
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          # Call super method to compute primary loss
+          if y_pred.shape != y_true.shape:
+              y_true = y_true.unsqueeze(-1)
+
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+          if self.alpha>0:
+              elastic_net_reg = 0
+              for param in self.module_.parameters():
+                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+          # Add the elastic net regularization term to the primary loss
+          return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+* Landscape vs days
+** Helpers
+
+#+begin_src ipython
+  def hyper_tune(model, epoch, params, scoring, **options):
+
+      # load data
+      X_days, y_days = get_X_y_days(**options)
+      X, y = get_X_y_S1_S2(X_days, y_days, **options)
+      y[y==-1] = 0
+
+      options['epochs'] = [epoch]
+      X_avg = avg_epochs(X, **options).astype('float32')
+      print('X', X.shape, 'y', y.shape)
+
+      # Perform grid search
+      grid = GridSearchCV(model, params, refit=True, cv=5, scoring=scoring, n_jobs=30)
+      start = perf_counter()
+      print('hyperparam fitting ...')
+      grid.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      best_model = grid.best_estimator_
+      best_params = grid.best_params_
+      print(best_params)
+
+      # if refit true the best model is refitted to the whole dataset
+      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+      start = perf_counter()
+      print('Bagging best model ...')
+      bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=32)
+      bagging_clf.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=32)
+
+      return best_model, coefs, bias
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs = []
+      bias = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs.append(model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0])
+          bias.append(model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0])
+
+      return np.array(coefs).mean(0), np.array(bias).mean(0)
+#+end_src
+
+#+RESULTS:
+
+** Parameters
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  kwargs = dict()
+  kwargs = {
+      'mouse': 'JawsM15',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+      'random_state': None, 'T_WINDOW': 0.0,
+            }
+
+#+end_src
+
+#+RESULTS:
+
+** Fit
+
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['day'] = 1
+  X_days, y_days = get_X_y_days(**options)
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.0,
+      alpha=0.01,
+      l1_ratio=0.95,
+      criterion=CustomBCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      verbose=0,
+      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+  #+end_src
+
+#+RESULTS:
+: loading files from /home/leon/dual_task/dual_data/data/JawsM15
+: X_days (1152, 693, 84) y_days (1152, 6)
+: ##########################################
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+: ##########################################
+: single day
+: X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+
+#+begin_src ipython
+  params = {
+      'net__alpha': np.logspace(-4, 4, 10),
+      # 'net__l1_ratio': np.linspace(0, 1, 10),
+      # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+  }
+
+  coefs_sample = []
+  bias_sample = []
+
+  coefs_dist = []
+  bias_dist = []
+
+  theta_day = []
+  index_day = []
+
+  options['task'] = 'Dual'
+  scoring = 'roc_auc'
+
+  days = ['first', 'last']
+  # days = [1, 2, 3, 4, 5, 6]
+
+  for day in days:
+
+      options['day'] = day
+      options['features'] = 'sample'
+      model, coefs, bias = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
+
+      coefs_sample.append(coefs)
+      bias_sample.append(bias)
+
+      options['features'] = 'distractor'
+      model, coefs, bias = hyper_tune(pipe, epoch='MD', params=params, scoring=scoring, **options)
+
+      coefs_dist.append(coefs)
+      bias_dist.append(bias)
+
+      theta = get_theta(-coefs_sample[-1], -coefs_dist[-1], IF_NORM=0, GM=0)
+      theta_day.append(theta)
+      index_day.append(theta.argsort())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  X (192, 693, 84) y (192,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 20s
+  {'net__alpha': 9.999999999999999e-05}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 18s
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  X (192, 693, 84) y (192,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 5s
+  {'net__alpha': 0.000774263682681127}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 21s
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  X (192, 693, 84) y (192,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {'net__alpha': 9.999999999999999e-05}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 2s
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  X (192, 693, 84) y (192,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {'net__alpha': 9.999999999999999e-05}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 2s
+#+end_example
+
+#+begin_src ipython
+  coefs_sample = np.array(coefs_sample)
+  coefs_dist = np.array(coefs_dist)
+  index_day = np.array(index_day)
+  print(coefs_sample.shape, coefs_dist.shape, index_day.shape)
+#+end_src
+
+#+RESULTS:
+: (2, 693) (2, 693) (2, 693)
+
+** Reload data
+
+#+begin_src ipython
+  options['features'] = 'sample'
+  options['trials'] = ''
+  options['reload'] = 0
+
+  X_list = []
+  y_list = []
+  tasks = ["DPA", "DualGo", "DualNoGo"]
+
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for i, day in enumerate(days):
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+          print(X_data.shape)
+          X_dum.append(X_data[..., index_day[i], :])
+          y_dum.append(y_data)
+
+      X_list.append(X_dum)
+      y_list.append(y_dum)
+
+  X_list = np.array(X_list)
+  y_list = np.array(y_list)
+
+  print(X_list.shape, y_list.shape)
+      #+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  (96, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  (96, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  (96, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  (96, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  (96, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  (96, 693, 84)
+  (3, 2, 96, 693, 84) (3, 2, 96)
+#+end_example
+
+** Energy
+
+#+begin_src ipython
+  opts = set_options(T_WINDOW=0.5)
+  bins = None
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD']))
+  bins = opts['bins_ED']
+  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
+  #  bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+  # bins = opts['bins_PRE_DIST']
+  # bins = opts['bins_DELAY']
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  task = 'all'
+  kwargs['task'] = task
+
+  num_bins = 96
+  print('num_bins', num_bins)
+
+  window = 0.1
+  print('window', window)
+
+  IF_HMM = 0
+  n_iter = 100
+  IF_BOOT=1
+  IF_NORM=0
+#+end_src
+
+#+RESULTS:
+: num_bins 96
+: window 0.1
+
+#+begin_src ipython
+  energy_day = []
+  ci_day = []
+
+  for i, day in enumerate(days):
+      X = np.swapaxes(X_list[:, i], 0, 1)
+      energy, ci = get_energy(X, y_list[:, i], task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
+
+      energy_day.append(energy)
+      ci_day.append(ci)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: bootstrap: 100% 1000/1000 [00:06<00:00, 157.65it/s]
+:
+: bootstrap: 100% 1000/1000 [00:06<00:00, 157.09it/s]
+:
+:END:
+
+#+begin_src ipython
+  from scipy.signal import find_peaks
+
+  def find_minima(energy, prominence, ax, color):
+
+      energy = energy[1:]
+      windowSize = int(0.1 * energy.shape[0])
+      energy = circcvl(energy, windowSize)
+
+      # Inverting energy to find minima as peaks
+      inv_energy = np.max(energy) - energy
+      # Finding peaks (which correspond to minima in the original energy array)
+      peaks, _ = find_peaks(inv_energy, prominence=prominence)  # tune the prominence parameter as required
+
+      theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
+      # Getting corresponding angles for these minima indices
+      minima_angles = theta[peaks]
+      minima_energy = energy[peaks]
+
+      # If more than one minimum, calculate the separation
+      print(minima_angles, minima_energy)
+      if len(minima_angles) >= 2:
+          angular_distances = np.abs(minima_angles[0] - minima_angles[1]) % 360
+          print(f"The distance between the two minima is {angular_distances} degrees.")
+      else:
+          print("Less than two minima found.")
+
+      ax.plot(minima_angles, minima_energy, 'o', color=color, ms=10)
+
+      return peaks
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1)/len(days)) for i in range(len(days))]
+
+  fig, ax = plt.subplots()
+  for i, day in enumerate(days):
+      plot_theta_energy(theta_day[i], energy_day[i], ci=ci_day[i],
+                        window=.1, ax=ax, SMOOTH=1, color=colors[i])
+
+      find_minima(energy_day[i], prominence=.00025, ax=ax,  color=colors[i])
+
+  fig.savefig('%s_landscape.svg' % options['mouse'], dpi=300)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [ 30.31578947  41.68421053 136.42105263 162.94736842 185.68421053
+:  246.31578947] [0.0037351  0.00380886 0.00793056 0.00629658 0.00618802 0.01362284]
+: The distance between the two minima is 11.368421052631579 degrees.
+: [212.21052632 238.73684211 341.05263158] [0.00641935 0.00653853 0.00260297]
+: The distance between the two minima is 26.5263157894737 degrees.
+[[file:./.ob-jupyter/33fcbe433990608886f28c292a8f251fb7eb1ae9.png]]
+:END:
+
+#+RESULTS:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

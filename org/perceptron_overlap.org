@@ -1,0 +1,947 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session skorch :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.common.options import set_options
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+  from time import perf_counter
+
+  from scipy.stats import uniform, loguniform
+  from sklearn.base import clone
+  from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+  from sklearn.preprocessing import StandardScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import StratifiedKFold, cross_val_score, cross_validate
+  from sklearn.ensemble import BaggingClassifier
+
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  from mne.decoding import SlidingEstimator, get_coef, cross_val_multiscore, GeneralizingEstimator
+  from src.decode.my_mne import my_cross_val_multiscore
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.preprocess.helpers import avg_epochs
+
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader
+  DEVICE = 'cuda:1'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Perceptron
+
+#+begin_src ipython
+  class Perceptron(nn.Module):
+      def __init__(self, num_features, dropout_rate=0.0):
+          super(Perceptron, self).__init__()
+          self.linear = nn.Linear(num_features, 1)
+          self.dropout = nn.Dropout(dropout_rate)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          hidden = self.linear(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=128, dropout_rate=0.0):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          # self.relu = nn.ReLU()
+          self.relu = nn.Sigmoid()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+        x = self.relu(self.linear(x))
+        x = self.dropout(x)
+        hidden = self.linear2(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class Autoencoder(nn.Module):
+      def __init__(self, num_features, encoding_dim=64):
+          super(Autoencoder, self).__init__()
+          # Encoder
+          self.encoder = nn.Sequential(
+              nn.Linear(num_features, 128),
+              nn.ReLU(True),
+              nn.Linear(128, encoding_dim),
+              nn.ReLU(True)
+          )
+          # Decoder
+          self.decoder = nn.Sequential(
+              nn.Linear(encoding_dim, 128),
+              nn.ReLU(True),
+              nn.Linear(128, num_features),
+              nn.ReLU(True)
+          )
+
+      def forward(self, x):
+          x = self.encoder(x)
+          x = self.decoder(x)
+          return x
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from skorch.callbacks import Callback
+  from skorch.callbacks import EarlyStopping
+  from skorch.callbacks import EpochScoring
+
+  early_stopping = EarlyStopping(
+      monitor='train_loss',  # Metric to monitor
+      patience=5,              # Number of epochs to wait for improvement
+      threshold=0.001,       # Minimum change to qualify as an improvement
+      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+      lower_is_better=True     # Set to True if lower metric values are better
+  )
+
+  auc = EpochScoring(scoring='roc_auc', lower_is_better=False)
+  accuracy = EpochScoring(scoring='accuracy', lower_is_better=False)
+
+  class CaptureWeightsCallback(Callback):
+      def __init__(self):
+          super().__init__()  # Ensure to call the superclass initializer if needed
+          self.weights = []
+
+      def on_train_end(self, net, **kwargs):
+          # Capture the linear layer's weights after training ends
+          self.weights.append(net.module_.linear.weight.data.cpu().numpy())
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  class RegularizedNet(NeuralNetClassifier):
+      def __init__(self, module, alpha=0.01, l1_ratio=0.95, **kwargs):
+          self.alpha = alpha  # Regularization strength
+          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+          super().__init__(module, **kwargs)
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          # Call super method to compute primary loss
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+          if self.alpha>0:
+              elastic_net_reg = 0
+              for param in self.module_.parameters():
+                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+          # Add the elastic net regularization term to the primary loss
+          return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from sklearn.metrics import make_scorer
+
+  def overlap_scoring_function(estimator, X, y_true):
+      y = y_true.copy()
+      y[y==0] = 1
+
+      try:
+          weights = estimator['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      except:
+          weights = estimator.module_.linear.weight.data.cpu().detach().numpy()[0]
+
+      overlap = (y[:,0] * (X @ weights.T)) / X.shape[1]
+
+      size = int(y.shape[0] / 2)
+      # result = np.array((overlap[:size].mean(),overlap[size:].mean()))
+      # print(result.shape)
+
+      return -overlap.mean()
+
+  # Make our custom scorer compatible with sklearn
+  overlap_scorer = make_scorer(overlap_scoring_function, greater_is_better=True)
+#+end_src
+
+#+RESULTS:
+
+** Optimization
+
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs.append(model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0])
+
+      return np.array(coefs).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def hyper_tune(model, X, y, epoch, params, scoring):
+      options['epochs'] = [epoch]
+      X_avg = avg_epochs(X, **options).astype('float32')
+      print('X', X.shape, 'y', y.shape)
+
+      # Perform grid search
+      grid = GridSearchCV(model, params, refit=True, cv=5, scoring=scoring, n_jobs=10)
+      start = perf_counter()
+      print('hyperparam fitting ...')
+      grid.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      best_model = grid.best_estimator_
+      best_params = grid.best_params_
+      print(best_params)
+
+      # bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=32)
+      # bagging_clf.fit(X_avg, y)
+      # coefs = get_bagged_coefs(bagging_clf, n_estimators=32)
+
+      start = perf_counter()
+      print('fit best model...')
+      best_model.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+      return best_model, coefs, bias
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+  class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+      def forward(self, input, target):
+          target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+          return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+** Other
+
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import scipy.stats as stats
+
+  def plot_smooth(data, ax, color):
+      mean = data.mean(axis=0)
+      ci = smooth.std(axis=0, ddof=1) * 1.96
+
+      # Plot
+      ax.plot(mean, color=color)
+      ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def circcvl(signal, windowSize=10, axis=-1):
+      """
+      Compute the circular convolution of a signal with a smooth kernel.
+
+      Parameters:
+      signal (ndarray): The input signal.
+      windowSize (int): The length of the smoothing window. Defaults to 10.
+      axis (int): The axis along which the operation is performed. Default is -1.
+
+      Returns:
+      ndarray: Returns the smoothed signal after circular convolution.
+      """
+
+      signal_copy = signal
+
+      if axis != -1 and signal.ndim != 1:
+          signal_copy = np.swapaxes(signal, axis, -1)
+
+      ker = np.concatenate(
+          (np.ones((windowSize,)), np.zeros((signal_copy.shape[-1] - windowSize,)))
+          )
+
+      smooth_signal = np.real(
+          np.fft.ifft(
+              np.fft.fft(signal_copy, axis=-1) * np.fft.fft(ker, axis=-1), axis=-1
+          )
+      ) * (1.0 / float(windowSize))
+
+      if axis != -1 and signal.ndim != 1:
+          smooth_signal = np.swapaxes(smooth_signal, axis, -1)
+
+      return smooth_signal
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+:LOGBOOK:
+CLOCK: [2024-07-05 vie 14:59]--[2024-07-05 vie 15:24] =>  0:25
+:END:
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = [1, 2, 3, 4, 5, 6]
+
+  kwargs = {'preprocess': False, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False, 'T_WINDOW': 0.0}
+
+  options = set_options(**kwargs)
+  options['reload'] = 1
+  options['data_type'] = 'dF'
+  options['mouse'] = 'JawsM15'
+  cv_epoch = 'MD'
+  options['trials'] = ''
+  options['features'] = 'distractor'
+  tasks = ['Dual']
+
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1)/6) for i in range(7)]
+#+end_src
+
+#+RESULTS:
+
+* Data
+
+#+begin_src ipython
+
+  X_list = []
+  y_list = []
+
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X_list.append(X_dum)
+      y_list.append(y_dum)
+
+  try:
+      X_list = np.array(X_list)
+      y_list = np.array(y_list)
+      print(X_list.shape, y_list.shape)
+  except:
+      pass
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  reading raw data
+  mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+  reading raw data
+  mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+  reading raw data
+  mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+  reading raw data
+  mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+  reading raw data
+  mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+  reading raw data
+  mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+  X (192, 693, 84) y (9, 192)
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+  (1, 6, 64, 693, 84) (1, 6, 64)
+#+end_example
+
+* Decoding across days
+:LOGBOOK:
+CLOCK: [2024-07-04 jue 17:42]--[2024-07-04 jue 18:04] =>  0:22
+CLOCK: [2024-07-04 jue 17:11]--[2024-07-04 jue 17:36] =>  0:25
+CLOCK: [2024-07-04 jue 16:40]--[2024-07-04 jue 17:05] =>  0:25
+CLOCK: [2024-07-04 jue 16:04]--[2024-07-04 jue 16:29] =>  0:25
+:END:
+** Fit
+
+#+begin_src ipython
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.0,
+      alpha = 0.01,
+      l1_ratio= 0.95,
+      criterion=CustomBCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      verbose=0,
+      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+  #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  task = 0
+
+  cv = StratifiedKFold(n_splits=5)
+
+  params = {
+      'net__alpha': np.logspace(-3, 3, 10),
+      # 'net__l1_ratio': np.linspace(0, 1, 10),
+      # 'net__module__dropout_rate': np.linspace(0, 1, 10),  # Example dropout rates
+  }
+
+  score_day = []
+  coefs_day = []
+  bias_day = []
+  overlap_day = []
+
+  for day in range(6):
+      X = X_list[task][day].astype('float32')
+      y = y_list[task][day].astype('int64')
+
+      model, coefs, bias = hyper_tune(pipe, X, y, epoch=cv_epoch, params=params, scoring='f1_weighted')
+
+      overlaps = model.named_steps['net'].module_(torch.transpose(torch.tensor(X, device=DEVICE), 1, 2)).detach().cpu().numpy()
+      estimator = SlidingEstimator(clone(model), n_jobs=1, scoring='f1_weighted', verbose=False)
+      scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=-1, verbose=False)
+
+      overlap_day.append(overlaps)
+      score_day.append(scores)
+      coefs_day.append(coefs)
+      bias_day.append(bias)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 6s
+  {'net__alpha': 0.004641588833612777}
+  fit best model...
+  Elapsed (with compilation) = 0h 0m 0s
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 6s
+  {'net__alpha': 0.004641588833612777}
+  fit best model...
+  Elapsed (with compilation) = 0h 0m 0s
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 6s
+  {'net__alpha': 0.004641588833612777}
+  fit best model...
+  Elapsed (with compilation) = 0h 0m 0s
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 5s
+  {'net__alpha': 0.004641588833612777}
+  fit best model...
+  Elapsed (with compilation) = 0h 0m 0s
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 6s
+  {'net__alpha': 0.004641588833612777}
+  fit best model...
+  Elapsed (with compilation) = 0h 0m 0s
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 5s
+  {'net__alpha': 0.09999999999999999}
+  fit best model...
+  Elapsed (with compilation) = 0h 0m 0s
+#+end_example
+
+#+begin_src ipython
+  score_day = np.array(score_day)
+  coefs_day = np.array(coefs_day)
+  overlap_day = np.array(overlap_day)
+  overlap_day = overlap_day[...,0]
+  print(score_day.shape)
+  print(overlap_day.shape)
+#+end_src
+
+#+RESULTS:
+: (6, 5, 84)
+: (6, 64, 84)
+
+
+** Overlap
+
+#+begin_src ipython
+  for i in range(6):
+      plt.plot(-np.mean(overlap_day[i][32:], 0).T, color=colors[i], label=i+1)
+      plt.plot(-np.mean(overlap_day[i][:32], 0).T, label=i+1, color=colors[i])
+  plt.legend(fontsize=10)
+  plt.xlabel('Steps')
+  plt.ylabel('Sample Overlap')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/e1632e4e6e9864a4bd8487e844492ff9cede90d0.png]]
+
+
+#+begin_src ipython
+  options['epochs'] = ['ED']
+  overlap_avg = []
+
+  for i in range(6):
+      overlap_avg.append(np.mean(avg_epochs(overlap_day[i], **options),0))
+      # overlap_avg.append(np.mean(avg_epochs(overlap_day[i][:48], **options),0) + np.mean(avg_epochs(-overlap_day[i][48:], **options), 0))
+  overlap_avg = np.array(overlap_avg)
+
+  plt.plot(np.arange(1, 7), -overlap_avg, '-o');
+  plt.xticks(np.arange(1, 7))
+  plt.xlabel('Day')
+  plt.ylabel('Sample Overlap')
+  plt.show()
+  #+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/44f5d9ff59ae2b7a4c227153c54b7051b2871e80.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Score
+
+#+begin_src ipython
+  for i in range(6):
+      plt.plot(circcvl(score_day.mean(1), windowSize=2)[i], label=i, color = colors[i]);
+  plt.legend(fontsize=10)
+  plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xlabel('Step')
+  plt.ylabel('Sample Score')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/cd0df3aff2e8a5d18cad95d1d396f41e60677988.png]]
+
+#+begin_src ipython
+  options['epochs'] = ['LD']
+  score_avg = avg_epochs(score_day, **options)
+  print(score_avg.shape)
+  plt.plot(np.arange(1, 7), score_avg.mean(1), '-o')
+  plt.xticks(np.arange(1, 7))
+  plt.yticks([0.4, 0.6, 0.8, 1.0])
+  # plt.yticks([0.5, 0.6, 0.7, 0.8])
+  plt.xlabel('Day')
+  plt.ylabel('Sample Score')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (6, 5)
+[[file:./.ob-jupyter/654d5b9effaeb3af28a23e98c9dec8ab1e03c03c.png]]
+:END:
+
+** Overlap
+
+#+begin_src ipython
+
+  X_list = []
+  y_list = []
+
+  options['reload'] = 0
+  options['features'] = 'sample'
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X_list.append(X_dum)
+      y_list.append(y_dum)
+
+  try:
+      X_list = np.array(X_list)
+      y_list = np.array(y_list)
+      print(X_list.shape, y_list.shape)
+  except:
+      pass
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+  (3, 6, 32, 693, 84) (3, 6, 32)
+#+end_example
+
+#+begin_src ipython
+  overlap_day = []
+  for i in range(coefs_day.shape[0]):
+      coefs = coefs_day[i]
+      bias = bias_day[i]
+
+      overlap_task = []
+
+      for j in range(len(tasks)):
+          X = np.swapaxes(np.array(X_list[j][i]), 1, -1)
+
+          # overlap = X @ coefs
+          overlap = (X @ coefs + bias) / np.linalg.norm(coefs)
+          overlap_task.append(overlap)
+
+      overlap_day.append(overlap_task)
+
+  print(X.shape, coefs.shape, overlap.shape)
+  overlap_day = np.array(overlap_day)
+  print(overlap_day.shape)
+  # print(np.stack(overlap_day).shape)
+
+#+end_src
+
+#+RESULTS:
+: (32, 84, 693) (693,) (32, 84)
+: (6, 3, 32, 84)
+
+#+begin_src ipython
+  for i in range(6):
+      plt.plot(-np.mean(overlap_day[i][0], 0).T, color=colors[i], label=i+1)
+
+  plt.legend(fontsize=10)
+  plt.xlabel('Steps')
+  plt.ylabel('Sample Overlap')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/7c4315b8836f8670ae1df153326c1d66b291b089.png]]
+
+
+#+begin_src ipython
+  options['epochs'] = ['PRE_DIST']
+  overlap_avg = []
+
+  for i in range(6):
+      overlap_avg.append(avg_epochs(overlap_day[i], **options).mean((0,1)))
+
+  overlap_avg = np.array(overlap_avg)
+
+  plt.plot(np.arange(1, 7), -overlap_avg, '-o');
+  plt.xticks(np.arange(1, 7))
+  plt.xlabel('Day')
+  plt.ylabel('Sample Overlap')
+  plt.show()
+  #+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/23e0dfe4446493d4a9677014745b2b86b670ea1e.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

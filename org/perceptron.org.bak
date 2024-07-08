@@ -1,0 +1,1321 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session skorch :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+  %load_ext autoreload
+  %autoreload 2
+  %reload_ext autoreload
+
+  %run /home/leon/dual_task/dual_data/notebooks/setup.py
+  %matplotlib inline
+  %config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+  from time import perf_counter
+
+  from sklearn.model_selection import StratifiedKFold
+  from sklearn.model_selection import cross_val_score, cross_validate
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
+  from src.decode.my_mne import my_cross_val_multiscore
+  from mne.decoding import SlidingEstimator, get_coef
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.preprocess.helpers import avg_epochs
+
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader
+  DEVICE = 'cuda'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Optimization
+
+#+begin_src ipython
+  def train(dataloader, model, loss_fn, optimizer, penalty=None, lbd=1, clip_grad=0):
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      model.train()
+      for batch, (X, y) in enumerate(dataloader):
+          X, y = X.to(device), y.to(device)
+          # Compute prediction error
+          y_pred = model(X)
+
+          # if y.ndim==y_pred.ndim:
+          loss = loss_fn(y_pred, y)
+
+          if penalty is not None:
+              reg_loss = 0
+              for param in model.parameters():
+                  if penalty=='l1':
+                      reg_loss += torch.sum(torch.abs(param))
+                  else:
+                      reg_loss += torch.sum(torch.square(param))
+
+                  loss = loss + lbd * reg_loss
+
+          # Backpropagation
+          loss.backward()
+
+          # Clip gradients
+          if clip_grad:
+              torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+              #torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
+
+          optimizer.step()
+          optimizer.zero_grad()
+
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def test(dataloader, model, loss_fn):
+      size = len(dataloader.dataset)
+      num_batches = len(dataloader)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      # Validation loop.
+      model.eval()
+      val_loss = 0.0
+      with torch.no_grad():
+          for data, targets in dataloader:
+              data, targets = data.to(device), targets.to(device)
+
+              outputs = model(data)
+              loss = loss_fn(outputs, targets)
+              val_loss += loss.item() * data.size(0)
+
+          val_loss /= size
+
+      return val_loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, penalty=None, lbd=1, thresh=.005):
+      scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+      # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
+      # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else 'cpu')
+      model.to(device)
+
+      loss_list = []
+      val_loss_list = []
+
+      # Training loop.
+      for epoch in range(num_epochs):
+          loss = train(train_loader, model, loss_fn, optimizer, penalty, lbd)
+          val_loss = test(val_loader, model, loss_fn)
+          scheduler.step(val_loss)
+
+          loss_list.append(loss.item())
+          val_loss_list.append(val_loss)
+
+          # if epoch % int(num_epochs  / 10) == 0:
+          print(f'Epoch {epoch+1}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
+
+          if val_loss < thresh:
+              print(f'Stopping training as loss has fallen below the threshold: {val_loss}')
+              break
+
+          if val_loss > 300:
+              print(f'Stopping training as loss is too high: {val_loss}')
+              break
+
+          if torch.isnan(loss):
+              print(f'Stopping training as loss is NaN.')
+              break
+
+      return loss_list, val_loss_list
+#+end_src
+
+#+RESULTS:
+
+** Loss
+
+#+begin_src ipython
+  def correlation_loss(output, target):
+      # Subtract the mean of each vector
+      output_mean = output - torch.mean(output)
+      target_mean = target - torch.mean(target)
+
+      # Compute the covariance between output and target
+      covariance = torch.mean(output_mean * target_mean)
+
+      # Compute the standard deviations of the vectors
+      output_std = torch.std(output)
+      target_std = torch.std(target)
+
+      # Calculate the Pearson correlation coefficient
+      correlation = covariance / (output_std * target_std)
+
+      # Since we want to increase the correlation, we minimize its negative
+      loss = -correlation  # Maximizing correlation by minimizing its negative
+
+      return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+    import torch
+    import torch.nn as nn
+
+    def sign_constrained_loss(output, xi, target_sign):
+        dot_product = torch.dot(output.flatten(), xi.flatten())
+        if target_sign > 0:
+            loss = torch.relu(-dot_product)  # Encourages positive dot product
+        else:
+            loss = torch.relu(dot_product)   # Encourages negative dot product
+        return loss
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class CosineLoss(nn.Module):
+      def __init__(self):
+          super(CosineLoss, self).__init__()
+          self.cosine_similarity = nn.CosineSimilarity(dim=-1)
+
+      def forward(self, input1, input2):
+          # Calculate cosine similarity
+          cosine_sim = self.cosine_similarity(input1, input2)
+          # Calculate the loss as 1 - cosine_similarity
+          loss = 1 - cosine_sim
+          # Return the mean loss over the batch
+          return loss.mean()
+#+end_src
+
+#+RESULTS:
+
+
+#+RESULTS:
+
+** Other
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          v = b - np.dot(b, a) / np.dot(a, a) * a
+
+      if IF_NORM:
+          u = a / np.linalg.norm(a)
+          v = b / np.linalg.norm(b)
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_idx(model, rank=2):
+      ksi = torch.hstack((model.low_rank.U, model.low_rank.V)).T
+      ksi = ksi[:, :model.Na[0]]
+
+      readout = model.low_rank.linear.weight.data
+      ksi = torch.vstack((ksi, readout))
+
+      print('ksi', ksi.shape)
+
+      ksi = ksi.cpu().detach().numpy()
+      theta = get_theta(ksi[0], ksi[rank])
+
+      return theta.argsort()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_overlap(model, rates):
+      ksi = model.odors.cpu().detach().numpy()
+      return rates @ ksi.T / rates.shape[-1]
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import scipy.stats as stats
+
+  def plot_smooth(data, ax, color):
+      mean = data.mean(axis=0)
+      ci = smooth.std(axis=0, ddof=1) * 1.96
+
+      # Plot
+      ax.plot(mean, color=color)
+      ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+** plots
+
+#+begin_src ipython
+  def plot_rates_selec(rates, idx, thresh=0.5, figname='fig.svg'):
+        ordered = rates[..., idx]
+        fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+        r_max = thresh * np.max(rates[0])
+
+        ax[0].imshow(rates[0].T, aspect='auto', cmap='jet', vmin=0, vmax=r_max)
+        ax[0].set_ylabel('Neuron #')
+        ax[0].set_xlabel('Step')
+
+        ax[1].imshow(ordered[0].T, aspect='auto', cmap='jet', vmin=0, vmax=r_max)
+        ax[1].set_yticks(np.linspace(0, model.Na[0].cpu().detach(), 5), np.linspace(0, 360, 5).astype(int))
+        ax[1].set_ylabel('Pref. Location (°)')
+        ax[1].set_xlabel('Step')
+        plt.savefig(figname, dpi=300)
+        plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_overlap(rates, memory, readout, labels=['A', 'B'], figname='fig.svg'):
+      fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+      overlap =(rates @ memory) / rates.shape[-1]
+
+      if overlap.shape[0]>2:
+          ax[0].plot(overlap.T[..., :2], label=labels[0])
+          ax[0].plot(overlap.T[..., 2:], '--', label=labels[1])
+      else:
+          ax[0].plot(overlap.T[..., 0], label=labels[0])
+          ax[0].plot(overlap.T[..., 1], '--', label=labels[1])
+
+      ax[0].set_xlabel('Step')
+      ax[0].set_ylabel('Overlap')
+      ax[0].set_title('Memory')
+
+      overlap =(rates @ readout) / rates.shape[-1]
+
+      if overlap.shape[0]>2:
+          ax[1].plot(overlap.T[..., :2], label=labels[0])
+          ax[1].plot(overlap.T[..., 2:], '--', label=labels[1])
+      else:
+          ax[1].plot(overlap.T[..., 0], label=labels[0])
+          ax[1].plot(overlap.T[..., 1], '--', label=labels[1])
+
+      ax[1].set_xlabel('Step')
+      ax[1].set_ylabel('Overlap')
+      ax[1].set_title('Readout')
+
+      # plt.legend(fontsize=10, frameon=False)
+      plt.savefig(figname, dpi=300)
+      plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_m0_m1_phi(rates, idx, figname='fig.svg'):
+
+      m0, m1, phi = decode_bump(rates[..., idx], axis=-1)
+      fig, ax = plt.subplots(1, 3, figsize=[2*width, height])
+
+      ax[0].plot(m0[:2].T)
+      ax[0].plot(m0[2:].T, '--')
+      #ax[0].set_ylim([0, 360])
+      #ax[0].set_yticks([0, 90, 180, 270, 360])
+      ax[0].set_ylabel('$\mathcal{F}_0$ (Hz)')
+      ax[0].set_xlabel('Step')
+
+      ax[1].plot(m1[:2].T)
+      ax[1].plot(m1[2:].T, '--')
+      # ax[1].set_ylim([0, 360])
+      # ax[1].set_yticks([0, 90, 180, 270, 360])
+      ax[1].set_ylabel('$\mathcal{F}_1$ (Hz)')
+      ax[1].set_xlabel('Step')
+
+      ax[2].plot(phi[:2].T * 180 / np.pi)
+      ax[2].plot(phi[2:].T * 180 / np.pi, '--')
+      ax[2].set_ylim([0, 360])
+      ax[2].set_yticks([0, 90, 180, 270, 360])
+      ax[2].set_ylabel('Phase (°)')
+      ax[2].set_xlabel('Step')
+
+      plt.savefig(figname, dpi=300)
+      plt.show()
+    #+end_src
+
+#+RESULTS:
+
+* Perceptron
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  class Perceptron(nn.Module):
+      def __init__(self, num_features, dropout_rate=0.5):
+          super(Perceptron, self).__init__()
+          self.linear = nn.Linear(num_features, 1)
+          self.dropout = nn.Dropout(dropout_rate)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          hidden = self.linear(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=10, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+        x = self.dropout(x)
+        x = self.relu(self.linear(x))
+        x = self.dropout(x)
+        hidden = self.linear2(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from skorch.callbacks import Callback
+  from skorch.callbacks import EarlyStopping
+  from skorch.callbacks import EpochScoring
+
+  early_stopping = EarlyStopping(
+      monitor='train_loss',    # Metric to monitor
+      patience=5,              # Number of epochs to wait for improvement
+      threshold=0.001,       # Minimum change to qualify as an improvement
+      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+      lower_is_better=True     # Set to True if lower metric values are better
+  )
+
+  auc = EpochScoring(scoring='roc_auc', lower_is_better=False)
+  accuracy = EpochScoring(scoring='accuracy', lower_is_better=False)
+
+  class CaptureWeightsCallback(Callback):
+      def __init__(self):
+          super().__init__()  # Ensure to call the superclass initializer if needed
+          self.weights = []
+
+      def on_train_end(self, net, **kwargs):
+          # Capture the linear layer's weights after training ends
+          self.weights.append(net.module_.linear.weight.data.cpu().numpy())
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+  class RegularizedNet(NeuralNetClassifier):
+      def __init__(self, module, lbd=0.01, alpha=0.01, l1_ratio=0.5, **kwargs):
+          self.alpha = alpha  # Regularization strength
+          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+          super().__init__(module, **kwargs)
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          # Call super method to compute primary loss
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+          if self.alpha>0:
+              elastic_net_reg = 0
+              for param in self.module_.parameters():
+                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2) / 2
+
+          # Add the elastic net regularization term to the primary loss
+          return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from sklearn.metrics import make_scorer
+
+  def overlap_scoring_function(estimator, X, y_true):
+      y = y_true.copy()
+      y[y==0] = 1
+
+      try:
+          weights = estimator['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      except:
+          weights = estimator.module_.linear.weight.data.cpu().detach().numpy()[0]
+
+      overlap = (y[:,0] * (X @ weights.T)) / X.shape[1]
+
+      size = int(y.shape[0] / 2)
+      # result = np.array((overlap[:size].mean(),overlap[size:].mean()))
+      # print(result.shape)
+
+      return -overlap.mean()
+
+  # Make our custom scorer compatible with sklearn
+  overlap_scorer = make_scorer(overlap_scoring_function, greater_is_better=True)
+#+end_src
+
+#+RESULTS:
+
+* Load Data
+** Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '../')
+
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.common.options import set_options
+#+end_src
+
+#+RESULTS:
+
+** Parameters
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  days = ['first', 'last']
+
+  kwargs = dict()
+  kwargs = {'prescreen': None, 'pval': 0.05, 'trials': '', 'balance': 'under',
+            'method': 'bootstrap', 'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
+            'bootstrap': True, 'n_boots': 1000,
+            'preprocess': False, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l2',
+            'out_fold': 'stratified', 'n_out': 5,
+            'in_fold': 'stratified', 'n_in': 5,
+            'random_state': None, 'n_repeats': 10,
+            'n_lambda': 20, 'T_WINDOW': 0.5,
+            'features': 'sample',
+            'day': 'last'
+            }
+
+#+end_src
+
+#+RESULTS:
+
+** Load X, y
+*** Sample
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['reload'] = 0
+
+  options['mouse'] = 'JawsM15'
+  options['features'] = 'sample'
+  options['trials'] = ''
+
+  X_list = []
+  y_list = []
+  # tasks = ["Dual"]
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X_list.append(X_dum)
+      y_list.append(y_dum)
+
+  print('X', X_data.shape, 'y', y_data.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+  X (96, 693, 84) y (96,)
+#+end_example
+
+#+begin_src ipython
+  X_list = np.array(X_list)
+  y_list = np.array(y_list)
+  print(X_list.shape, y_list.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 2, 96, 693, 84) (3, 2, 96)
+
+*** Distractor
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['reload'] = 0
+
+  options['mouse'] = 'JawsM15'
+  options['features'] = 'distractor'
+  options['trials'] = ''
+
+  X2_list = []
+  y2_list = []
+  tasks = ["Dual"]
+  for task in tasks:
+      options['task'] = task
+      X_dum = []
+      y_dum = []
+      for day in days:
+          options['day'] = day
+          X_days, y_days = get_X_y_days(**options)
+          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+          y_data[y_data==-1] = 0
+
+          X_dum.append(X_data)
+          y_dum.append(y_data)
+
+      X2_list.append(X_dum)
+      y2_list.append(y_dum)
+
+  print('X', X_data.shape, 'y', y_data.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  X_days (1152, 693, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+  ##########################################
+  multiple days 0 3 0
+  X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+  X (192, 693, 84) y (192,)
+#+end_example
+
+*** Raw
+#+begin_src ipython
+  times = np.linspace(0, 14, 84)
+  # plt.plot(times, X_data[0, 1])
+  # plt.plot(times, X_data[0, 10])
+  plt.plot(times[12:-12], X_data.mean((0,1))[12:-12])
+  plt.xticks([0, 2, 4, 6, 8 ,10, 12, 14])
+  plt.xlim([0, 14])
+  add_vlines()
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/de6479cc1b70943932ed796e858befcfd99e2a2a.png]]
+
+#+begin_src ipython
+  print(times[-36], times[-30])
+#+end_src
+
+#+RESULTS:
+: 8.096385542168674 9.108433734939759
+
+#+begin_src ipython
+import numpy as np
+
+def rolling_window_mean(data, window_size, axis=0):
+    """
+    Compute the rolling window mean along a specified axis.
+
+    Parameters:
+        data (numpy.ndarray): The input array.
+        window_size (int): The size of the rolling window.
+        axis (int): The axis along which to perform the rolling mean.
+
+    Returns:
+        numpy.ndarray: The array of rolling window means.
+    """
+    # Ensure the axis is positive
+    axis = axis % data.ndim
+
+    # Compute shape for the reshaped array
+    shape = list(data.shape)
+    shape[axis] = shape[axis] // window_size
+    shape.insert(axis+1, window_size)
+
+    # Compute strides for the reshaped array
+    strides = list(data.strides)
+    strides[axis] *= window_size
+    strides.insert(axis+1, data.strides[axis])
+
+    # Reshape and compute the mean along the new axis
+    return np.lib.stride_tricks.as_strided(data, shape=shape, strides=strides).mean(axis=axis+1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  # Example usage
+  times = np.linspace(0, 14, 84)
+  print(X_data.shape, times.shape)
+
+  window_size = 2 # Example window size
+
+  # Subsample the data along the first axis (time axis in many cases)
+  result = rolling_window_mean(X_data, window_size, axis=-1)
+  bins = rolling_window_mean(times, window_size, axis=0)
+  print(result.shape, bins.shape)
+#+end_src
+
+#+RESULTS:
+: (192, 693, 84) (84,)
+: (192, 693, 42) (42,)
+
+#+begin_src ipython
+  plt.plot(bins, result.mean((0,1)))
+  # plt.xticks([0, 2, 4, 6, 8 ,10, 12, 14])
+  # plt.xlim([0, 14])
+  add_vlines()
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/51d4d4f001717fa952ce9815bdb329d72652ad9d.png]]
+
+* Model Fit
+** Parameters
+
+#+begin_src ipython
+  task = 0
+  day = 0
+
+  task2 = 0
+  day2 = 0
+#+end_src
+
+#+RESULTS:
+
+** GridSearchCV
+
+#+begin_src ipython
+  print(X_data.shape)
+#+end_src
+
+#+RESULTS:
+: b67fba4c-48fa-4f25-8d62-ef575d6f495b
+
+#+begin_src ipython
+  from sklearn.preprocessing import StandardScaler
+  from sklearn.pipeline import Pipeline
+
+  net = RegularizedNet(
+      module=MLP,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.5,
+      criterion=nn.BCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      verbose=0,
+      # train_split=None,
+      # iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  # net.set_params(train_split=False, verbose=0)
+
+  pipe = []
+  pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+: 3c0519e2-9bcc-4efe-a595-6c1ae5ca5115
+
+#+begin_src ipython
+  X = X_list[task][day].astype(np.float32)[..., 9*6:12*6].mean(-1)
+  X_avg = avg_epochs(X, **options)
+
+  y = np.float32(y_list[task][day][:, np.newaxis])
+  print('X', X.shape, 'y', y.shape)
+
+  X2 = X_list[task2][day2].astype(np.float32)[..., 9*6:12*6].mean(-1)
+  y2 = np.float32(y_list[task2][day2][:, np.newaxis])
+  print('X2', X2.shape, 'y2', y2.shape)
+#+end_src
+
+#+RESULTS:
+: b1eb01ac-5993-4d6d-9b93-5dd47c7a98da
+
+#+begin_src ipython
+  net.fit(X,y)
+  # res = overlap_scoring_function(net, X, y)
+  # print(res)
+#+end_src
+
+#+RESULTS:
+: 7a7c6e78-2dac-4c15-aefd-0c722e26dd41
+
+#+begin_src ipython
+  from scipy.stats import uniform, loguniform
+  from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+
+  params = {
+      'net__alpha': np.logspace(-4, 4, 10),
+      'net__l1_ratio': np.linspace(0, 1, 10),
+      'net__module__dropout_rate': np.linspace(0, 1, 10),  # Example dropout rates
+  }
+
+  net.set_params(train_split=None, verbose=0)
+
+  # Perform grid search
+  model = GridSearchCV(pipe, params, refit=True, cv=5, scoring='accuracy', n_jobs=10)
+#+end_src
+
+#+RESULTS:
+: 3255be8c-23ee-4e43-89a1-5e2643f508af
+
+#+begin_src ipython
+  l1_ratio_dist = uniform(0, 1)
+  # log-uniform distribution for alpha between e^-4 and e^0 (i.e., 0.0001 to 1)
+  alpha_dist = loguniform(1e-2, 1e2)
+
+  # Parameters dictionary using distributions
+  params = {
+      'l1_ratio': l1_ratio_dist,
+      'alpha': alpha_dist,
+  }
+
+  # Set up RandomizedSearchCV
+  # model = RandomizedSearchCV(net, params, n_iter=10, cv=5, scoring='accuracy', n_jobs=-1)
+#+end_src
+
+#+RESULTS:
+: d6f286ee-b499-4a65-9a45-7387d9fc7593
+
+#+begin_src ipython
+  start = perf_counter()
+  print('hyperparam fitting ...')
+  model.fit(X, y)
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+
+#+RESULTS:
+: c32e8782-b413-40cc-9bb7-dc435681a3b6
+
+#+begin_src ipython
+  best_model = model.best_estimator_
+  best_params = model.best_params_
+  print(best_params)
+#+end_src
+
+#+RESULTS:
+: 0918b264-6acf-4189-847a-e1cd1b67ee8f
+
+#+begin_src ipython
+  weights = best_model['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+  plt.hist(weights, bins=100)
+  plt.xlabel('Weights')
+  plt.show()
+#+end_src
+
+#+RESULTS:
+: 86b017a6-c7e9-4bba-9f33-2001bc81f539
+
+#+begin_src ipython
+#  print(weights)
+#+end_src
+
+#+RESULTS:
+: 9e0e9ec5-8057-4856-9b44-368f216b949f
+
+** GeneralizingEstimator
+
+#+begin_src ipython
+  # For some reason I need to reinitialize the model otherwise mne crashes
+
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      alpha=best_params['net__alpha'],
+      l1_ratio=best_params['net__l1_ratio'],
+      criterion=nn.BCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.05,
+      max_epochs=100,
+      callbacks=[early_stopping],  # Add the EarlyStopping callback here
+      verbose=0,
+      train_split=None,
+      # iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+      device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  model = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  NameError                                 Traceback (most recent call last)
+  Cell In[66], line 6
+        1 # For some reason I need to reinitialize the model otherwise mne crashes
+        3 net = RegularizedNet(
+        4     module=Perceptron,
+        5     module__num_features=X_data.shape[1],
+  ----> 6     alpha=best_params['net__alpha'],
+        7     l1_ratio=best_params['net__l1_ratio'],
+        8     criterion=nn.BCEWithLogitsLoss,
+        9     optimizer=optim.Adam,
+       10     optimizer__lr=0.05,
+       11     max_epochs=100,
+       12     callbacks=[early_stopping],  # Add the EarlyStopping callback here
+       13     verbose=0,
+       14     train_split=None,
+       15     # iterator_train__shuffle=True,  # Ensure the data is shuffled each epoch
+       16     device='cuda' if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+       17 )
+       19 pipe = []
+       20 pipe.append(("scaler", StandardScaler()))
+
+  NameError: name 'best_params' is not defined
+#+end_example
+:END:
+
+#+begin_src ipython
+  start = perf_counter()
+  # model = net
+  cv = StratifiedKFold(n_splits=5)
+
+  estimator = GeneralizingEstimator(model, n_jobs=-1, scoring='f1', verbose=False)
+
+  X_first = X_list[task][0].astype(np.float32)
+  y_first = y_list[task][0][:, np.newaxis].astype(np.float32)
+
+  X_last = X_list[task][1].astype(np.float32)
+  y_last = y_list[task][1][:, np.newaxis].astype(np.float32)
+
+  print('running cross temp fit...')
+  scores_first = cross_val_multiscore(estimator, X_first, y_first, cv=cv, n_jobs=-1, verbose=False)
+  scores_last = cross_val_multiscore(estimator, X_last, y_last, cv=cv, n_jobs=-1, verbose=False)
+
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+:
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  _RemoteTraceback                          Traceback (most recent call last)
+  _RemoteTraceback:
+  """
+  Traceback (most recent call last):
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/externals/loky/process_executor.py", line 426, in _process_worker
+      call_item = call_queue.get(block=True, timeout=timeout)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/multiprocessing/queues.py", line 122, in get
+      return _ForkingPickler.loads(res)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 2231, in __setstate__
+      cuda_attrs = torch.load(f, **load_kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/serialization.py", line 1014, in load
+      return _load(opened_zipfile,
+             ^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/serialization.py", line 1422, in _load
+      result = unpickler.load()
+               ^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/serialization.py", line 1415, in find_class
+      return super().find_class(mod_name, name)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  AttributeError: Can't get attribute 'MLP' on <module 'joblib.externals.loky.backend.popen_loky_posix' from '/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/externals/loky/backend/popen_loky_posix.py'>
+  """
+
+  The above exception was the direct cause of the following exception:
+
+  BrokenProcessPool                         Traceback (most recent call last)
+  Cell In[67], line 14
+       11 y_last = y_list[task][1][:, np.newaxis].astype(np.float32)
+       13 print('running cross temp fit...')
+  ---> 14 scores_first = cross_val_multiscore(estimator, X_first, y_first, cv=cv, n_jobs=-1, verbose=False)
+       15 scores_last = cross_val_multiscore(estimator, X_last, y_last, cv=cv, n_jobs=-1, verbose=False)
+       17 end = perf_counter()
+
+  File <decorator-gen-477>:10, in cross_val_multiscore(estimator, X, y, groups, scoring, cv, n_jobs, verbose, fit_params, pre_dispatch)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/mne/decoding/base.py:462, in cross_val_multiscore(estimator, X, y, groups, scoring, cv, n_jobs, verbose, fit_params, pre_dispatch)
+      458 parallel, p_func, n_jobs = parallel_func(
+      459     _fit_and_score, n_jobs, pre_dispatch=pre_dispatch
+      460 )
+      461 position = hasattr(estimator, "position")
+  --> 462 scores = parallel(
+      463     p_func(
+      464         estimator=clone(estimator),
+      465         X=X,
+      466         y=y,
+      467         scorer=scorer,
+      468         train=train,
+      469         test=test,
+      470         fit_params=fit_params,
+      471         verbose=verbose,
+      472         parameters=dict(position=ii % n_jobs) if position else None,
+      473     )
+      474     for ii, (train, test) in enumerate(cv_iter)
+      475 )
+      476 return np.array(scores)[:, 0, ...]
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1944, in Parallel.__call__(self, iterable)
+     1938 # The first item from the output is blank, but it makes the interpreter
+     1939 # progress until it enters the Try/Except block of the generator and
+     1940 # reach the first `yield` statement. This starts the aynchronous
+     1941 # dispatch of the tasks to the workers.
+     1942 next(output)
+  -> 1944 return output if self.return_generator else list(output)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1587, in Parallel._get_outputs(self, iterator, pre_dispatch)
+     1584     yield
+     1586     with self._backend.retrieval_context():
+  -> 1587         yield from self._retrieve()
+     1589 except GeneratorExit:
+     1590     # The generator has been garbage collected before being fully
+     1591     # consumed. This aborts the remaining tasks if possible and warn
+     1592     # the user if necessary.
+     1593     self._exception = True
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1691, in Parallel._retrieve(self)
+     1684 while self._wait_retrieval():
+     1685
+     1686     # If the callback thread of a worker has signaled that its task
+     1687     # triggered an exception, or if the retrieval loop has raised an
+     1688     # exception (e.g. `GeneratorExit`), exit the loop and surface the
+     1689     # worker traceback.
+     1690     if self._aborting:
+  -> 1691         self._raise_error_fast()
+     1692         break
+     1694     # If the next job is not ready for retrieval yet, we just wait for
+     1695     # async callbacks to progress.
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1726, in Parallel._raise_error_fast(self)
+     1722 # If this error job exists, immediatly raise the error by
+     1723 # calling get_result. This job might not exists if abort has been
+     1724 # called directly or if the generator is gc'ed.
+     1725 if error_job is not None:
+  -> 1726     error_job.get_result(self.timeout)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:735, in BatchCompletionCallBack.get_result(self, timeout)
+      729 backend = self.parallel._backend
+      731 if backend.supports_retrieve_callback:
+      732     # We assume that the result has already been retrieved by the
+      733     # callback thread, and is stored internally. It's just waiting to
+      734     # be returned.
+  --> 735     return self._return_or_raise()
+      737 # For other backends, the main thread needs to run the retrieval step.
+      738 try:
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:753, in BatchCompletionCallBack._return_or_raise(self)
+      751 try:
+      752     if self.status == TASK_ERROR:
+  --> 753         raise self._result
+      754     return self._result
+      755 finally:
+
+  BrokenProcessPool: A task has failed to un-serialize. Please ensure that the arguments of the function are all picklable.
+  running cross temp fit...
+#+end_example
+:END:
+
+#+begin_src ipython
+  print(scores.shape)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: 3a4911e8-0a1f-44d2-8e2d-fdf7988fa9a1
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[68], line 1
+: ----> 1 print(scores.shape)
+:
+: NameError: name 'scores' is not defined
+:END:
+
+#+begin_src ipython
+  fig, ax = plt.subplots(1, 3, figsize=[3*width, height])
+
+  im = ax[0].imshow(
+      scores_first.mean(0) ,
+      interpolation="lanczos",
+      origin="lower",
+      cmap="jet",
+      extent=[0, 14, 0, 14],
+      vmin=0.5,
+      vmax=1.0,
+  )
+
+  add_vdashed(ax[0])
+  ax[0].set_xlim([2, 12])
+  ax[0].set_xticks([2, 4, 6, 8, 10, 12])
+  ax[0].set_ylim([2, 12])
+  ax[0].set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax[0].set_xlabel("Testing Time (s)")
+  ax[0].set_ylabel("Training Time (s)")
+
+  im = ax[1].imshow(
+      scores_last.mean(0) ,
+      interpolation="lanczos",
+      origin="lower",
+      cmap="jet",
+      extent=[0, 14, 0, 14],
+      vmin=0.5,
+      vmax=1.0,
+  )
+
+  add_vdashed(ax[1])
+  ax[1].set_xlim([2, 12])
+  ax[1].set_xticks([2, 4, 6, 8, 10, 12])
+  ax[1].set_ylim([2, 12])
+  ax[1].set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax[1].set_xlabel("Testing Time (s)")
+  ax[1].set_ylabel("Training Time (s)")
+
+  im = ax[2].imshow(
+      scores_last.mean(0) - scores_first.mean(0),
+      interpolation="lanczos",
+      origin="lower",
+      cmap="jet",
+      extent=[0, 14, 0, 14],
+      vmin=-0.5,
+      vmax=1,
+  )
+
+  add_vdashed(ax[2])
+  ax[2].set_xlim([2, 12])
+  ax[2].set_xticks([2, 4, 6, 8, 10, 12])
+  ax[2].set_ylim([2, 12])
+  ax[2].set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax[2].set_xlabel("Testing Time (s)")
+  ax[2].set_ylabel("Training Time (s)")
+
+  plt.savefig('%s_score_mat.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: 7bdaa557-1b72-46a1-ad94-486750761b53
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  NameError                                 Traceback (most recent call last)
+  Cell In[69], line 4
+        1 fig, ax = plt.subplots(1, 3, figsize=[3*width, height])
+        3 im = ax[0].imshow(
+  ----> 4     scores_first.mean(0) ,
+        5     interpolation="lanczos",
+        6     origin="lower",
+        7     cmap="jet",
+        8     extent=[0, 14, 0, 14],
+        9     vmin=0.5,
+       10     vmax=1.0,
+       11 )
+       13 add_vdashed(ax[0])
+       14 ax[0].set_xlim([2, 12])
+
+  NameError: name 'scores_first' is not defined
+#+end_example
+[[file:./.ob-jupyter/15a2adc614fe72ea176a1476dbdec26433b6a2dd.png]]
+:END:
+
+#+begin_src ipython
+  times = np.linspace(0, 14, 84)
+  fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+
+  ax[0].plot(times, np.diag(scores_first.mean(0)))
+  ax[0].plot(times, np.diag(scores_last.mean(0)))
+  ax[0].hlines(0.5, 0, 14, 'k', '--')
+  ax[0].set_xticks([2, 4, 6, 8, 10, 12])
+
+  add_vlines(ax[0])
+  ax[0].set_xlabel('Time (s)')
+  ax[0].set_ylabel('Score')
+
+  plt.savefig('compose_score_day_%d.svg' % day, dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: e421d9fb-9928-4ec9-a028-f85c301c845f
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[70], line 4
+:       1 times = np.linspace(0, 14, 84)
+:       2 fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+: ----> 4 ax[0].plot(times, np.diag(scores_first.mean(0)))
+:       5 ax[0].plot(times, np.diag(scores_last.mean(0)))
+:       6 ax[0].hlines(0.5, 0, 14, 'k', '--')
+:
+: NameError: name 'scores_first' is not defined
+[[file:./.ob-jupyter/1ee60c8ad9292c18dc30bc71412f0c5906dfeaf2.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+: 62816383-32e1-4791-b89d-70aab2f27f43
+
+* Composition
+
+#+begin_src ipython
+
+  start = perf_counter()
+
+  model = net
+  cv = StratifiedKFold(n_splits=5)
+
+  # estimator = SlidingEstimator(model, n_jobs=-1, scoring='accuracy', verbose=False)
+  estimator = GeneralizingEstimator(model, n_jobs=-1, scoring='accuracy', verbose=False)
+  # estimator = GeneralizingEstimator(model, n_jobs=-1, scoring=overlap_scoring_function, verbose=False)
+
+  X = X_list[task][day].astype(np.float32)
+  y = y_list[task][day][:, np.newaxis].astype(np.float32)
+
+  print('X', X.shape, 'y', y.shape)
+
+  X2 = X_list[task2][day2].astype(np.float32)
+  y2 = y_list[task2][day2][:, np.newaxis].astype(np.float32)
+
+  print('X2', X2.shape, 'y2', y2.shape)
+
+  print('running cross temp fit...')
+  scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=-1, verbose=False)
+
+  # compositionality
+  # scores = my_cross_val_multiscore(estimator, X, X2, y, y2, cv=cv, n_jobs=-1, verbose=False)
+
+  # results = cross_validate(estimator, X, y, cv=5, return_estimator=True, n_jobs=-1)
+  # scores = results['test_score']
+  # estimators = results['estimator']
+
+  end = perf_counter()
+  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+#+end_src
+
+#+RESULTS:
+: X (192, 693, 84) y (192, 1)
+: X2 (192, 693, 84) y2 (192, 1)
+: running cross temp fit...
+: Elapsed (with compilation) = 0h 0m 53s
