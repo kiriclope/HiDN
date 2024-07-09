@@ -127,7 +127,6 @@
 #+begin_src ipython
   from skorch.callbacks import Callback
   from skorch.callbacks import EarlyStopping
-  from skorch.callbacks import EpochScoring
 
   early_stopping = EarlyStopping(
       monitor='train_loss',  # Metric to monitor
@@ -136,18 +135,6 @@
       threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
       lower_is_better=True     # Set to True if lower metric values are better
   )
-
-  auc = EpochScoring(scoring='roc_auc', lower_is_better=False)
-  accuracy = EpochScoring(scoring='accuracy', lower_is_better=False)
-
-  class CaptureWeightsCallback(Callback):
-      def __init__(self):
-          super().__init__()  # Ensure to call the superclass initializer if needed
-          self.weights = []
-
-      def on_train_end(self, net, **kwargs):
-          # Capture the linear layer's weights after training ends
-          self.weights.append(net.module_.linear.weight.data.cpu().numpy())
 
 #+end_src
 
@@ -163,6 +150,9 @@
 
       def get_loss(self, y_pred, y_true, X=None, training=False):
           # Call super method to compute primary loss
+          if y_pred.shape != y_true.shape:
+              y_true = y_true.unsqueeze(-1)
+
           loss = super().get_loss(y_pred, y_true, X=X, training=training)
 
           if self.alpha>0:
@@ -208,11 +198,13 @@
 #+begin_src ipython
   def get_bagged_coefs(clf, n_estimators):
       coefs = []
+      bias = []
       for i in range(n_estimators):
           model = clf.estimators_[i]
           coefs.append(model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0])
+          bias.append(model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0])
 
-      return np.array(coefs).mean(0)
+      return np.array(coefs).mean(0), np.array(bias).mean(0)
 #+end_src
 
 #+RESULTS:
@@ -235,18 +227,17 @@
       best_params = grid.best_params_
       print(best_params)
 
-      # bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=32)
-      # bagging_clf.fit(X_avg, y)
-      # coefs = get_bagged_coefs(bagging_clf, n_estimators=32)
+      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
 
       start = perf_counter()
-      print('fit best model...')
-      best_model.fit(X_avg, y)
+      print('Bagging best model ...')
+      bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=32)
+      bagging_clf.fit(X_avg, y)
       end = perf_counter()
       print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
 
-      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+      coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=32)
 
       return best_model, coefs, bias
 #+end_src
@@ -348,14 +339,15 @@ CLOCK: [2024-07-05 vie 14:59]--[2024-07-05 vie 15:24] =>  0:25
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   days = [1, 2, 3, 4, 5, 6]
 
-  kwargs = {'preprocess': False, 'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False, 'T_WINDOW': 0.0}
+  kwargs = {
+      'mouse': 'ACCM03',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+      'random_state': None, 'T_WINDOW': 0.0,
+            }
 
   options = set_options(**kwargs)
-  options['reload'] = 1
-  options['data_type'] = 'dF'
-  options['mouse'] = 'JawsM15'
   cv_epoch = 'MD'
-  options['trials'] = ''
   options['features'] = 'distractor'
   tasks = ['Dual']
 
@@ -526,6 +518,11 @@ CLOCK: [2024-07-04 jue 16:04]--[2024-07-04 jue 16:29] =>  0:25
 ** Fit
 
 #+begin_src ipython
+  options = set_options(**kwargs)
+  options['day'] = 1
+  X_days, y_days = get_X_y_days(**options)
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
   net = RegularizedNet(
       module=Perceptron,
       module__num_features=X_data.shape[1],
@@ -711,6 +708,7 @@ CLOCK: [2024-07-04 jue 16:04]--[2024-07-04 jue 16:29] =>  0:25
 : (6, 5)
 [[file:./.ob-jupyter/654d5b9effaeb3af28a23e98c9dec8ab1e03c03c.png]]
 :END:
+
 
 ** Overlap
 

@@ -1,0 +1,1072 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import pickle as pkl
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import circmean
+from time import perf_counter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from skorch import NeuralNetClassifier
+
+from sklearn.base import clone
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score, cross_validate
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+
+from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
+from src.decode.my_mne import my_cross_val_multiscore
+from mne.decoding import SlidingEstimator, get_coef
+
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.attractor.energy import run_energy, plot_energy
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.decode.bump import decode_bump, circcvl
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.common.options import set_options
+from src.preprocess.helpers import avg_epochs
+
+import torch.optim as optim
+from torch.utils.data import Dataset, TensorDataset, DataLoader
+DEVICE = 'cuda:1'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Other
+#+begin_src ipython
+def convert_seconds(seconds):
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def get_theta(a, b, GM=0, IF_NORM=0):
+
+    u, v = a, b
+
+    if GM:
+        v = b - np.dot(b, a) / np.dot(a, a) * a
+
+    if IF_NORM:
+        u = a / np.linalg.norm(a)
+        v = b / np.linalg.norm(b)
+
+    return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import scipy.stats as stats
+
+def plot_smooth(data, ax, color):
+    mean = data.mean(axis=0)
+    ci = smooth.std(axis=0, ddof=1) * 1.96
+
+    # Plot
+    ax.plot(mean, color=color)
+    ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
+
+#+end_src
+
+#+RESULTS:
+
+** plots
+#+begin_src ipython
+  def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
+      ci_ = None
+      energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+  if IF_BOOT:
+      _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
+      if ci_ is not None:
+          ci_ = ci_ / 2.0
+  return energy_, ci_
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[6], line 4
+:       2     ci_ = None
+:       3     energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+: ----> 4 if IF_BOOT:
+:       5     _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
+:       6     if ci_ is not None:
+:
+: NameError: name 'IF_BOOT' is not defined
+:END:
+
+#+begin_src ipython
+def plot_theta_energy(theta, energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
+    energy = energy[1:]
+    theta = theta[1:]
+
+    windowSize = int(window * energy.shape[0])
+    if SMOOTH:
+        # window = np.ones(windowSize) / windowSize
+        # energy = np.convolve(energy, window, mode='same')
+        energy = circcvl(energy, windowSize=windowSize)
+
+    ax.plot(theta, energy * 100, lw=4, color=color)
+
+    if ci is not None:
+        ax.fill_between(
+            theta,
+            (energy - ci[:, 0]) * 100,
+            (energy + ci[:, 1]) * 100,
+            alpha=0.1, color=color
+        )
+
+    ax.set_ylabel('Energy')
+    ax.set_xlabel('Pref. Location (°)')
+    ax.set_xticks([0, 90, 180, 270, 360])
+#+end_src
+
+#+RESULTS:
+
+* Perceptron
+
+#+begin_src ipython
+class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+    def forward(self, input, target):
+        target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+        return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+class Perceptron(nn.Module):
+    def __init__(self, num_features, dropout_rate=0.0):
+        super(Perceptron, self).__init__()
+        self.linear = nn.Linear(num_features, 1)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        x = self.dropout(x)
+        hidden = self.linear(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          x = self.relu(self.linear(x))
+          x = self.dropout(x)
+          hidden = self.linear2(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+from skorch.callbacks import Callback
+from skorch.callbacks import EarlyStopping
+
+early_stopping = EarlyStopping(
+    monitor='train_loss',    # Metric to monitor
+    patience=5,              # Number of epochs to wait for improvement
+    threshold=0.001,       # Minimum change to qualify as an improvement
+    threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+    lower_is_better=True     # Set to True if lower metric values are better
+)
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+class RegularizedNet(NeuralNetClassifier):
+    def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
+        self.alpha = alpha  # Regularization strength
+        self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+        super().__init__(module, **kwargs)
+
+    def get_loss(self, y_pred, y_true, X=None, training=False):
+        # Call super method to compute primary loss
+        if y_pred.shape != y_true.shape:
+            y_true = y_true.unsqueeze(-1)
+
+        loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+        if self.alpha>0:
+            elastic_net_reg = 0
+            for param in self.module_.parameters():
+                elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+        # Add the elastic net regularization term to the primary loss
+        return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+* Decoding vs days
+** Helpers
+
+#+begin_src ipython
+  def hyper_tune(model, epoch, params, scoring, **options):
+
+      # load data
+      X_days, y_days = get_X_y_days(**options)
+      X, y = get_X_y_S1_S2(X_days, y_days, **options)
+      y[y==-1] = 0
+
+      options['epochs'] = [epoch]
+      X_avg = avg_epochs(X, **options).astype('float32')
+      print('X', X.shape, 'y', y.shape)
+
+      # Perform grid search
+      grid = GridSearchCV(model, params, refit=True, cv=5, scoring=scoring, n_jobs=30)
+      start = perf_counter()
+      print('hyperparam fitting ...')
+      grid.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      best_model = grid.best_estimator_
+      best_params = grid.best_params_
+      print(best_params)
+
+      # if refit true the best model is refitted to the whole dataset
+      # coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      # bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+      # cross validated scores
+      print('Computing cv scores ...')
+      estimator = SlidingEstimator(clone(best_model), n_jobs=20,
+                                  scoring=scoring, verbose=False)
+      scores = cross_val_multiscore(estimator, X.astype('float32'), y,
+                                  cv=5, n_jobs=-1, verbose=False)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      # bootstrapped coefficients
+      start = perf_counter()
+      print('Bagging best model ...')
+      bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=32)
+      bagging_clf.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=32)
+
+      # overlaps
+      print('Computing overlaps')
+      overlaps = (np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+      return overlaps, scores, coefs, bias
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def get_bagged_coefs(clf, n_estimators):
+    coefs = []
+    bias = []
+    for i in range(n_estimators):
+        model = clf.estimators_[i]
+        coefs.append(model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0])
+        bias.append(model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0])
+
+    return np.array(coefs).mean(0), np.array(bias).mean(0)
+#+end_src
+
+#+RESULTS:
+
+** Parameters
+
+#+begin_src ipython
+mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+kwargs = {
+    'mouse': 'ChRM04',
+    'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+    'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+    'random_state': None, 'T_WINDOW': 0.0,
+        }
+#+end_src
+
+#+RESULTS:
+
+** Fit
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['day'] = 1
+  X_days, y_days = get_X_y_days(**options)
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.0,
+      alpha=0.01,
+      l1_ratio=0.95,
+      criterion=CustomBCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      verbose=0,
+      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+: loading files from /home/leon/dual_task/dual_data/data/ChRM04
+: X_days (1152, 668, 84) y_days (1152, 6)
+: ##########################################
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+: ##########################################
+: single day
+: X_S1 (16, 668, 84) X_S2 (16, 668, 84)
+
+
+#+begin_src ipython
+  params = {
+      'net__alpha': np.logspace(-4, 4, 10),
+      # 'net__l1_ratio': np.linspace(0, 1, 10),
+      # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+  }
+
+  scores_sample = []
+  overlaps_sample = []
+  coefs_sample = []
+  bias_sample = []
+
+  scores_dist = []
+  overlaps_dist = []
+  coefs_dist = []
+  bias_dist = []
+
+  scores_choice = []
+  overlaps_choice = []
+  coefs_choice = []
+  bias_choice = []
+
+  options['task'] = 'Dual'
+  scoring = 'roc_auc'
+
+  # days = ['first', 'last']
+  days = [1, 2, 3, 4, 5, 6]
+
+  for day in days:
+      options['day'] = day
+
+      options['features'] = 'sample'
+      overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
+
+      scores_sample.append(scores)
+      overlaps_sample.append(overlaps)
+      coefs_sample.append(coefs)
+      bias_sample.append(bias)
+
+      options['features'] = 'distractor'
+      overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='MD', params=params, scoring=scoring, **options)
+
+      scores_dist.append(scores)
+      overlaps_dist.append(overlaps)
+      coefs_dist.append(coefs)
+      bias_dist.append(bias)
+
+      options['features'] = 'choice'
+      overlaps, scores,
+      overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='CHOICE', params=params, scoring=scoring, **options)
+
+      scores_choice.append(scores)
+      overlaps_choice.append(overlaps)
+      coefs_choice.append(coefs)
+      bias_choice.append(bias)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 14s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 42s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 6s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 9.999999999999999e-05}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 33s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (59, 668, 84) X_S2 (5, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.000774263682681127}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 35s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 9.999999999999999e-05}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 33s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 40s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (35, 668, 84) X_S2 (29, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 29s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.000774263682681127}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 31s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 39s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (38, 668, 84) X_S2 (26, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 29s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 39s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 5s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 9.999999999999999e-05}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 31s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (34, 668, 84) X_S2 (30, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.000774263682681127}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 31s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 14s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 42s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 8s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 9.999999999999999e-05}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 31s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (39, 668, 84) X_S2 (25, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 9.999999999999999e-05}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 33s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 41s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 9s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (32, 668, 84) X_S2 (32, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 29s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Computing overlaps
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (39, 668, 84) X_S2 (25, 668, 84)
+  X (64, 668, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 13s
+  {'net__alpha': 9.999999999999999e-05}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 32s
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Computing overlaps
+#+end_example
+
+
+#+begin_src ipython
+  try:
+      overlaps_sample = np.array(overlaps_sample)
+      overlaps_dist = np.array(overlaps_dist)
+      overlaps_choice = np.array(overlaps_choice)
+
+      scores_sample = np.array(scores_sample)
+      scores_dist = np.array(scores_dist)
+      scores_choice = np.array(scores_choice)
+
+      coefs_sample = np.array(coefs_sample)
+      coefs_dist = np.array(coefs_dist)
+      coefs_choice = np.array(coefs_choice)
+  except:
+      pass
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  try:
+      print('overlaps', overlaps_sample.shape, overlaps_dist.shape, overlaps_choice.shape)
+      print('scores', scores_sample.shape, scores_dist.shape, scores_choice.shape)
+      print('coefs', coefs_sample.shape, coefs_dist.shape, coefs_choice.shape)
+  except:
+      pass
+#+end_src
+
+#+RESULTS:
+: overlaps (6, 64, 84) (6, 64, 84) (6, 64, 84)
+: scores (6, 5, 84) (6, 5, 84) (6, 5, 84)
+: coefs (6, 668) (6, 668) (6, 668)
+
+** Scores
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1)/6) for i in range(7)]
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+
+  for i in range(6):
+
+      ax[0].plot(circcvl(scores_sample[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(circcvl(scores_dist[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(circcvl(scores_choice[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+  ax[0].axhline(y=0.5, color='k', linestyle='--')
+  ax[1].axhline(y=0.5, color='k', linestyle='--')
+  ax[2].axhline(y=0.5, color='k', linestyle='--')
+
+  ax[2].legend(fontsize=10)
+  ax[0].set_xlabel('Step')
+  ax[1].set_xlabel('Step')
+  ax[2].set_xlabel('Step')
+  ax[0].set_ylabel('Sample Score')
+  ax[1].set_ylabel('Distractor Score')
+  ax[2].set_ylabel('Choice Score')
+
+  plt.savefig('%s_scores.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/c00a921db4f21ab80a71ef84dcdeefadaf04f321.png]]
+
+#+begin_src ipython
+  options['epochs'] = ['MD']
+  sample_avg = []
+  for i in range(6):
+      sample_avg.append(avg_epochs(scores_sample[i], **options))
+  sample_avg = np.array(sample_avg)
+  plt.plot(np.arange(1, 7), sample_avg.mean(1), '-o', label='Sample', color='r')
+
+  options['epochs'] = ['MD']
+  dist_avg = []
+  for i in range(6):
+      dist_avg.append(avg_epochs(scores_dist[i], **options))
+  dist_avg = np.array(dist_avg)
+  plt.plot(np.arange(1, 7), dist_avg.mean(1), '-o', label='Distractor', color='b')
+
+  options['epochs'] = ['MD']
+  choice_avg = []
+  for i in range(6):
+      choice_avg.append(avg_epochs(scores_choice[i], **options))
+  choice_avg = np.array(choice_avg)
+  plt.plot(np.arange(1, 7), choice_avg.mean(1), '-o', label='Choice')
+
+  plt.axhline(y=0.5, color='k', linestyle='--')
+
+  plt.legend(fontsize=10)
+  plt.xticks(np.arange(1, 7))
+  plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xlabel('Day')
+  plt.ylabel('Score')
+  plt.savefig('%s_scores_avg.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/129f980eaf4977707fb143d2eefa957a49c0485c.png]]
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Overlaps
+
+#+begin_src ipython
+  def get_overlaps(coefs, bias, **options):
+          X_days, y_days = get_X_y_days(**options)
+          X, y = get_X_y_S1_S2(X_days, y_days, **options)
+          print(X.shape)
+          return (np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  options['features'] = 'sample'
+  options['task'] = 'DualGo'
+
+  overlaps_sample2 = []
+  for day in range(1, 7):
+      options['day'] = day
+      overlaps_sample2.append(get_overlaps(coefs_sample[day-1], bias_sample[day-1], **options))
+  overlaps_sample2 = np.array(overlaps_sample2)
+
+  print(overlaps_sample2.shape)
+
+  options['features'] = 'choice'
+  options['task'] = 'DualGo'
+
+  overlaps_choice2 = []
+  for day in range(1, 7):
+      options['day'] = day
+      overlaps_choice2.append(get_overlaps(coefs_choice[day-1], bias_choice[day-1], **options))
+  overlaps_choice2 = np.array(overlaps_choice2)
+
+  print(overlaps_choice2.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 668, 84) X_S2 (16, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 668, 84) X_S2 (16, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 668, 84) X_S2 (16, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 668, 84) X_S2 (16, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 668, 84) X_S2 (16, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (16, 668, 84) X_S2 (16, 668, 84)
+  (32, 668, 84)
+  (6, 32, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 1 LASER 0
+  ##########################################
+  single day
+  X_S1 (29, 668, 84) X_S2 (3, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 2 LASER 0
+  ##########################################
+  single day
+  X_S1 (18, 668, 84) X_S2 (14, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 3 LASER 0
+  ##########################################
+  single day
+  X_S1 (20, 668, 84) X_S2 (12, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 4 LASER 0
+  ##########################################
+  single day
+  X_S1 (17, 668, 84) X_S2 (15, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 5 LASER 0
+  ##########################################
+  single day
+  X_S1 (20, 668, 84) X_S2 (12, 668, 84)
+  (32, 668, 84)
+  loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  X_days (1152, 668, 84) y_days (1152, 6)
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 6 LASER 0
+  ##########################################
+  single day
+  X_S1 (18, 668, 84) X_S2 (14, 668, 84)
+  (32, 668, 84)
+  (6, 32, 84)
+#+end_example
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1)/6) for i in range(7)]
+  cmap = plt.get_cmap('Reds')
+  colors2 = [cmap((i+1)/6) for i in range(7)]
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+
+  for i in range(6):
+      ax[0].plot(circcvl(-overlaps_sample[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(circcvl(-overlaps_dist[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(circcvl(-overlaps_choice[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+      ax[0].plot(circcvl(-overlaps_sample[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[1].plot(circcvl(-overlaps_dist[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[2].plot(circcvl(-overlaps_choice[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+
+  # ax[2].legend(fontsize=10)
+  ax[0].set_xlabel('Step')
+  ax[1].set_xlabel('Step')
+  ax[2].set_xlabel('Step')
+  ax[0].set_ylabel('Sample Overlap')
+  ax[1].set_ylabel('Distractor Overlap')
+  ax[2].set_ylabel('Choice Overlap')
+
+  plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/f0c79a1abf00c0aab0906d2ee1ceb5c5be417d7d.png]]
+
+#+begin_src ipython
+  options['epochs'] = ['ED']
+
+  sample_avg = []
+  for i in range(6):
+      sample_avg.append(avg_epochs(overlaps_sample[i][32:] - overlaps_sample[i][:32], **options))
+  sample_avg = np.array(sample_avg)
+  plt.plot(np.arange(1, 7), sample_avg.mean(1), '-o', label='Sample', color='r')
+
+
+  options['epochs'] = ['MD']
+  dist_avg = []
+  for i in range(6):
+      dist_avg.append(avg_epochs(overlaps_dist[i][32:] - overlaps_dist[i][:32], **options))
+  dist_avg = np.array(dist_avg)
+  plt.plot(np.arange(1, 7), dist_avg.mean(1), '-o', label='Dist', color='b')
+
+  options['epochs'] = ['CHOICE']
+  choice_avg = []
+  for i in range(6):
+      choice_avg.append(avg_epochs(overlaps_choice[i][32:] - overlaps_choice[i][:32], **options))
+  choice_avg = np.array(choice_avg)
+  plt.plot(np.arange(1, 7), choice_avg.mean(1), '-o', label='Choice', color='b')
+
+  plt.legend(fontsize=10)
+  plt.xticks(np.arange(1, 7))
+  # plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xlabel('Day')
+  plt.ylabel('Overlap')
+
+  plt.savefig('%s_overlaps_avg.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/e43fed1ec684b314db7b46cd5313e961d07a4ee6.png]]
+
+#+begin_src ipython
+a = np.linspace(-1, 1, 10)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  idx = a.argsort()
+  print(a[idx])
+#+end_src
+
+#+RESULTS:
+: [-1.         -0.77777778 -0.55555556 -0.33333333 -0.11111111  0.11111111
+:   0.33333333  0.55555556  0.77777778  1.        ]
