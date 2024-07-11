@@ -152,13 +152,8 @@ def create_df(y_raw, day=None):
     y_df.loc[y_df.sample_odor == 17, "sample_odor"] = 0
     y_df.loc[y_df.sample_odor == 18, "sample_odor"] = 1
 
-    # y_df.loc[y_df.tasks == 0, "dist_odor"] = np.nan
-    # y_df.loc[y_df.tasks == 13, "dist_odor"] = 0
-    # y_df.loc[y_df.tasks == 14, "dist_odor"] = 1
-
     y_df.loc[y_df.test_odor == 11, "test_odor"] = 0
     y_df.loc[y_df.test_odor == 12, "test_odor"] = 1
-
 
     y_df.loc[y_df.response == 1, "response"] = "correct_hit"
     y_df.loc[y_df.response == 2, "response"] = "incorrect_miss"
@@ -168,7 +163,6 @@ def create_df(y_raw, day=None):
     y_df.loc[y_df.tasks == 0, "tasks"] = "DPA"
     y_df.loc[y_df.tasks == 13, "tasks"] = "DualGo"
     y_df.loc[y_df.tasks == 14, "tasks"] = "DualNoGo"
-
 
     return y_df
 
@@ -215,9 +209,11 @@ def get_fluo_data(idx_day, **kwargs):
         y_raw = data["Events"].transpose()
 
         if "ACC" in mouse:
+            print(X_raw.shape)
             X_raw = X_raw.reshape(
                 (n_days, int(X_raw.shape[0] / n_days), X_raw.shape[1], X_raw.shape[2])
             )
+            print(X_raw.shape)
             y_raw = y_raw.T.reshape(
                 (n_days, int(y_raw.T.shape[0] / n_days), y_raw.T.shape[1])
             )
@@ -247,17 +243,18 @@ def get_X_y_days(**kwargs):
     mouse = kwargs["mouse"]
     n_days = kwargs["n_days"]
     days = np.arange(1, n_days + 1)
+    print(days)
 
     if kwargs["reload"] == 0:
         try:
-            print("loading files from", path + mouse)
+            print("Loading files from", path + mouse)
             X_days = pickle.load(open(path + mouse + "/X_days.pkl", "rb"))
             y_days = pd.read_pickle(path + mouse + "/y_days.pkl")
         except:
             kwargs["reload"] = 1
 
     if kwargs["reload"] == 1:
-        print("reading raw data")
+        print("Reading data from source file")
 
         if ("AP" in mouse):
             X_days, y_days = get_X_y_days_multi(mouse)
@@ -267,7 +264,7 @@ def get_X_y_days(**kwargs):
 
             for day in days:
                 X, y = get_fluo_data(idx_day=day, **kwargs)
-                print("X", X.shape, "y", y.shape)
+                # print("X", X.shape, "y", y.shape)
 
                 if "P" in mouse:
                     y_df = y
@@ -330,7 +327,6 @@ def get_X_y_mice(mice=gv.mice, days=gv.days, path=gv.filedir, IF_RELOAD=0):
 
 
 def get_X_y_S1_S2(X, y, **kwargs):
-    print("##########################################")
     print(
         "DATA:",
         "FEATURES",
@@ -344,7 +340,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
         "LASER",
         kwargs["laser"],
     )
-    print("##########################################")
+
     idx_trials = True
     if kwargs["trials"] == "correct":
         idx_trials = ~y.response.str.contains("incorrect")
@@ -383,21 +379,12 @@ def get_X_y_S1_S2(X, y, **kwargs):
             # pair
             idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_miss")
             # unpair
-            idx_S2 = (y.response == "incorrect_fa") | (y.response == "correct_rej")
+            # idx_S2 = (y.response == "incorrect_fa") | (y.response == "correct_rej")
+            idx_S2 = (y.response == "correct_rej") | (y.response == "incorrect_fa")
             idx_S3 = False
             idx_S4 = False
 
         idx_trials = True
-
-    # elif kwargs["features"] == "choice":
-    #     # lick
-    #     idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_fa")
-    #     # no lick
-    #     idx_S2 = (y.response == "incorrect_miss") | (y.response == "correct_rej")
-    #     idx_S3 = False
-    #     idx_S4 = False
-
-    #     idx_trials = True
 
     elif kwargs["features"] == "fa":
         # lick
@@ -498,7 +485,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_days = y.day > (kwargs["n_first"] + kwargs["n_middle"] + kwargs["n_discard"])
             # idx_days = (y.day == 4) | (y.day == 6)
     else:
-        print("single day")
+        # print("single day")
         idx_days = y.day == kwargs["day"]
 
     idx_laser = True

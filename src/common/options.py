@@ -180,7 +180,8 @@ def set_options(**kwargs):
         opts["n_discard"] = 1
         opts["n_first"] = 3  # 3 or 2
         opts["n_middle"] = 3 # 0 or 2
-
+    if "ACC" in opts["mouse"]:
+        opts["n_days"] = 5  # PrL 6, ACC 5 or multi 10
     if "17" in opts["mouse"]:
         opts["n_days"] = 8  # PrL 6, ACC 5 or multi 10
         opts["n_discard"] = 0
