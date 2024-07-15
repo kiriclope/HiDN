@@ -1,0 +1,1049 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import pickle as pkl
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import circmean
+from time import perf_counter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, TensorDataset, DataLoader
+from skorch import NeuralNetClassifier
+
+from sklearn.base import clone
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+
+from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.attractor.energy import run_energy, plot_energy
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.decode.bump import decode_bump, circcvl
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.common.options import set_options
+from src.preprocess.helpers import avg_epochs
+
+DEVICE = 'cuda:1'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+#+begin_src ipython
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+** Statistics
+#+begin_src ipython
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return ci_lower, ci_upper
+#+end_src
+
+#+RESULTS:
+
+** Other
+#+begin_src ipython
+def convert_seconds(seconds):
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def get_theta(a, b, GM=0, IF_NORM=0):
+
+    u, v = a, b
+
+    if GM:
+        v = b - np.dot(b, a) / np.dot(a, a) * a
+
+    if IF_NORM:
+        u = a / np.linalg.norm(a)
+        v = b / np.linalg.norm(b)
+
+    return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import scipy.stats as stats
+
+def plot_smooth(data, ax, color):
+    mean = data.mean(axis=0)
+    ci = smooth.std(axis=0, ddof=1) * 1.96
+
+    # Plot
+    ax.plot(mean, color=color)
+    ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
+
+#+end_src
+
+#+RESULTS:
+
+** plots
+#+begin_src ipython
+  def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
+      ci_ = None
+      energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+      if IF_BOOT:
+          _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
+      if ci_ is not None:
+          ci_ = ci_ / 2.0
+      return energy_, ci_
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_theta_energy(theta, energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
+    energy = energy[1:]
+    theta = theta[1:]
+
+    windowSize = int(window * energy.shape[0])
+    if SMOOTH:
+        # window = np.ones(windowSize) / windowSize
+        # energy = np.convolve(energy, window, mode='same')
+        energy = circcvl(energy, windowSize=windowSize)
+
+    ax.plot(theta, energy * 100, lw=4, color=color)
+
+    if ci is not None:
+        ax.fill_between(
+            theta,
+            (energy - ci[:, 0]) * 100,
+            (energy + ci[:, 1]) * 100,
+            alpha=0.1, color=color
+        )
+
+    ax.set_ylabel('Energy')
+    ax.set_xlabel('Pref. Location (°)')
+    ax.set_xticks([0, 90, 180, 270, 360])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def pkl_save(obj, name, path="."):
+    pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+def pkl_load(name, path="."):
+    return pkl.load(open(path + "/" + name, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Perceptron
+
+#+begin_src ipython
+class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+    def forward(self, input, target):
+        target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+        return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+class Perceptron(nn.Module):
+    def __init__(self, num_features, dropout_rate=0.0):
+        super(Perceptron, self).__init__()
+        self.linear = nn.Linear(num_features, 1)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        x = self.dropout(x)
+        hidden = self.linear(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          x = self.relu(self.linear(x))
+          x = self.dropout(x)
+          hidden = self.linear2(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+from skorch.callbacks import Callback
+from skorch.callbacks import EarlyStopping
+
+early_stopping = EarlyStopping(
+    monitor='train_loss',    # Metric to monitor
+    patience=5,              # Number of epochs to wait for improvement
+    threshold=0.001,       # Minimum change to qualify as an improvement
+    threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+    lower_is_better=True     # Set to True if lower metric values are better
+)
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+class RegularizedNet(NeuralNetClassifier):
+    def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
+        self.alpha = alpha  # Regularization strength
+        self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+        super().__init__(module, **kwargs)
+
+    def get_loss(self, y_pred, y_true, X=None, training=False):
+        # Call super method to compute primary loss
+        if y_pred.shape != y_true.shape:
+            y_true = y_true.unsqueeze(-1)
+
+        loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+        if self.alpha>0:
+            elastic_net_reg = 0
+            for param in self.module_.parameters():
+                elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+        # Add the elastic net regularization term to the primary loss
+        return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+* Decoding vs days
+** Helpers
+
+#+begin_src ipython
+  def hyper_tune(model, epoch, params, scoring, **options):
+
+      # load data
+      X_days, y_days = get_X_y_days(**options)
+      X, y = get_X_y_S1_S2(X_days, y_days, **options)
+      y[y==-1] = 0
+
+      options['epochs'] = [epoch]
+      X_avg = avg_epochs(X, **options).astype('float32')
+      print('X', X.shape, 'y', y.shape)
+
+      # Perform grid search
+      grid = GridSearchCV(model, params, refit=True, cv=5, scoring=scoring, n_jobs=30)
+      start = perf_counter()
+      print('hyperparam fitting ...')
+      grid.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      best_model = grid.best_estimator_
+      best_params = grid.best_params_
+      print(best_params)
+
+      # if refit true the best model is refitted to the whole dataset
+      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+      coefs, bias = rescale_coefs(best_model, coefs, bias)
+
+      # print('Computing overlaps')
+      # X_T = torch.transpose(torch.tensor(X, device=DEVICE), 1, 2).to(torch.float32)
+      # overlaps = best_model.named_steps['net'].module_(X_T).detach().cpu().numpy()
+      overlaps = (np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+      # cv = 5
+      cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=16)
+      # scores = None
+      # cross validated scores
+      print('Computing cv scores ...')
+      estimator = SlidingEstimator(clone(best_model), n_jobs=1,
+                                  scoring=scoring, verbose=False)
+      scores = cross_val_multiscore(estimator, X.astype('float32'), y,
+                                  cv=cv, n_jobs=-1, verbose=False)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      # # bootstrapped coefficients
+      # start = perf_counter()
+      # print('Bagging best model ...')
+      # bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=128)
+      # bagging_clf.fit(X_avg, y)
+      # end = perf_counter()
+      # print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      # coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=128)
+
+      # # overlaps
+      # # print('Computing overlaps')
+      # # overlaps = model.named_steps['net'].module_(torch.transpose(torch.tensor(X, device=DEVICE), 1, 2)).detach().cpu().numpy()
+      # # overlaps = -(np.swapaxes(X, 1, -1) @ coefs) / coefs.shape[-1] # / np.linalg.norm(coefs)
+      # overlaps = -(np.swapaxes(X, 1, -1) @ coefs) / np.linalg.norm(coefs)
+
+      return overlaps, scores, coefs, bias
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs_list = []
+      bias_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          coefs, bias = rescale_coefs(model, coefs, bias)
+
+          coefs_list.append(coefs)
+          bias_list.append(bias)
+
+      return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.base import BaseEstimator, TransformerMixin
+
+class LinearLayerScorer(BaseEstimator, TransformerMixin):
+    def __init__(self, model):
+        self.model = model
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        # Ensure the model is in evaluation mode
+        self.model.net.module_.eval()
+        with torch.no_grad():
+            # Retrieve the linear layer from the model
+            linear_layer = self.model.net.module_.linear
+            # Compute the output of the linear layer
+            linear_output = linear_layer(torch.tensor(X, dtype=torch.float32))
+        return -linear_output.numpy()
+#+end_src
+
+#+RESULTS:
+
+** Parameters
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  kwargs = {
+      'mouse': 'JawsM15',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+  }
+#+end_src
+
+#+RESULTS:
+
+** Fit
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['day'] = 1
+  X_days, y_days = get_X_y_days(**options)
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=X_data.shape[1],
+      module__dropout_rate=0.0,
+      alpha=0.01,
+      l1_ratio=options['l1_ratio'],
+      criterion=CustomBCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      verbose=0,
+      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  # pipe.append(("scaler", StandardScaler()))
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+
+#+begin_src ipython
+  params = {
+      'net__alpha': np.logspace(-4, 4, 10),
+      # 'net__l1_ratio': np.linspace(0, 1, 10),
+      # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+  }
+
+  scores_sample = []
+  overlaps_sample = []
+  coefs_sample = []
+  bias_sample = []
+
+  scores_dist = []
+  overlaps_dist = []
+  coefs_dist = []
+  bias_dist = []
+
+  scores_choice = []
+  overlaps_choice = []
+  coefs_choice = []
+  bias_choice = []
+
+  options['reload'] = 0
+  options['task'] = 'Dual'
+  scoring = 'f1_weighted'
+
+  # days = ['first', 'last']
+  days = np.arange(1, options['n_days']+1)
+
+  for day in days:
+      options['day'] = day
+
+      # options['task'] = 'all'
+      options['features'] = 'sample'
+      overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
+
+      scores_sample.append(scores)
+      overlaps_sample.append(overlaps)
+      coefs_sample.append(coefs)
+      bias_sample.append(bias)
+
+      options['task'] = 'Dual'
+      options['features'] = 'distractor'
+      overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='MD', params=params, scoring=scoring, **options)
+
+      scores_dist.append(scores)
+      overlaps_dist.append(overlaps)
+      coefs_dist.append(coefs)
+      bias_dist.append(bias)
+
+      # options['task'] = 'all'
+      options['features'] = 'choice'
+      overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='CHOICE', params=params, scoring=scoring, **options)
+
+      scores_choice.append(scores)
+      overlaps_choice.append(overlaps)
+      coefs_choice.append(coefs)
+      bias_choice.append(bias)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+: DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
+: X (64, 693, 84) y (64,)
+: hyperparam fitting ...
+: Elapsed (with compilation) = 0h 0m 13s
+: {'net__alpha': 9.999999999999999e-05}
+: Computing cv scores ...
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  _RemoteTraceback                          Traceback (most recent call last)
+  _RemoteTraceback:
+  """
+  Traceback (most recent call last):
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/externals/loky/process_executor.py", line 463, in _process_worker
+      r = call_item()
+          ^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/externals/loky/process_executor.py", line 291, in __call__
+      return self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py", line 588, in __call__
+      return [func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py", line 588, in <listcomp>
+      return [func(*args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^
+    File "<decorator-gen-478>", line 10, in _fit_and_score
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/mne/decoding/base.py", line 522, in _fit_and_score
+      estimator.fit(X_train, y_train, **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/mne/decoding/search_light.py", line 85, in fit
+      estimators = parallel(
+                   ^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/mne/decoding/search_light.py", line 86, in <genexpr>
+      p_func(self.base_estimator, split, y, pb.subset(pb_idx), **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/mne/decoding/search_light.py", line 332, in _sl_fit
+      est.fit(X[..., ii], y, **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/base.py", line 1152, in wrapper
+      return fit_method(estimator, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/pipeline.py", line 427, in fit
+      self._final_estimator.fit(Xt, y, **fit_params_last_step)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/classifier.py", line 165, in fit
+      return super(NeuralNetClassifier, self).fit(X, y, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1319, in fit
+      self.partial_fit(X, y, **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1278, in partial_fit
+      self.fit_loop(X, y, **fit_params)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1190, in fit_loop
+      self.run_single_epoch(iterator_train, training=True, prefix="train",
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1226, in run_single_epoch
+      step = step_fn(batch, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1105, in train_step
+      self._step_optimizer(step_fn)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1060, in _step_optimizer
+      optimizer.step(step_fn)
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/optimizer.py", line 391, in wrapper
+      out = func(*args, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/optimizer.py", line 76, in _use_grad
+      ret = func(self, *args, **kwargs)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/optim/adam.py", line 148, in step
+      loss = closure()
+             ^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1094, in step_fn
+      step = self.train_step_single(batch, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 993, in train_step_single
+      y_pred = self.infer(Xi, **fit_params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/skorch/net.py", line 1521, in infer
+      return self.module_(x, **fit_params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1532, in _wrapped_call_impl
+      return self._call_impl(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1541, in _call_impl
+      return forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/tmp/ipykernel_44758/2656591630.py", line 9, in forward
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1532, in _wrapped_call_impl
+      return self._call_impl(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1541, in _call_impl
+      return forward_call(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    File "/home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/torch/nn/modules/linear.py", line 116, in forward
+      return F.linear(input, self.weight, self.bias)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  RuntimeError: CUDA error: out of memory
+  CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+  For debugging consider passing CUDA_LAUNCH_BLOCKING=1.
+  Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+  """
+
+  The above exception was the direct cause of the following exception:
+
+  RuntimeError                              Traceback (most recent call last)
+  Cell In[21], line 34
+       32 # options['task'] = 'all'
+       33 options['features'] = 'sample'
+  ---> 34 overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
+       36 scores_sample.append(scores)
+       37 overlaps_sample.append(overlaps)
+
+  Cell In[16], line 42, in hyper_tune(model, epoch, params, scoring, **options)
+       39 print('Computing cv scores ...')
+       40 estimator = SlidingEstimator(clone(best_model), n_jobs=1,
+       41                             scoring=scoring, verbose=False)
+  ---> 42 scores = cross_val_multiscore(estimator, X.astype('float32'), y,
+       43                             cv=cv, n_jobs=-1, verbose=False)
+       44 end = perf_counter()
+       45 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+  File <decorator-gen-477>:10, in cross_val_multiscore(estimator, X, y, groups, scoring, cv, n_jobs, verbose, fit_params, pre_dispatch)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/mne/decoding/base.py:462, in cross_val_multiscore(estimator, X, y, groups, scoring, cv, n_jobs, verbose, fit_params, pre_dispatch)
+      458 parallel, p_func, n_jobs = parallel_func(
+      459     _fit_and_score, n_jobs, pre_dispatch=pre_dispatch
+      460 )
+      461 position = hasattr(estimator, "position")
+  --> 462 scores = parallel(
+      463     p_func(
+      464         estimator=clone(estimator),
+      465         X=X,
+      466         y=y,
+      467         scorer=scorer,
+      468         train=train,
+      469         test=test,
+      470         fit_params=fit_params,
+      471         verbose=verbose,
+      472         parameters=dict(position=ii % n_jobs) if position else None,
+      473     )
+      474     for ii, (train, test) in enumerate(cv_iter)
+      475 )
+      476 return np.array(scores)[:, 0, ...]
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1944, in Parallel.__call__(self, iterable)
+     1938 # The first item from the output is blank, but it makes the interpreter
+     1939 # progress until it enters the Try/Except block of the generator and
+     1940 # reach the first `yield` statement. This starts the aynchronous
+     1941 # dispatch of the tasks to the workers.
+     1942 next(output)
+  -> 1944 return output if self.return_generator else list(output)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1587, in Parallel._get_outputs(self, iterator, pre_dispatch)
+     1584     yield
+     1586     with self._backend.retrieval_context():
+  -> 1587         yield from self._retrieve()
+     1589 except GeneratorExit:
+     1590     # The generator has been garbage collected before being fully
+     1591     # consumed. This aborts the remaining tasks if possible and warn
+     1592     # the user if necessary.
+     1593     self._exception = True
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1691, in Parallel._retrieve(self)
+     1684 while self._wait_retrieval():
+     1685
+     1686     # If the callback thread of a worker has signaled that its task
+     1687     # triggered an exception, or if the retrieval loop has raised an
+     1688     # exception (e.g. `GeneratorExit`), exit the loop and surface the
+     1689     # worker traceback.
+     1690     if self._aborting:
+  -> 1691         self._raise_error_fast()
+     1692         break
+     1694     # If the next job is not ready for retrieval yet, we just wait for
+     1695     # async callbacks to progress.
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:1726, in Parallel._raise_error_fast(self)
+     1722 # If this error job exists, immediatly raise the error by
+     1723 # calling get_result. This job might not exists if abort has been
+     1724 # called directly or if the generator is gc'ed.
+     1725 if error_job is not None:
+  -> 1726     error_job.get_result(self.timeout)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:735, in BatchCompletionCallBack.get_result(self, timeout)
+      729 backend = self.parallel._backend
+      731 if backend.supports_retrieve_callback:
+      732     # We assume that the result has already been retrieved by the
+      733     # callback thread, and is stored internally. It's just waiting to
+      734     # be returned.
+  --> 735     return self._return_or_raise()
+      737 # For other backends, the main thread needs to run the retrieval step.
+      738 try:
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/parallel.py:753, in BatchCompletionCallBack._return_or_raise(self)
+      751 try:
+      752     if self.status == TASK_ERROR:
+  --> 753         raise self._result
+      754     return self._result
+      755 finally:
+
+  RuntimeError: CUDA error: out of memory
+  CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+  For debugging consider passing CUDA_LAUNCH_BLOCKING=1.
+  Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+#+end_example
+:END:
+
+#+begin_src ipython
+  try:
+      overlaps_sample = np.array(overlaps_sample)
+      overlaps_dist = np.array(overlaps_dist)
+      overlaps_choice = np.array(overlaps_choice)
+
+      scores_sample = np.array(scores_sample)
+      scores_dist = np.array(scores_dist)
+      scores_choice = np.array(scores_choice)
+
+      coefs_sample = np.array(coefs_sample)
+      coefs_dist = np.array(coefs_dist)
+      coefs_choice = np.array(coefs_choice)
+  except:
+      pass
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  try:
+      print('overlaps', overlaps_sample.shape, overlaps_dist.shape, overlaps_choice.shape)
+      print('scores', scores_sample.shape, scores_dist.shape, scores_choice.shape)
+      print('coefs', coefs_sample.shape, coefs_dist.shape, coefs_choice.shape)
+  except:
+      pass
+#+end_src
+
+#+RESULTS:
+: overlaps (0,) (0,) (0,)
+: scores (0,) (0,) (0,)
+: coefs (0,) (0,) (0,)
+
+* Save
+
+#+begin_src ipython
+  # overlaps = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
+  # print(overlaps.shape)
+  # pkl_save(overlaps, '%s_overlaps_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+
+  scores = np.stack((scores_sample, scores_dist, scores_choice))
+  print(scores.shape)
+  pkl_save(scores, '%s_scores' % options['mouse'], path="../data/%s/" % options['mouse'])
+
+  # coefs = np.stack((coefs_sample, coefs_dist, coefs_choice))
+  # print(coefs.shape)
+  # pkl_save(coefs, '%s_coefs_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+#+end_src
+
+#+RESULTS:
+: (3, 0)
+
+* Scores
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1)/ (options['n_days'])) for i in range(options['n_days'])]
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+
+  for i in range(options['n_days']):
+
+      ax[0].plot(circcvl(scores_sample[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(circcvl(scores_dist[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(circcvl(scores_choice[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+  ax[0].axhline(y=0.5, color='k', linestyle='--')
+  ax[1].axhline(y=0.5, color='k', linestyle='--')
+  ax[2].axhline(y=0.5, color='k', linestyle='--')
+
+  ax[2].legend(fontsize=10)
+  ax[0].set_xlabel('Step')
+  ax[1].set_xlabel('Step')
+  ax[2].set_xlabel('Step')
+  ax[0].set_ylabel('Sample Score')
+  ax[1].set_ylabel('Distractor Score')
+  ax[2].set_ylabel('Choice Score')
+
+  plt.savefig('%s_scores.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: [0;31m---------------------------------------------------------------------------[0m
+: [0;31mIndexError[0m                                Traceback (most recent call last)
+: Cell [0;32mIn[25], line 9[0m
+: [1;32m      5[0m fig, ax [38;5;241m=[39m plt[38;5;241m.[39msubplots([38;5;241m1[39m, [38;5;241m3[39m, figsize[38;5;241m=[39m [[38;5;241m2.5[39m [38;5;241m*[39m width, height])
+: [1;32m      7[0m [38;5;28;01mfor[39;00m i [38;5;129;01min[39;00m [38;5;28mrange[39m(options[[38;5;124m'[39m[38;5;124mn_days[39m[38;5;124m'[39m]):
+: [0;32m----> 9[0m     ax[[38;5;241m0[39m][38;5;241m.[39mplot(circcvl([41mscores_sample[49m[41m[[49m[41mi[49m[41m][49m[38;5;241m.[39mmean([38;5;241m0[39m), windowSize[38;5;241m=[39m[38;5;241m2[39m), label[38;5;241m=[39mi[38;5;241m+[39m[38;5;241m1[39m, color [38;5;241m=[39m colors[i]);
+: [1;32m     10[0m     ax[[38;5;241m1[39m][38;5;241m.[39mplot(circcvl(scores_dist[i][38;5;241m.[39mmean([38;5;241m0[39m), windowSize[38;5;241m=[39m[38;5;241m2[39m), label[38;5;241m=[39mi[38;5;241m+[39m[38;5;241m1[39m, color [38;5;241m=[39m colors[i]);
+: [1;32m     11[0m     ax[[38;5;241m2[39m][38;5;241m.[39mplot(circcvl(scores_choice[i][38;5;241m.[39mmean([38;5;241m0[39m), windowSize[38;5;241m=[39m[38;5;241m2[39m), label[38;5;241m=[39mi[38;5;241m+[39m[38;5;241m1[39m, color [38;5;241m=[39m colors[i]);
+:
+: [0;31mIndexError[0m: index 0 is out of bounds for axis 0 with size 0
+[[file:./.ob-jupyter/c0953f747d254de4fdcd2b04867c376c11c202bd.png]]
+:END:
+
+
+#+begin_src ipython
+  options['epochs'] = ['MD']
+  sample_avg = []
+  sample_ci = []
+  for i in range(options['n_days']):
+      sample_epoch = avg_epochs(scores_sample[i], **options)
+      sample_avg.append(sample_epoch.mean(0))
+      sample_ci.append(get_bootstrap_ci(sample_epoch))
+
+  sample_avg = np.array(sample_avg)
+  sample_ci = np.array(sample_ci).T
+
+  plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s Sample' % options['epochs'][0], color='r')
+  plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color='r', alpha=0.1)
+
+  options['epochs'] = ['MD']
+  dist_avg = []
+  dist_ci = []
+  for i in range(options['n_days']):
+      dist_epoch = avg_epochs(scores_dist[i], **options)
+      dist_avg.append(dist_epoch.mean(0))
+      dist_ci.append(get_bootstrap_ci(dist_epoch))
+
+  dist_avg = np.array(dist_avg)
+  dist_ci = np.array(dist_ci).T
+
+  plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s Distractor' % options['epochs'][0], color='b')
+  plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
+
+  options['epochs'] = ['LD']
+  choice_avg = []
+  choice_ci = []
+  for i in range(options['n_days']):
+      choice_epoch = avg_epochs(scores_choice[i], **options)
+      choice_avg.append(choice_epoch.mean(0))
+      choice_ci.append(get_bootstrap_ci(choice_epoch))
+
+  choice_avg = np.array(choice_avg)
+  choice_ci = np.array(choice_ci).T
+
+  plt.plot(np.arange(1, options['n_days']+1), choice_avg, '-o', label='%s Choice' % options['epochs'][0], color='g')
+  plt.fill_between(np.arange(1, options['n_days']+1), choice_ci[0], choice_ci[1], color='g', alpha=0.1)
+
+  plt.axhline(y=0.5, color='k', linestyle='--')
+
+  plt.legend(fontsize=10)
+  plt.xticks(np.arange(1, options['n_days']+1))
+  plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xlabel('Day')
+  plt.ylabel('Score')
+  plt.savefig('%s_scores_avg.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: [0;31m---------------------------------------------------------------------------[0m
+: [0;31mIndexError[0m                                Traceback (most recent call last)
+: Cell [0;32mIn[26], line 5[0m
+: [1;32m      3[0m sample_ci [38;5;241m=[39m []
+: [1;32m      4[0m [38;5;28;01mfor[39;00m i [38;5;129;01min[39;00m [38;5;28mrange[39m(options[[38;5;124m'[39m[38;5;124mn_days[39m[38;5;124m'[39m]):
+: [0;32m----> 5[0m     sample_epoch [38;5;241m=[39m avg_epochs([41mscores_sample[49m[41m[[49m[41mi[49m[41m][49m, [38;5;241m*[39m[38;5;241m*[39moptions)
+: [1;32m      6[0m     sample_avg[38;5;241m.[39mappend(sample_epoch[38;5;241m.[39mmean([38;5;241m0[39m))
+: [1;32m      7[0m     sample_ci[38;5;241m.[39mappend(get_bootstrap_ci(sample_epoch))
+:
+: [0;31mIndexError[0m: index 0 is out of bounds for axis 0 with size 0
+:END:
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Overlaps
+
+#+begin_src ipython
+  def get_overlaps(coefs, bias, **options):
+          X_days, y_days = get_X_y_days(**options)
+          X, y = get_X_y_S1_S2(X_days, y_days, **options)
+          print(X.shape)
+          return (np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+#+end_src
+
+#+RESULTS:
+
+#+begin_comment
+#+begin_src ipython
+  options['features'] = 'sample'
+  options['task'] = 'DualGo'
+
+  overlaps_sample2 = []
+  for day in range(1, 7):
+      options['day'] = day
+      overlaps_sample2.append(get_overlaps(coefs_sample[day-1], bias_sample[day-1], **options))
+  overlaps_sample2 = np.array(overlaps_sample2)
+
+  print(overlaps_sample2.shape)
+
+  options['features'] = 'choice'
+  options['task'] = 'DualGo'
+
+  overlaps_choice2 = []
+  for day in range(1, 7):
+      options['day'] = day
+      overlaps_choice2.append(get_overlaps(coefs_choice[day-1], bias_choice[day-1], **options))
+  overlaps_choice2 = np.array(overlaps_choice2)
+
+  print(overlaps_choice2.shape)
+    #+end_src
+#+END_comment
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1)/6) for i in range(7)]
+  cmap = plt.get_cmap('Reds')
+  colors2 = [cmap((i+1)/6) for i in range(7)]
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+
+  for i in range(6):
+      ax[0].plot(circcvl(overlaps_sample[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(circcvl(overlaps_dist[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(circcvl(overlaps_choice[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+      ax[0].plot(circcvl(overlaps_sample[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[1].plot(circcvl(overlaps_dist[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[2].plot(circcvl(overlaps_choice[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+
+  # ax[2].legend(fontsize=10)
+  ax[0].set_xlabel('Step')
+  ax[1].set_xlabel('Step')
+  ax[2].set_xlabel('Step')
+  ax[0].set_ylabel('Sample Overlap')
+  ax[1].set_ylabel('Distractor Overlap')
+  ax[2].set_ylabel('Choice Overlap')
+
+  plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: [0;31m---------------------------------------------------------------------------[0m
+: [0;31mIndexError[0m                                Traceback (most recent call last)
+: Cell [0;32mIn[28], line 10[0m
+: [1;32m      7[0m fig, ax [38;5;241m=[39m plt[38;5;241m.[39msubplots([38;5;241m1[39m, [38;5;241m3[39m, figsize[38;5;241m=[39m [[38;5;241m2.5[39m [38;5;241m*[39m width, height])
+: [1;32m      9[0m [38;5;28;01mfor[39;00m i [38;5;129;01min[39;00m [38;5;28mrange[39m([38;5;241m6[39m):
+: [0;32m---> 10[0m     ax[[38;5;241m0[39m][38;5;241m.[39mplot(circcvl([41moverlaps_sample[49m[41m[[49m[41mi[49m[41m][49m[:[38;5;241m32[39m][38;5;241m.[39mmean([38;5;241m0[39m), windowSize[38;5;241m=[39m[38;5;241m2[39m), label[38;5;241m=[39mi[38;5;241m+[39m[38;5;241m1[39m, color [38;5;241m=[39m colors[i]);
+: [1;32m     11[0m     ax[[38;5;241m1[39m][38;5;241m.[39mplot(circcvl(overlaps_dist[i][:[38;5;241m32[39m][38;5;241m.[39mmean([38;5;241m0[39m), windowSize[38;5;241m=[39m[38;5;241m2[39m), label[38;5;241m=[39mi[38;5;241m+[39m[38;5;241m1[39m, color [38;5;241m=[39m colors[i]);
+: [1;32m     12[0m     ax[[38;5;241m2[39m][38;5;241m.[39mplot(circcvl(overlaps_choice[i][:[38;5;241m32[39m][38;5;241m.[39mmean([38;5;241m0[39m), windowSize[38;5;241m=[39m[38;5;241m2[39m), label[38;5;241m=[39mi[38;5;241m+[39m[38;5;241m1[39m, color [38;5;241m=[39m colors[i]);
+:
+: [0;31mIndexError[0m: index 0 is out of bounds for axis 0 with size 0
+[[file:./.ob-jupyter/c0953f747d254de4fdcd2b04867c376c11c202bd.png]]
+:END:
+
+#+begin_src ipython
+    size = overlaps_sample.shape[1] // 2
+    options['epochs'] = ['MD']
+    sample_avg = []
+    sample_ci = []
+    for i in range(options['n_days']):
+        sample_epoch = avg_epochs(-overlaps_sample[i][size:] + overlaps_sample[i][:size], **options) / 2.0
+        sample_avg.append(sample_epoch.mean(0))
+        sample_ci.append(get_bootstrap_ci(sample_epoch))
+
+    sample_avg = np.array(sample_avg)
+    sample_ci = np.array(sample_ci).T
+
+    plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s Sample' % options['epochs'][0], color='r')
+    plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color='r', alpha=0.1)
+
+    size = overlaps_dist.shape[1] // 2
+    options['epochs'] = ['MD']
+    dist_avg = []
+    dist_ci = []
+    for i in range(options['n_days']):
+        dist_epoch = avg_epochs(overlaps_dist[i][size:] + overlaps_dist[i][:size], **options) / 2.0
+        dist_avg.append(dist_epoch.mean(0))
+        dist_ci.append(get_bootstrap_ci(dist_epoch))
+
+    dist_avg = np.array(dist_avg)
+    dist_ci = np.array(dist_ci).T
+
+    plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s Distractor' % options['epochs'][0], color='b')
+    plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
+
+    size = overlaps_choice.shape[1] // 2
+    options['epochs'] = ['MD']
+    choice_avg = []
+    choice_ci = []
+    for i in range(options['n_days']):
+        choice_epoch = avg_epochs(overlaps_choice[i][size:] + overlaps_choice[i][:size], **options) / 2.0
+        choice_avg.append(choice_epoch.mean(0))
+        choice_ci.append(get_bootstrap_ci(choice_epoch))
+
+    choice_avg = np.array(choice_avg)
+    choice_ci = np.array(choice_ci).T
+
+    plt.plot(np.arange(1, options['n_days']+1), choice_avg, '-o', label='%s Choice' % options['epochs'][0], color='g')
+    plt.fill_between(np.arange(1, options['n_days']+1), choice_ci[0], choice_ci[1], color='g', alpha=0.1)
+
+    plt.axhline(y=0.0, color='k', linestyle='--')
+
+    plt.legend(fontsize=10)
+    plt.xticks(np.arange(1, options['n_days']+1))
+    plt.xlabel('Day')
+    plt.ylabel('Overlap')
+    plt.savefig('%s_overlaps_avg.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: [0;31m---------------------------------------------------------------------------[0m
+: [0;31mIndexError[0m                                Traceback (most recent call last)
+: Cell [0;32mIn[29], line 1[0m
+: [0;32m----> 1[0m size [38;5;241m=[39m [41moverlaps_sample[49m[38;5;241;41m.[39;49m[41mshape[49m[41m[[49m[38;5;241;41m1[39;49m[41m][49m [38;5;241m/[39m[38;5;241m/[39m [38;5;241m2[39m
+: [1;32m      2[0m options[[38;5;124m'[39m[38;5;124mepochs[39m[38;5;124m'[39m] [38;5;241m=[39m [[38;5;124m'[39m[38;5;124mMD[39m[38;5;124m'[39m]
+: [1;32m      3[0m sample_avg [38;5;241m=[39m []
+:
+: [0;31mIndexError[0m: tuple index out of range
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

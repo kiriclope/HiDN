@@ -231,7 +231,7 @@ def preprocess_X(
 
 def deconvolve_trial_neuron(X):
     BL = np.mean(X[:11])
-    c, s, b, g, lam = deconvolve(X, b=BL)
+    c, s, b, g, lam = deconvolve(X, g=(None,None), penalty=0)
     return s
 
 def dcvl_df(X):

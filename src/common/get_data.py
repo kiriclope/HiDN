@@ -209,11 +209,11 @@ def get_fluo_data(idx_day, **kwargs):
         y_raw = data["Events"].transpose()
 
         if "ACC" in mouse:
-            print(X_raw.shape)
+            # print(X_raw.shape)
             X_raw = X_raw.reshape(
                 (n_days, int(X_raw.shape[0] / n_days), X_raw.shape[1], X_raw.shape[2])
             )
-            print(X_raw.shape)
+            # print(X_raw.shape)
             y_raw = y_raw.T.reshape(
                 (n_days, int(y_raw.T.shape[0] / n_days), y_raw.T.shape[1])
             )
@@ -243,7 +243,7 @@ def get_X_y_days(**kwargs):
     mouse = kwargs["mouse"]
     n_days = kwargs["n_days"]
     days = np.arange(1, n_days + 1)
-    print(days)
+    # print(days)
 
     if kwargs["reload"] == 0:
         try:
@@ -280,7 +280,7 @@ def get_X_y_days(**kwargs):
         pickle.dump(X_days, open(path + mouse + "/X_days.pkl", "wb"))
         y_days.to_pickle(path + mouse + "/y_days.pkl")
 
-    print("X_days", X_days.shape, "y_days", y_days.shape)
+        # print("X_days", X_days.shape, "y_days", y_days.shape)
 
     if kwargs["preprocess"]:
         print("##########################################")
@@ -304,7 +304,7 @@ def get_X_y_days(**kwargs):
 
 def get_X_y_mice(mice=gv.mice, days=gv.days, path=gv.filedir, IF_RELOAD=0):
     if IF_RELOAD == 0:
-        print("loading files from", path + "mice")
+        print("Loading files from", path + "mice")
         X_mice = pickle.load(open(path + "mice" + "/X_mice.pkl", "rb"))
         y_mice = pd.read_pickle(path + "mice" + "/y_mice.pkl")
     else:
@@ -503,7 +503,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
     X_S3 = X[idx_S3 & idx_trials & idx_days & idx_laser & idx_tasks]
     X_S4 = X[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
 
-    print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
+    # print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
     if X_S3.shape[0] > 0:
         print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
 
