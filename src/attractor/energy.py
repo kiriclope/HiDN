@@ -197,7 +197,7 @@ def run_energy(X_, num_bins, bins, task, window, IF_HMM=0, VERBOSE=0, n_iter=100
     else:
       X = X_[task]
 
-    print('X', X.shape)
+    # print('X', X.shape)
     if IF_NORM:
         X = preprocess_X(X, scaler="robust", avg_noise=0, unit_var=0)
 

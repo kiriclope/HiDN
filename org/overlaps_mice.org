@@ -1,0 +1,199 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder_mice :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import pickle as pkl
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import circmean
+from time import perf_counter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from skorch import NeuralNetClassifier
+
+from sklearn.base import clone
+from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import cross_val_score, cross_validate
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+
+from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
+from src.decode.my_mne import my_cross_val_multiscore
+from mne.decoding import SlidingEstimator, get_coef
+
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.attractor.energy import run_energy, plot_energy
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.decode.bump import decode_bump, circcvl
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.common.options import set_options
+from src.preprocess.helpers import avg_epochs
+
+import torch.optim as optim
+from torch.utils.data import Dataset, TensorDataset, DataLoader
+DEVICE = 'cuda:1'
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Statistics
+#+begin_src ipython
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return ci_lower, ci_upper
+#+end_src
+
+#+RESULTS:
+* Data
+#+begin_src ipython
+  from scipy.io import loadmat
+
+  path = "/home/leon/dual_task/dual_data/data"
+  mouse = "ACCM03"
+  data = loadmat(path + "/" + mouse + "/SamedROI/" + mouse + "_all_days" + ".mat")
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  FileNotFoundError                         Traceback (most recent call last)
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/io/matlab/_mio.py:39, in _open_file(file_like, appendmat, mode)
+       38 try:
+  ---> 39     return open(file_like, mode), True
+       40 except OSError as e:
+       41     # Probably "not found"
+
+  FileNotFoundError: [Errno 2] No such file or directory: '/home/leon/dual_task/dual_data/data/JawsM15/SamedROI/JawsM15_all_days.mat'
+
+  During handling of the above exception, another exception occurred:
+
+  FileNotFoundError                         Traceback (most recent call last)
+  Cell In[38], line 5
+        3 path = "/home/leon/dual_task/dual_data/data"
+        4 mouse = "JawsM15"
+  ----> 5 data = loadmat(path + "/" + mouse + "/SamedROI/" + mouse + "_all_days" + ".mat")
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/io/matlab/_mio.py:225, in loadmat(file_name, mdict, appendmat, **kwargs)
+       88 """
+       89 Load MATLAB file.
+       90
+     (...)
+      222     3.14159265+3.14159265j])
+      223 """
+      224 variable_names = kwargs.pop('variable_names', None)
+  --> 225 with _open_file_context(file_name, appendmat) as f:
+      226     MR, _ = mat_reader_factory(f, **kwargs)
+      227     matfile_dict = MR.get_variables(variable_names)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/contextlib.py:137, in _GeneratorContextManager.__enter__(self)
+      135 del self.args, self.kwds, self.func
+      136 try:
+  --> 137     return next(self.gen)
+      138 except StopIteration:
+      139     raise RuntimeError("generator didn't yield") from None
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/io/matlab/_mio.py:17, in _open_file_context(file_like, appendmat, mode)
+       15 @contextmanager
+       16 def _open_file_context(file_like, appendmat, mode='rb'):
+  ---> 17     f, opened = _open_file(file_like, appendmat, mode)
+       18     try:
+       19         yield f
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/io/matlab/_mio.py:45, in _open_file(file_like, appendmat, mode)
+       43     if appendmat and not file_like.endswith('.mat'):
+       44         file_like += '.mat'
+  ---> 45     return open(file_like, mode), True
+       46 else:
+       47     raise OSError(
+       48         'Reader needs file name or open file-like object'
+       49     ) from e
+
+  FileNotFoundError: [Errno 2] No such file or directory: '/home/leon/dual_task/dual_data/data/JawsM15/SamedROI/JawsM15_all_days.mat'
+#+end_example
+:END:
+
+#+begin_src ipython
+  print(data.keys())
+#+end_src
+
+#+RESULTS:
+: dict_keys(['__header__', '__version__', '__globals__', 'FR_Trial', 'basFrame', 'blockPerDay', 'delayFrame', 'delayPeriodFrame', 'frameRate', 'laserTag', 'rewardFrame', 'sampleFrame', 'testFrame', 'trialPerBlock', 'dff_Mice', 'Cdf_Mice', 'Events', 'trialPerDay'])
+
+#+begin_src ipython
+  print(data['Events'].shape[0]/192)
+#+end_src
+
+#+RESULTS:
+: 5.0
+
+#+begin_src ipython
+  print(data['blockPerDay'])
+  print(data['trialPerBlock'])
+  print(data['trialPerDay'])
+#+end_src
+
+#+RESULTS:
+: [[4]]
+: [[48]]
+: [[192]]
+
+#+begin_src ipython
+  print(data['dff_Mice'].shape)
+#+end_src
+
+#+RESULTS:
+: (113, 960, 84)
+
+#+begin_src ipython
+  print(data['Events'])
+#+end_src
+
+#+RESULTS:
+: [[17 12  3 ...  0  0  0]
+:  [18 12  1 ...  0  0  0]
+:  [17 11  1 ...  0  0  0]
+:  ...
+:  [18 11  4 ...  0  0  0]
+:  [17 12  4 ...  0  0  0]
+:  [17 12  3 ...  0  0  0]]
+
+#+begin_src ipython
+  print(np.sum(data['Events'][:, 4]==0))
+#+end_src
+
+#+RESULTS:
+: 320

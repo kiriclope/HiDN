@@ -283,6 +283,9 @@ def avg_epochs(X, **kwargs):
         elif epoch == "STIM":
             X_STIM = np.nanmean(X[..., kwargs["bins_STIM"]], axis=-1)
             X_epochs[i_epoch] = X_STIM
+        elif epoch == "STIM_ED":
+            X_STIM = np.nanmean(X[..., kwargs["bins_STIM_ED"]], axis=-1)
+            X_epochs[i_epoch] = X_STIM
         elif epoch == "ED":
             X_ED = np.nanmean(X[..., kwargs["bins_ED"]], axis=-1)
             X_epochs[i_epoch] = X_ED
@@ -294,6 +297,9 @@ def avg_epochs(X, **kwargs):
             X_epochs[i_epoch] = X_DIST
         elif epoch == "PRE_DIST":
             X_DIST = np.nanmean(X[..., kwargs["bins_PRE_DIST"]], axis=-1)
+            X_epochs[i_epoch] = X_DIST
+        elif epoch == "POST_DIST":
+            X_DIST = np.nanmean(X[..., kwargs["bins_POST_DIST"]], axis=-1)
             X_epochs[i_epoch] = X_DIST
         elif epoch == "MD":
             X_MD = np.nanmean(X[..., kwargs["bins_MD"]], axis=-1)

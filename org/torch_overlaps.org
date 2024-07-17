@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session overlap :kernel dual_data
 
 * Notebook Settings
 
@@ -14,10 +14,13 @@
 #+end_src
 
 #+RESULTS:
+:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
 
 * Imports
 
@@ -41,7 +44,7 @@ from sklearn.base import clone
 from sklearn.ensemble import BaggingClassifier
 from sklearn.preprocessing import StandardScaler, RobustScaler
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold, LeaveOneOut
 
 from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
 
@@ -88,7 +91,7 @@ DEVICE = 'cuda:1'
   def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
       result = bootstrap((data,), statistic)
       ci_lower, ci_upper = result.confidence_interval
-      return ci_lower, ci_upper
+      return np.array([ci_lower, ci_upper])
 #+end_src
 
 #+RESULTS:
@@ -299,8 +302,11 @@ class RegularizedNet(NeuralNetClassifier):
       X_avg = avg_epochs(X, **options).astype('float32')
       print('X', X.shape, 'y', y.shape)
 
+      # cv = 3
+      cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
+      # cv = LeaveOneOut()
       # Perform grid search
-      grid = GridSearchCV(model, params, refit=True, cv=5, scoring=scoring, n_jobs=30)
+      grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=30)
       start = perf_counter()
       print('hyperparam fitting ...')
       grid.fit(X_avg, y)
@@ -311,6 +317,7 @@ class RegularizedNet(NeuralNetClassifier):
       best_params = grid.best_params_
       print(best_params)
 
+      scores = None
       # if refit true the best model is refitted to the whole dataset
       # coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
       # bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
@@ -322,32 +329,24 @@ class RegularizedNet(NeuralNetClassifier):
       # overlaps = best_model.named_steps['net'].module_(X_T).detach().cpu().numpy()
       # overlaps = (np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
 
-      # cv = 5
-      # cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=10)
-      scores = None
-      # cross validated scores
-      # print('Computing cv scores ...')
-      # estimator = SlidingEstimator(clone(best_model), n_jobs=30,
-      #                             scoring=scoring, verbose=False)
-      # scores = cross_val_multiscore(estimator, X.astype('float32'), y,
-      #                             cv=cv, n_jobs=-1, verbose=False)
-      # end = perf_counter()
-      # print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
       # # bootstrapped coefficients
       start = perf_counter()
       print('Bagging best model ...')
-      bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=128)
+      bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=64)
       bagging_clf.fit(X_avg, y)
       end = perf_counter()
       print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
 
-      coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=128)
+      coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=64)
 
       # overlaps
       # print('Computing overlaps')
       # overlaps = model.named_steps['net'].module_(torch.transpose(torch.tensor(X, device=DEVICE), 1, 2)).detach().cpu().numpy()
-      # overlaps = -(np.swapaxes(X, 1, -1) @ coefs) / coefs.shape[-1] # / np.linalg.norm(coefs)
+      # overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / coefs.shape[-1] * 100 # / np.linalg.norm(coefs)
+      if options['trials'] == 'correct':
+          options['trials'] = ''
+          X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
       overlaps = -(np.swapaxes(X, 1, -1) @ coefs) / np.linalg.norm(coefs)
 
       return overlaps, scores, coefs, bias
@@ -375,24 +374,24 @@ class RegularizedNet(NeuralNetClassifier):
 #+RESULTS:
 
 #+begin_src ipython
-from sklearn.base import BaseEstimator, TransformerMixin
+  from sklearn.base import BaseEstimator, TransformerMixin
 
-class LinearLayerScorer(BaseEstimator, TransformerMixin):
-    def __init__(self, model):
-        self.model = model
+  class LinearLayerScorer(BaseEstimator, TransformerMixin):
+      def __init__(self, model):
+          self.model = model
 
-    def fit(self, X, y=None):
-        return self
+      def fit(self, X, y=None):
+          return self
 
-    def transform(self, X, y=None):
-        # Ensure the model is in evaluation mode
-        self.model.net.module_.eval()
-        with torch.no_grad():
-            # Retrieve the linear layer from the model
-            linear_layer = self.model.net.module_.linear
-            # Compute the output of the linear layer
-            linear_output = linear_layer(torch.tensor(X, dtype=torch.float32))
-        return -linear_output.numpy()
+      def transform(self, X, y=None):
+          # Ensure the model is in evaluation mode
+          self.model.net.module_.eval()
+          with torch.no_grad():
+              # Retrieve the linear layer from the model
+              linear_layer = self.model.net.module_.linear
+              # Compute the output of the linear layer
+              linear_output = linear_layer(torch.tensor(X, dtype=torch.float32))
+          return -linear_output.numpy()
 #+end_src
 
 #+RESULTS:
@@ -404,7 +403,7 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
   tasks = ['DPA', 'DualGo', 'DualNoGo']
 
   kwargs = {
-      'mouse': 'JawsM18',
+      'mouse': 'ACCM03',
       'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
       'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
       'random_state': None, 'T_WINDOW': 0.0,
@@ -413,7 +412,6 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 #+end_src
 
 #+RESULTS:
-
 
 ** Fit
 
@@ -447,11 +445,8 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 #+end_src
 
 #+RESULTS:
-: [1 2 3 4 5 6]
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-: X_days (1152, 444, 84) y_days (1152, 6)
+: Loading files from /home/leon/dual_task/dual_data/data/ACCM03
 : DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
-: X_S1 (16, 444, 84) X_S2 (16, 444, 84)
 
 #+begin_src ipython
   params = {
@@ -515,204 +510,126 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 
 #+RESULTS:
 #+begin_example
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 13s
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.000774263682681127}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 2s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 7s
   {'net__alpha': 0.005994842503189409}
   Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 31s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
+  Elapsed (with compilation) = 0h 0m 16s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
+  Elapsed (with compilation) = 0h 0m 4s
+  {'net__alpha': 0.046415888336127774}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 2s
   {'net__alpha': 0.005994842503189409}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 17s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.005994842503189409}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 15s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.005994842503189409}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 10s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.046415888336127774}
   Bagging best model ...
   Elapsed (with compilation) = 0h 0m 7s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
-  X_S1 (51, 444, 84) X_S2 (13, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 4s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 5s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
-  X_S1 (42, 444, 84) X_S2 (22, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 5s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 4s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
   Elapsed (with compilation) = 0h 0m 4s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
+  {'net__alpha': 0.005994842503189409}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 13s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   DATA: FEATURES choice TASK Dual TRIALS  DAYS 3 LASER 0
-  X_S1 (38, 444, 84) X_S2 (26, 444, 84)
-  X (64, 444, 84) y (64,)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 5s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 30s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 4s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
-  X_S1 (33, 444, 84) X_S2 (31, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 5s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 30s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
   Elapsed (with compilation) = 0h 0m 3s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
-  X_S1 (33, 444, 84) X_S2 (31, 444, 84)
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
   {'net__alpha': 0.000774263682681127}
   Bagging best model ...
   Elapsed (with compilation) = 0h 0m 3s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 6 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
+  Elapsed (with compilation) = 0h 0m 3s
   {'net__alpha': 0.005994842503189409}
   Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 29s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
+  Elapsed (with compilation) = 0h 0m 18s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.046415888336127774}
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.005994842503189409}
   Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 3s
-  [1 2 3 4 5 6]
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  X_days (1152, 444, 84) y_days (1152, 6)
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 6 LASER 0
-  X_S1 (32, 444, 84) X_S2 (32, 444, 84)
-  X (64, 444, 84) y (64,)
+  Elapsed (with compilation) = 0h 0m 10s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 0s
-  {'net__alpha': 0.046415888336127774}
+  Elapsed (with compilation) = 0h 0m 3s
+  {'net__alpha': 9.999999999999999e-05}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 11s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.000774263682681127}
   Bagging best model ...
   Elapsed (with compilation) = 0h 0m 2s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.000774263682681127}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 2s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
+  X (128, 361, 84) y (128,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 4s
+  {'net__alpha': 9.999999999999999e-05}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 19s
 #+end_example
 
 #+begin_src ipython
@@ -744,29 +661,41 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 #+end_src
 
 #+RESULTS:
-: overlaps (6, 64, 84) (6, 64, 84) (6, 64, 84)
-: scores (6,) (6,) (6,)
-: coefs (6, 444) (6, 444) (6, 444)
+: overlaps (5, 128, 84) (5, 128, 84) (5, 128, 84)
+: scores (5,) (5,) (5,)
+: coefs (5, 361) (5, 361) (5, 361)
 
 * Save
 
 #+begin_src ipython
-  overlaps = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
-  print(overlaps.shape)
-  pkl_save(overlaps, '%s_overlaps_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+  overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
+  print(overlaps_save.shape)
+  pkl_save(overlaps_save, '%s_overlaps_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+  # pkl_save(overlaps, '%s_overlaps_%.2f_l1_ratio_loocv' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+  # options['l1_ratio'] = 'tuned'
+  # pkl_save(overlaps, '%s_overlaps_%s_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
 
   # scores = np.stack((scores_sample, scores_dist, scores_choice))
   # print(scores.shape)
   # pkl_save(scores, '%s_scores' % options['mouse'], path="../data/%s/" % options['mouse'])
 
-  coefs = np.stack((coefs_sample, coefs_dist, coefs_choice))
-  print(coefs.shape)
+  coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
+  print(coefs_save.shape)
   pkl_save(coefs, '%s_coefs_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+  # pkl_save(coefs, '%s_coefs_%.2f_l1_ratio_loocv' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+  # pkl_save(coefs, '%s_coefs_%s_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+
+  #+end_src
+
+#+RESULTS:
+: (3, 5, 128, 84)
+: (3, 5, 361)
+
+#+begin_src ipython
+  # overlaps = pkl_load('%s_overlaps_%.2f_l1_ratio_loocv' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
 #+end_src
 
 #+RESULTS:
-: (3, 6, 64, 84)
-: (3, 6, 444)
 
 * Overlaps
 
@@ -808,21 +737,23 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 
 #+begin_src ipython
   cmap = plt.get_cmap('Blues')
-  colors = [cmap((i+1)/6) for i in range(7)]
+  colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
   cmap = plt.get_cmap('Reds')
-  colors2 = [cmap((i+1)/6) for i in range(7)]
+  colors2 = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
   width = 6
   golden_ratio = (5**.5 - 1) / 2
+  size = overlaps_sample.shape[1] // 2
+
   fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
 
-  for i in range(6):
-      ax[0].plot(circcvl(overlaps_sample[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[1].plot(circcvl(overlaps_dist[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[2].plot(circcvl(overlaps_choice[i][:32].mean(0), windowSize=2), label=i+1, color = colors[i]);
+  for i in range(options['n_days']):
+      ax[0].plot(circcvl(overlaps_sample[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(circcvl(overlaps_dist[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(circcvl(overlaps_choice[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
 
-      ax[0].plot(circcvl(overlaps_sample[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-      ax[1].plot(circcvl(overlaps_dist[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-      ax[2].plot(circcvl(overlaps_choice[i][32:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[0].plot(circcvl(overlaps_sample[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[1].plot(circcvl(overlaps_dist[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[2].plot(circcvl(overlaps_choice[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
 
   # ax[2].legend(fontsize=10)
   ax[0].set_xlabel('Step')
@@ -837,13 +768,15 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/ea22379afac8b220777b3e7418586b4323ad76c5.png]]
+[[file:./.ob-jupyter/d60561ff9215b99d81739629f7a99df27ca43f64.png]]
 
 #+begin_src ipython
+    options['T_WINDOW'] = 0
     size = overlaps_sample.shape[1] // 2
-    options['epochs'] = ['MD']
+    options['epochs'] = ['STIM_ED']
     sample_avg = []
     sample_ci = []
+
     for i in range(options['n_days']):
         sample_epoch = avg_epochs(-overlaps_sample[i][size:] + overlaps_sample[i][:size], **options) / 2.0
         sample_avg.append(sample_epoch.mean(0))
@@ -856,7 +789,7 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
     plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color='r', alpha=0.1)
 
     size = overlaps_dist.shape[1] // 2
-    options['epochs'] = ['MD']
+    options['epochs'] = ['STIM_ED']
     dist_avg = []
     dist_ci = []
     for i in range(options['n_days']):
@@ -871,7 +804,7 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
     plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
 
     size = overlaps_choice.shape[1] // 2
-    options['epochs'] = ['MD']
+    options['epochs'] = ['ED']
     choice_avg = []
     choice_ci = []
     for i in range(options['n_days']):
@@ -896,7 +829,7 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/b441ebb8e3deed4e4cc91a0a464abc505858d489.png]]
+[[file:./.ob-jupyter/ddc1c93f120e25f8841b831d97dd88806b68bc89.png]]
 
 #+begin_src ipython
 
@@ -904,159 +837,275 @@ class LinearLayerScorer(BaseEstimator, TransformerMixin):
 
 #+RESULTS:
 
-* COMMENT Scores
+* COMMENT Overlaps mice
 
 #+begin_src ipython
-  cmap = plt.get_cmap('Blues')
-  colors = [cmap((i+1)/ (options['n_days'])) for i in range(options['n_days'])]
-  width = 6
-  golden_ratio = (5**.5 - 1) / 2
-  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  # mice = ['JawsM15']
+  l1_ratio = 0.95
 
-  for i in range(options['n_days']):
+  overlaps_mice = []
 
-      ax[0].plot(circcvl(scores_sample[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[1].plot(circcvl(scores_dist[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[2].plot(circcvl(scores_choice[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-
-  ax[0].axhline(y=0.5, color='k', linestyle='--')
-  ax[1].axhline(y=0.5, color='k', linestyle='--')
-  ax[2].axhline(y=0.5, color='k', linestyle='--')
-
-  ax[2].legend(fontsize=10)
-  ax[0].set_xlabel('Step')
-  ax[1].set_xlabel('Step')
-  ax[2].set_xlabel('Step')
-  ax[0].set_ylabel('Sample Score')
-  ax[1].set_ylabel('Distractor Score')
-  ax[2].set_ylabel('Choice Score')
-
-  plt.savefig('%s_scores.svg' % options['mouse'], dpi=300)
-  plt.show()
+  for mouse in mice:
+      print('mouse', mouse)
+      try:
+          # overlaps = pkl_load('%s_overlaps_tuned_l1_ratio.pkl' % mouse, path="../data/%s/" % mouse)
+          overlaps = pkl_load('%s_overlaps_%.2f_l1_ratio.pkl' % (mouse, l1_ratio), path="../data/%s/" % mouse)
+          print(overlaps.shape)
+          overlaps_mice.append(overlaps)
+      except:
+          print('file not found')
+          overlaps_mice.append(np.ones((6, 2, 84)))
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: AttributeError                            Traceback (most recent call last)
-: Cell In[28], line 9
-:       5 fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
-:       7 for i in range(options['n_days']):
-: ----> 9     ax[0].plot(circcvl(scores_sample[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-:      10     ax[1].plot(circcvl(scores_dist[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-:      11     ax[2].plot(circcvl(scores_choice[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-:
-: AttributeError: 'NoneType' object has no attribute 'mean'
-[[file:./.ob-jupyter/c0953f747d254de4fdcd2b04867c376c11c202bd.png]]
-:END:
-
+: mouse ChRM04
+: (3, 6, 64, 84)
+: mouse JawsM15
+: (3, 6, 64, 84)
+: mouse JawsM18
+: (3, 6, 64, 84)
+: mouse ACCM03
+: (3, 5, 128, 84)
+: mouse ACCM04
+: (3, 5, 128, 84)
 
 #+begin_src ipython
-  options['epochs'] = ['MD']
-  sample_avg = []
-  sample_ci = []
-  for i in range(options['n_days']):
-      sample_epoch = avg_epochs(scores_sample[i], **options)
-      sample_avg.append(sample_epoch.mean(0))
-      sample_ci.append(get_bootstrap_ci(sample_epoch))
-
-  sample_avg = np.array(sample_avg)
-  sample_ci = np.array(sample_ci).T
-
-  plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s Sample' % options['epochs'][0], color='r')
-  plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color='r', alpha=0.1)
-
-  options['epochs'] = ['MD']
-  dist_avg = []
-  dist_ci = []
-  for i in range(options['n_days']):
-      dist_epoch = avg_epochs(scores_dist[i], **options)
-      dist_avg.append(dist_epoch.mean(0))
-      dist_ci.append(get_bootstrap_ci(dist_epoch))
-
-  dist_avg = np.array(dist_avg)
-  dist_ci = np.array(dist_ci).T
-
-  plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s Distractor' % options['epochs'][0], color='b')
-  plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
-
+  options = set_options(**kwargs)
   options['epochs'] = ['LD']
-  choice_avg = []
-  choice_ci = []
-  for i in range(options['n_days']):
-      choice_epoch = avg_epochs(scores_choice[i], **options)
-      choice_avg.append(choice_epoch.mean(0))
-      choice_ci.append(get_bootstrap_ci(choice_epoch))
 
-  choice_avg = np.array(choice_avg)
-  choice_ci = np.array(choice_ci).T
+  sample_mice = []
+  for i in range(len(mice)):
+      overlaps_sample = overlaps_mice[i][0]
+      size = overlaps_sample.shape[1] // 2
+      sample_avg = []
+      sample_ci = []
+      for j in range(overlaps_sample.shape[0]):
+          sample_epoch = avg_epochs(-overlaps_sample[j][size:] + overlaps_sample[j][:size], **options) / 2.0
+          sample_avg.append(sample_epoch.mean(0))
+          sample_ci.append(get_bootstrap_ci(sample_epoch))
 
-  plt.plot(np.arange(1, options['n_days']+1), choice_avg, '-o', label='%s Choice' % options['epochs'][0], color='g')
-  plt.fill_between(np.arange(1, options['n_days']+1), choice_ci[0], choice_ci[1], color='g', alpha=0.1)
+      sample_avg = np.array(sample_avg)
+      if sample_avg.shape[0] !=6:
+          sample_avg = np.append(sample_avg, np.nan)
 
-  plt.axhline(y=0.5, color='k', linestyle='--')
+      sample_mice.append(sample_avg)
 
-  plt.legend(fontsize=10)
-  plt.xticks(np.arange(1, options['n_days']+1))
-  plt.yticks([0.4, 0.6, 0.8, 1.0])
+      sample_ci = np.array(sample_ci).T
+
+      plt.plot(np.arange(1, 6+1), sample_avg, '-', label='%s Sample' % options['epochs'][0], color='b', alpha=0.05)
+      # plt.fill_between(np.arange(1, overlaps_sample.shape[0]+1), sample_ci[0], sample_ci[1], color='b', alpha=0.1)
+
+  sample_mice = np.array(sample_mice)
+  sample_ci = get_bootstrap_ci(sample_mice)
+  sample_ci_last = get_bootstrap_ci(sample_mice[:3][-1])
+  sample_ci[0][-1] = sample_ci_last[0]
+  sample_ci[1][-1] = sample_ci_last[1]
+
+  plt.plot(np.arange(1, 7), np.nanmean(sample_mice, 0), '-or')
+  plt.fill_between(np.arange(1, 7), sample_ci[0], sample_ci[1], color='r', alpha=0.1)
+  plt.axhline(y=0.0, color='k', linestyle='--')
   plt.xlabel('Day')
-  plt.ylabel('Score')
-  plt.savefig('%s_scores_avg.svg' % options['mouse'], dpi=300)
+  plt.ylabel('Sample Overlap')
+  plt.savefig('overlaps_mice.svg', dpi=300)
+
   plt.show()
 #+end_src
 
 #+RESULTS:
 :RESULTS:
-# [goto error]
-#+begin_example
-  ---------------------------------------------------------------------------
-  AttributeError                            Traceback (most recent call last)
-  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/lib/nanfunctions.py:222, in _divide_by_count(a, b, out)
-      221 try:
-  --> 222     return a.dtype.type(a / b)
-      223 except AttributeError:
-
-  AttributeError: 'NoneType' object has no attribute 'dtype'
-
-  During handling of the above exception, another exception occurred:
-
-  TypeError                                 Traceback (most recent call last)
-  Cell In[29], line 5
-        3 sample_ci = []
-        4 for i in range(options['n_days']):
-  ----> 5     sample_epoch = avg_epochs(scores_sample[i], **options)
-        6     sample_avg.append(sample_epoch.mean(0))
-        7     sample_ci.append(get_bootstrap_ci(sample_epoch))
-
-  File ~/dual_task/dual_data/src/preprocess/helpers.py:275, in avg_epochs(X, **kwargs)
-      274 def avg_epochs(X, **kwargs):
-  --> 275     X_avg = np.nanmean(X, axis=-1)
-      277     X_epochs = np.empty(tuple([len(kwargs["epochs"])]) + X_avg.shape)
-      279     for i_epoch, epoch in enumerate(kwargs["epochs"]):
-
-  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/lib/nanfunctions.py:1048, in nanmean(a, axis, dtype, out, keepdims, where)
-     1044 cnt = np.sum(~mask, axis=axis, dtype=np.intp, keepdims=keepdims,
-     1045              where=where)
-     1046 tot = np.sum(arr, axis=axis, dtype=dtype, out=out, keepdims=keepdims,
-     1047              where=where)
-  -> 1048 avg = _divide_by_count(tot, cnt, out=out)
-     1050 isbad = (cnt == 0)
-     1051 if isbad.any():
-
-  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/lib/nanfunctions.py:224, in _divide_by_count(a, b, out)
-      222         return a.dtype.type(a / b)
-      223     except AttributeError:
-  --> 224         return a / b
-      225 else:
-      226     # This is questionable, but currently a numpy scalar can
-      227     # be output to a zero dimensional array.
-      228     return np.divide(a, b, out=out, casting='unsafe')
-
-  TypeError: unsupported operand type(s) for /: 'NoneType' and 'int'
-#+end_example
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:100: DegenerateDataWarning: The BCa confidence interval cannot be calculated. This problem is known to occur when the distribution is degenerate or the statistic is np.min.
+:   warnings.warn(DegenerateDataWarning(msg))
+[[file:./.ob-jupyter/06829d8e10157db63a94585a96ea05565cb934ab.png]]
 :END:
 
+#+begin_src ipython
+  options['T_WINDOW'] = 0
+  options = set_options(**kwargs)
+  options['epochs'] = ['STIM_ED']
+
+  dist_mice = []
+  for i in range(len(mice)):
+      overlaps_dist = overlaps_mice[i][1]
+
+      if i==2:
+          overlaps_dist = - overlaps_dist
+
+      size = overlaps_dist.shape[1] // 2
+
+      dist_avg = []
+      dist_ci = []
+      for j in range(overlaps_dist.shape[0]):
+          dist_epoch = avg_epochs(overlaps_dist[j][size:] + overlaps_dist[j][:size], **options) / 2.0
+          dist_avg.append(dist_epoch.mean(0))
+          dist_ci.append(get_bootstrap_ci(dist_epoch))
+
+      dist_avg = np.array(dist_avg)
+      if dist_avg.shape[0] !=6:
+          dist_avg = np.append(dist_avg, np.nan)
+
+      dist_mice.append(dist_avg)
+
+      dist_ci = np.array(dist_ci).T
+
+      plt.plot(np.arange(1, 6+1), dist_avg, '-', label='%s Distractor' % options['epochs'][0], color='b', alpha=0.1)
+      # plt.fill_between(np.arange(1, overlaps_dist.shape[0]+1), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
+
+  dist_mice = np.array(dist_mice)
+  dist_ci = get_bootstrap_ci(dist_mice, statistic=np.nanmean)
+  dist_ci_last = get_bootstrap_ci(dist_mice[:3][-1], statistic=np.nanmean)
+  dist_ci[0][-1] = dist_ci_last[0]
+  dist_ci[1][-1] = dist_ci_last[1]
+
+  plt.plot(np.arange(1, 7), np.nanmean(dist_mice, 0), '-ob')
+  plt.fill_between(np.arange(1, 7), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
+  plt.axhline(y=0.0, color='k', linestyle='--')
+  plt.xlabel('Day')
+  plt.ylabel('Dist. Overlap')
+  plt.xticks(np.arange(1,7))
+  plt.savefig('overlaps_mice.svg', dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:630: RuntimeWarning: Mean of empty slice
+:   theta_hat_b.append(statistic(*resampled_data, axis=-1))
+[[file:./.ob-jupyter/39fb9a6257f2cc3093c2b86b7c52221113918029.png]]
+:END:
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['epochs'] = ['LD']
+
+  choice_mice = []
+  for i in range(len(mice)):
+      overlaps_choice = overlaps_mice[i][2]
+      size = overlaps_choice.shape[1] // 2
+      choice_avg = []
+      choice_ci = []
+      for j in range(overlaps_choice.shape[0]):
+          choice_epoch = avg_epochs(-overlaps_choice[j][size:] + overlaps_choice[j][:size], **options) / 2.0
+          choice_avg.append(choice_epoch.mean(0))
+          choice_ci.append(get_bootstrap_ci(choice_epoch))
+
+      choice_avg = np.array(choice_avg)
+      if choice_avg.shape[0] !=6:
+          choice_avg = np.append(choice_avg, np.nan)
+
+      choice_mice.append(choice_avg)
+
+      choice_ci = np.array(choice_ci).T
+
+      plt.plot(np.arange(1, 6+1), choice_avg, 'x-', label='%s Choice' % options['epochs'][0], color='g', alpha=0.05)
+      # plt.fill_between(np.arange(1, overlaps_choice.shape[0]+1), choice_ci[0], choice_ci[1], color='g', alpha=0.05)
+
+  choice_mice = np.array(choice_mice)
+
+  choice_ci = get_bootstrap_ci(choice_mice, statistic=np.nanmean, n_resamples=10000)
+  choice_ci_last = get_bootstrap_ci(choice_mice[:3][-1], statistic=np.nanmean, n_resamples=10000)
+  choice_ci[0][-1] = choice_ci_last[0]
+  choice_ci[1][-1] = choice_ci_last[1]
+
+  plt.plot(np.arange(1, 7), np.nanmean(choice_mice, 0), '-og')
+  plt.fill_between(np.arange(1, 7), choice_ci[0], choice_ci[1], color='g', alpha=0.1)
+  plt.axhline(y=0.0, color='k', linestyle='--')
+  # plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xticks(np.arange(1,7))
+  plt.xlabel('Day')
+  plt.ylabel('Choice Overlap')
+  plt.savefig('mice_overlaps_choice.svg', dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/988086f33ad87e960ae8f6207ba47afff9732578.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Cosine Mice
+
+#+begin_src ipython
+  def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return np.arccos(A_norm @ B_norm) * 180 / np.pi
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  # mice = ['ChRM04', 'JawsM15', 'JawsM18']
+  l1_ratio = 0.95
+
+  coefs_mice = []
+  angles_mice = []
+
+  for mouse in mice:
+      print(mouse)
+      try:
+          coefs = pkl_load('%s_coefs_%.2f_l1_ratio_loocv.pkl' % (mouse, l1_ratio), path="../data/%s/" % mouse)
+          angles = np.diag(angle_AB(coefs[0], coefs[1].T))
+          if angles.shape[0]!=6:
+              angles = np.append(angles, np.nan)
+
+          print(coefs.shape, angles.shape)
+
+          coefs_mice.append(coefs)
+          angles_mice.append(angles)
+      except:
+           print('file not found')
+
+  angles_mice = np.array(angles_mice)
+#+end_src
+
+#+RESULTS:
+: ChRM04
+: (3, 6, 668) (6,)
+: JawsM15
+: (3, 6, 693) (6,)
+: JawsM18
+: (3, 6, 444) (6,)
+: ACCM03
+: (3, 5, 361) (6,)
+: ACCM04
+: (3, 5, 113) (6,)
+
+#+RESULTS:
+
+#+begin_src ipython
+  # print(angles_mice.shape)
+  for i in range(len(mice)):
+      plt.plot(np.arange(1, 7), angles_mice[i], alpha=0.1)
+
+  angles_ci = get_bootstrap_ci(angles_mice, statistic=np.nanmean, n_resamples=10000)
+
+  angles_ci_last = get_bootstrap_ci(angles_mice[:3][-1], statistic=np.nanmean, n_resamples=10000)
+  angles_ci[0][-1] = angles_ci_last[0]
+  angles_ci[1][-1] = angles_ci_last[1]
+
+  plt.plot(np.arange(1, 7), np.nanmean(angles_mice, 0), 'k')
+  plt.fill_between(np.arange(1, 7), angles_ci[0], angles_ci[1], color='g', alpha=0.25)
+  plt.axhline(y=90.0, color='k', linestyle='--')
+
+  plt.xticks(np.arange(1,7))
+  plt.xlabel('Day')
+  plt.ylabel('Angle Sample/Dist. (°)')
+  plt.savefig('mice_angles.svg', dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/bb41a280f15d2cb709acb36e754b4de06425925c.png]]
 
 #+begin_src ipython
 
