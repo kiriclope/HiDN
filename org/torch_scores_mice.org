@@ -1,0 +1,861 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session scores :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import pickle as pkl
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import circmean
+from time import perf_counter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, TensorDataset, DataLoader
+from skorch import NeuralNetClassifier
+
+from sklearn.base import clone
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold, LeaveOneOut
+from sklearn.decomposition import PCA
+
+from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.attractor.energy import run_energy, plot_energy
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.decode.bump import decode_bump, circcvl
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.common.options import set_options
+from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Perceptron
+
+#+begin_src ipython
+class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+    def forward(self, input, target):
+        target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+        return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+class Perceptron(nn.Module):
+    def __init__(self, num_features, dropout_rate=0.0):
+        super(Perceptron, self).__init__()
+        self.linear = nn.Linear(num_features, 1)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        x = self.dropout(x)
+        hidden = self.linear(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          x = self.relu(self.linear(x))
+          x = self.dropout(x)
+          hidden = self.linear2(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+from skorch.callbacks import Callback
+from skorch.callbacks import EarlyStopping
+
+early_stopping = EarlyStopping(
+    monitor='train_loss',    # Metric to monitor
+    patience=5,              # Number of epochs to wait for improvement
+    threshold=0.001,       # Minimum change to qualify as an improvement
+    threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+    lower_is_better=True     # Set to True if lower metric values are better
+)
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+class RegularizedNet(NeuralNetClassifier):
+    def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
+        self.alpha = alpha  # Regularization strength
+        self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+        super().__init__(module, **kwargs)
+
+    def get_loss(self, y_pred, y_true, X=None, training=False):
+        # Call super method to compute primary loss
+        if y_pred.shape != y_true.shape:
+            y_true = y_true.unsqueeze(-1)
+
+        loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+        if self.alpha>0:
+            elastic_net_reg = 0
+            for param in self.module_.parameters():
+                elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+        # Add the elastic net regularization term to the primary loss
+        return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+** Other
+
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs_list = []
+      bias_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          coefs, bias = rescale_coefs(model, coefs, bias)
+
+          coefs_list.append(coefs)
+          bias_list.append(bias)
+
+      return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def convert_seconds(seconds):
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def pkl_save(obj, name, path="."):
+    pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+def pkl_load(name, path="."):
+    return pkl.load(open(path + "/" + name, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:1'
+
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  mice = ['JawsM15']
+  N_NEURONS = [361]
+
+  # mice = ['ChRM04','JawsM18']
+  # N_NEURONS = [668, 444]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  kwargs = {
+      'mouse': 'ACCM03',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': True,
+      'scaler_BL': 'robust', 'avg_noise': True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95, 'laser':0,
+      'n_comp': 16,
+  }
+
+  options = set_options(**kwargs)
+  options['fname'] = '_scaled_BL_DualGo'
+#+end_src
+
+#+RESULTS:
+
+* Decoding vs days
+** Helpers
+
+#+begin_src ipython
+  def hyper_tune(model, epoch, params, scoring, **options):
+
+      # load data
+      X_days, y_days = get_X_y_days(**options)
+      X, y = get_X_y_S1_S2(X_days, y_days, **options)
+      y[y==-1] = 0
+
+      options['epochs'] = [epoch]
+      X_avg = avg_epochs(X, **options).astype('float32')
+      print('X', X.shape, 'y', y.shape)
+
+      # cv = 3
+      cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
+      # cv = LeaveOneOut()
+      # Perform grid search
+      grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=30)
+      start = perf_counter()
+      print('hyperparam fitting ...')
+      grid.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      best_model = grid.best_estimator_
+      best_params = grid.best_params_
+      print(best_params)
+
+      cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
+      # cross validated scores
+      print('Computing cv scores ...')
+      estimator = SlidingEstimator(clone(best_model), n_jobs=1,
+                                  scoring=scoring, verbose=False)
+      scores = cross_val_multiscore(estimator, X.astype('float32'), y,
+                                  cv=cv, n_jobs=-1, verbose=False)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      return scores
+#+end_src
+
+#+RESULTS:
+
+** Fit
+
+#+begin_src ipython
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=693,
+      module__dropout_rate=0.0,
+      alpha=0.01,
+      l1_ratio=options['l1_ratio'],
+      criterion=CustomBCEWithLogitsLoss,
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      verbose=0,
+      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  if options['scaler'] is not None:
+      pipe.append(("scaler", StandardScaler()))
+  if options['n_comp'] is not None:
+      pipe.append(("pca", PCA(n_components=options['n_comp'])))
+
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  params = {
+    'net__alpha': np.logspace(-4, 4, 10),
+    # 'net__l1_ratio': np.linspace(0, 1, 10),
+    # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+  }
+
+  options['reload'] = 0
+  options['task'] = 'Dual'
+  scoring = 'roc_auc'
+
+  # days = ['first', 'last']
+
+  for mouse in mice:
+    options['mouse'] = mouse
+    options = set_options(**options)
+    days = np.arange(1, options['n_days']+1)
+
+    # days = ['first', 'middle', 'last']
+
+    if options['n_comp'] is None:
+      index = mice.index(mouse)
+      pipe['net'].module__num_features = N_NEURONS[index]
+    else:
+      pipe['net'].module__num_features = options['n_comp']
+
+    scores_sample = []
+    scores_dist = []
+    scores_choice = []
+
+    for day in days:
+        options['day'] = day
+
+        options['task'] = 'DualGo'
+        options['features'] = 'sample'
+        scores = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
+
+        scores_sample.append(scores)
+
+        options['task'] = 'Dual'
+        options['features'] = 'distractor'
+        scores = hyper_tune(pipe, epoch='MD', params=params, scoring=scoring, **options)
+
+        scores_dist.append(scores)
+
+        options['task'] = 'DualGo'
+        options['features'] = 'choice'
+        scores = hyper_tune(pipe, epoch='CHOICE', params=params, scoring=scoring, **options)
+
+        scores_choice.append(scores)
+
+    scores_save = np.stack((scores_sample, scores_dist, scores_choice))
+    print(scores_save.shape)
+    pkl_save(scores_save, '%s_scores_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/joblib/externals/loky/process_executor.py:752: UserWarning: A worker stopped while some jobs were given to the executor. This can be caused by a too short worker timeout or by a memory leak.
+    warnings.warn(
+  Elapsed (with compilation) = 0h 0m 36s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 14s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 19s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 8s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 1 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 17s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 55s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 18s
+  {'net__alpha': 2.782559402207126}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 59s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 24s
+  {'net__alpha': 0.3593813663804626}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 4s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 2 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 17s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 1s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 18s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 14s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 24s
+  {'net__alpha': 9.999999999999999e-05}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 4m 17s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 3 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 22s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 13s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 18s
+  {'net__alpha': 0.3593813663804626}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 52s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 24s
+  {'net__alpha': 0.000774263682681127}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 59s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 4 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 16s
+  {'net__alpha': 0.000774263682681127}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 2m 8s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 16s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 18s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 20s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 24s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 5 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 19s
+  {'net__alpha': 0.046415888336127774}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 10s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 16s
+  {'net__alpha': 0.005994842503189409}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 11s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
+  X (64, 693, 84) y (64,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 18s
+  {'net__alpha': 2.782559402207126}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 1m 4s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  ##########################################
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  ##########################################
+  DATA: FEATURES choice TASK DualGo TRIALS  DAYS 6 LASER 0
+  X (32, 693, 84) y (32,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 17s
+  {'net__alpha': 0.3593813663804626}
+  Computing cv scores ...
+  Elapsed (with compilation) = 0h 0m 53s
+  (3, 6, 30, 84)
+#+end_example
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Scores mice
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  mice = ['JawsM15', 'JawsM18']
+  mouse = 'JawsM15'
+
+  l1_ratio = 0.95
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  kwargs = {
+      'mouse': 'ACCM03',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+  }
+
+  options = set_options(**options)
+  fname = options['fname']
+  print(fname)
+#+end_src
+
+#+RESULTS:
+: _scaled_BL_DualGo
+
+#+begin_src ipython
+  scores_mice = []
+
+  for mouse in mice:
+      filename = '%s_scores_%.2f_l1_ratio%s.pkl' % (mouse, l1_ratio, fname)
+      print(filename)
+      try:
+          scores = pkl_load(filename, path="../data/%s/" % mouse)
+          print('scores', scores.shape)
+          scores_mice.append(scores)
+      except:
+          print('file not found')
+          scores_mice.append(np.nan * np.ones((3, 6, 2, 84)))
+#+end_src
+
+#+RESULTS:
+: JawsM15_scores_0.95_l1_ratio_scaled_BL_DualGo.pkl
+: scores (3, 6, 30, 84)
+: JawsM18_scores_0.95_l1_ratio_scaled_BL_DualGo.pkl
+: file not found
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+
+  cmap = plt.get_cmap('Reds')
+  colors2 = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
+
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+  mouse = 'JawsM15'
+  index = mice.index(mouse)
+
+  scores_sample = scores_mice[index][0]
+  scores_dist = scores_mice[index][1]
+  scores_choice = scores_mice[index][2]
+
+  size = scores_sample.shape[1] // 2
+
+  for i in range(options['n_days']):
+      ax[0].plot(circcvl(scores_sample[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(circcvl(scores_dist[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(circcvl(scores_choice[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+  # ax[2].legend(fontsize=10)
+  ax[0].set_xlabel('Step')
+  ax[1].set_xlabel('Step')
+  ax[2].set_xlabel('Step')
+  ax[0].set_ylabel('Sample Score')
+  ax[1].set_ylabel('Distractor Score')
+  ax[2].set_ylabel('Choice Score')
+  ax[0].axhline(y=0.5, color='k', linestyle='--')
+
+  plt.savefig('%s_scores.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/41021294feb6342f94464e6c601e40f03f05d655.png]]
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['T_WINDOW'] = 0
+  options['epochs'] = ['LD']
+
+  sample_mice = []
+  for i in range(len(mice)):
+      scores_sample = scores_mice[i][0]
+      size = scores_sample.shape[1] // 2
+      sample_avg = []
+      sample_ci = []
+      for j in range(scores_sample.shape[0]):
+          sample_epoch = avg_epochs(scores_sample[j], **options)
+          sample_avg.append(sample_epoch.mean(0))
+          sample_ci.append(get_bootstrap_ci(sample_epoch))
+
+      sample_avg = np.array(sample_avg)
+      while sample_avg.shape[0] !=6:
+          sample_avg = np.append(sample_avg, np.nan)
+
+      sample_mice.append(sample_avg)
+
+      sample_ci = np.array(sample_ci).T
+
+      plt.plot(np.arange(1, 6+1), sample_avg, '-', color='b', alpha=0.05)
+      # plt.fill_between(np.arange(1, scores_sample.shape[0]+1), sample_ci[0], sample_ci[1], color='b', alpha=0.1)
+
+  sample_mice = np.array(sample_mice)
+  sample_ci = get_bootstrap_ci(sample_mice)
+  sample_ci_last = get_bootstrap_ci(sample_mice[:3][-1])
+  sample_ci[0][-1] = sample_ci_last[0]
+  sample_ci[1][-1] = sample_ci_last[1]
+
+  plt.plot(np.arange(1, 7), np.nanmean(sample_mice, 0), '-or', label='n=%d' % len(mice))
+  plt.fill_between(np.arange(1, 7), sample_ci[0], sample_ci[1], color='r', alpha=0.1)
+  plt.axhline(y=0.5, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
+  plt.xlabel('Day')
+  plt.ylabel('Sample Score')
+  plt.xticks(np.arange(1,7))
+  plt.yticks([0.5, 0.6, 0.7, 0.8])
+  plt.savefig('./figs/mice_scores_sample%s.svg' % fname, dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: /home/leon/dual_task/dual_data/src/preprocess/helpers.py:275: RuntimeWarning: Mean of empty slice
+:   X_avg = np.nanmean(X, axis=-1)
+: /home/leon/dual_task/dual_data/src/preprocess/helpers.py:314: RuntimeWarning: Mean of empty slice
+:   X_LD = np.nanmean(X[..., kwargs["bins_LD"]], axis=-1)
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:100: DegenerateDataWarning: The BCa confidence interval cannot be calculated. This problem is known to occur when the distribution is degenerate or the statistic is np.min.
+:   warnings.warn(DegenerateDataWarning(msg))
+[[file:./.ob-jupyter/60a331b1cfbf164516f6de210dc3f51731960922.png]]
+:END:
+
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['T_WINDOW'] = 0
+  options['epochs'] = ['LD']
+
+  dist_mice = []
+  for i in range(len(mice)):
+      scores_dist = scores_mice[i][1]
+      size = scores_dist.shape[1] // 2
+      dist_avg = []
+      dist_ci = []
+      for j in range(scores_dist.shape[0]):
+          dist_epoch = avg_epochs(scores_dist[j], **options)
+          dist_avg.append(dist_epoch.mean(0))
+          dist_ci.append(get_bootstrap_ci(dist_epoch))
+
+      dist_avg = np.array(dist_avg)
+      while dist_avg.shape[0] !=6:
+          dist_avg = np.append(dist_avg, np.nan)
+
+      dist_mice.append(dist_avg)
+
+      dist_ci = np.array(dist_ci).T
+
+      plt.plot(np.arange(1, 6+1), dist_avg, '-', color='b', alpha=0.05)
+      # plt.fill_between(np.arange(1, scores_dist.shape[0]+1), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
+
+  dist_mice = np.array(dist_mice)
+  dist_ci = get_bootstrap_ci(dist_mice)
+  dist_ci_last = get_bootstrap_ci(dist_mice[:3][-1])
+  dist_ci[0][-1] = dist_ci_last[0]
+  dist_ci[1][-1] = dist_ci_last[1]
+
+  plt.plot(np.arange(1, 7), np.nanmean(dist_mice, 0), '-ob', label='n=%d' % len(mice))
+  plt.fill_between(np.arange(1, 7), dist_ci[0], dist_ci[1], color='r', alpha=0.1)
+  plt.axhline(y=0.5, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
+  plt.xlabel('Day')
+  plt.ylabel('Dist. Score')
+  plt.xticks(np.arange(1,7))
+  plt.yticks([0.5, 0.6, 0.7, 0.8])
+  plt.savefig('./figs/mice_scores_dist%s.svg' % fname, dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/7a56a582a5172caadf596a8042945c1d9b5ca26c.png]]
+
+#+begin_src ipython
+  options = set_options(**kwargs)
+  options['epochs'] = ['LD']
+
+  choice_mice = []
+  for i in range(len(mice)):
+      scores_choice = scores_mice[i][2]
+      size = scores_choice.shape[1] // 2
+      choice_avg = []
+      choice_ci = []
+      for j in range(scores_choice.shape[0]):
+          choice_epoch = avg_epochs(scores_choice[j], **options)
+          choice_avg.append(choice_epoch.mean(0))
+          choice_ci.append(get_bootstrap_ci(choice_epoch))
+
+      choice_avg = np.array(choice_avg)
+      while choice_avg.shape[0] !=6:
+          choice_avg = np.append(choice_avg, np.nan)
+
+      choice_mice.append(choice_avg)
+
+      choice_ci = np.array(choice_ci).T
+
+      plt.plot(np.arange(1, 6+1), choice_avg, 'x-', color='g', alpha=0.05)
+      # plt.fill_between(np.arange(1, scores_choice.shape[0]+1), choice_ci[0], choice_ci[1], color='g', alpha=0.05)
+
+  choice_mice = np.array(choice_mice)
+
+  choice_ci = get_bootstrap_ci(choice_mice, statistic=np.nanmean, n_resamples=10000)
+  choice_ci_last = get_bootstrap_ci(choice_mice[:3][-1], statistic=np.nanmean, n_resamples=10000)
+  choice_ci[0][-1] = choice_ci_last[0]
+  choice_ci[1][-1] = choice_ci_last[1]
+
+  plt.plot(np.arange(1, 7), np.nanmean(choice_mice, 0), '-og', label='n=%d' % len(mice))
+  plt.fill_between(np.arange(1, 7), choice_ci[0], choice_ci[1], color='g', alpha=0.1)
+  plt.axhline(y=0.5, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
+  plt.yticks([0.4, 0.5, 0.6, 0.7])
+  plt.xticks(np.arange(1,7))
+  plt.xlabel('Day')
+  plt.ylabel('Choice Score')
+  plt.savefig('./figs/mice_scores_choice%s.svg' %fname, dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:630: RuntimeWarning: Mean of empty slice
+:   theta_hat_b.append(statistic(*resampled_data, axis=-1))
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:130: RuntimeWarning: Mean of empty slice
+:   theta_hat_i.append(statistic(*broadcasted, axis=-1))
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:113: RuntimeWarning: Mean of empty slice
+:   theta_hat = np.asarray(statistic(*data, axis=axis))[..., None]
+[[file:./.ob-jupyter/29198847b3f613464004080b95a1dfa1eb8eb269.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

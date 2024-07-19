@@ -14,13 +14,10 @@
 #+end_src
 
 #+RESULTS:
-:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
-: <Figure size 700x432.624 with 0 Axes>
-:END:
 
 * Imports
 
@@ -56,148 +53,12 @@ from src.decode.bump import decode_bump, circcvl
 from src.common.get_data import get_X_y_days, get_X_y_S1_S2
 from src.common.options import set_options
 from src.preprocess.helpers import avg_epochs
-
-DEVICE = 'cuda:1'
 #+end_src
 
 #+RESULTS:
 
 * Helpers
-#+begin_src ipython
-  def rescale_coefs(model, coefs, bias):
-
-          try:
-                  means = model.named_steps["scaler"].mean_
-                  scales = model.named_steps["scaler"].scale_
-
-                  # Rescale the coefficients
-                  rescaled_coefs = np.true_divide(coefs, scales)
-
-                  # Adjust the intercept
-                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
-
-                  return rescaled_coefs, rescaled_bias
-          except:
-                  return coefs, bias
-
-#+end_src
-
-#+RESULTS:
-
-** Statistics
-#+begin_src ipython
-  from scipy.stats import bootstrap
-
-  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
-      result = bootstrap((data,), statistic)
-      ci_lower, ci_upper = result.confidence_interval
-      return np.array([ci_lower, ci_upper])
-#+end_src
-
-#+RESULTS:
-
-** Other
-#+begin_src ipython
-def convert_seconds(seconds):
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
-    return h, m, s
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-def get_theta(a, b, GM=0, IF_NORM=0):
-
-    u, v = a, b
-
-    if GM:
-        v = b - np.dot(b, a) / np.dot(a, a) * a
-
-    if IF_NORM:
-        u = a / np.linalg.norm(a)
-        v = b / np.linalg.norm(b)
-
-    return np.arctan2(v, u) % (2.0 * np.pi)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import scipy.stats as stats
-
-def plot_smooth(data, ax, color):
-    mean = data.mean(axis=0)
-    ci = smooth.std(axis=0, ddof=1) * 1.96
-
-    # Plot
-    ax.plot(mean, color=color)
-    ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
-
-#+end_src
-
-#+RESULTS:
-
-** plots
-#+begin_src ipython
-  def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
-      ci_ = None
-      energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
-      if IF_BOOT:
-          _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
-      if ci_ is not None:
-          ci_ = ci_ / 2.0
-      return energy_, ci_
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-def plot_theta_energy(theta, energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
-    energy = energy[1:]
-    theta = theta[1:]
-
-    windowSize = int(window * energy.shape[0])
-    if SMOOTH:
-        # window = np.ones(windowSize) / windowSize
-        # energy = np.convolve(energy, window, mode='same')
-        energy = circcvl(energy, windowSize=windowSize)
-
-    ax.plot(theta, energy * 100, lw=4, color=color)
-
-    if ci is not None:
-        ax.fill_between(
-            theta,
-            (energy - ci[:, 0]) * 100,
-            (energy + ci[:, 1]) * 100,
-            alpha=0.1, color=color
-        )
-
-    ax.set_ylabel('Energy')
-    ax.set_xlabel('Pref. Location (°)')
-    ax.set_xticks([0, 90, 180, 270, 360])
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-def pkl_save(obj, name, path="."):
-    pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
-
-
-def pkl_load(name, path="."):
-    return pkl.load(open(path + "/" + name, "rb"))
-
-#+end_src
-
-#+RESULTS:
-
-* Perceptron
+** Perceptron
 
 #+begin_src ipython
 class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
@@ -287,6 +148,142 @@ class RegularizedNet(NeuralNetClassifier):
 
 #+RESULTS:
 
+** Other
+
+#+begin_src ipython
+  def get_bagged_overlaps(clf, X, n_estimators):
+      X_copy = np.copy(X)
+      overlaps_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          scaler_exists = any(name == 'scaler' for name, _ in model.steps)
+          pca_exists = any(name == 'pca' for name, _ in model.steps)
+
+          if scaler_exists:
+              scaler = model.named_steps['scaler']
+              for j in range(X.shape[-1]):
+                  X_copy[..., j] = scaler.transform(X[..., j])
+
+          if  pca_exists:
+              pca = model.named_steps['pca']
+              X_pca = np.zeros((X.shape[0], coefs.shape[0], X.shape[-1]))
+
+              for i in range(X.shape[-1]):
+                  X_pca[..., i] = pca.transform(X[..., i])
+
+              overlaps = -(np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+          else:
+              overlaps = -(np.swapaxes(X_copy, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+          overlaps_list.append(overlaps)
+
+      return np.array(overlaps_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs_list = []
+      bias_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          # coefs, bias = rescale_coefs(model, coefs, bias)
+
+          coefs_list.append(coefs)
+          bias_list.append(bias)
+
+      return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def convert_seconds(seconds):
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def pkl_save(obj, name, path="."):
+    pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+def pkl_load(name, path="."):
+    return pkl.load(open(path + "/" + name, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  kwargs = {
+      'mouse': 'ACCM03',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise': True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 0, 'n_boots': 128,
+  }
+
+  options = set_options(**kwargs)
+  options['fname'] = '_all'
+#+end_src
+
+#+RESULTS:
+
 * Decoding vs days
 ** Helpers
 
@@ -302,7 +299,7 @@ class RegularizedNet(NeuralNetClassifier):
       X_avg = avg_epochs(X, **options).astype('float32')
       print('X', X.shape, 'y', y.shape)
 
-      # cv = 3
+      # cv = 5
       cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
       # cv = LeaveOneOut()
       # Perform grid search
@@ -319,100 +316,45 @@ class RegularizedNet(NeuralNetClassifier):
 
       scores = None
       # if refit true the best model is refitted to the whole dataset
-      # coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-      # bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
-
+      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
       # coefs, bias = rescale_coefs(best_model, coefs, bias)
 
-      # print('Computing overlaps')
-      # X_T = torch.transpose(torch.tensor(X, device=DEVICE), 1, 2).to(torch.float32)
-      # overlaps = best_model.named_steps['net'].module_(X_T).detach().cpu().numpy()
-      # overlaps = (np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
-
-      # # bootstrapped coefficients
-      start = perf_counter()
-      print('Bagging best model ...')
-      bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=64)
-      bagging_clf.fit(X_avg, y)
-      end = perf_counter()
-      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-      coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=64)
-
-      # overlaps
-      # print('Computing overlaps')
-      # overlaps = model.named_steps['net'].module_(torch.transpose(torch.tensor(X, device=DEVICE), 1, 2)).detach().cpu().numpy()
-      # overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / coefs.shape[-1] * 100 # / np.linalg.norm(coefs)
       if options['trials'] == 'correct':
           options['trials'] = ''
           X, y = get_X_y_S1_S2(X_days, y_days, **options)
 
-      overlaps = -(np.swapaxes(X, 1, -1) @ coefs) / np.linalg.norm(coefs)
+      # # bootstrapped coefficients
+      if options['bootstrap']:
+          start = perf_counter()
+          print('Bagging best model ...')
+          bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=options['n_boots'])
+          bagging_clf.fit(X_avg, y)
+          end = perf_counter()
+          print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=options['n_boots'])
+
+          overlaps = get_bagged_overlaps(bagging_clf, X, n_estimators=options['n_boots'])
+
+      else:
+          if options['scaler'] is not None:
+              scaler = best_model.named_steps['scaler']
+              for i in range(X.shape[-1]):
+                  X[..., i] = scaler.transform(X[..., i])
+
+          if options['n_comp'] is not None:
+              pca = best_model.named_steps['pca']
+              X_pca = np.zeros((X.shape[0], options['n_comp'], X.shape[-1]))
+
+              for i in range(X.shape[-1]):
+                  X_pca[..., i] = pca.transform(X[..., i])
+
+              overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+          else:
+              overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
 
       return overlaps, scores, coefs, bias
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  def get_bagged_coefs(clf, n_estimators):
-      coefs_list = []
-      bias_list = []
-      for i in range(n_estimators):
-          model = clf.estimators_[i]
-          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
-
-          coefs, bias = rescale_coefs(model, coefs, bias)
-
-          coefs_list.append(coefs)
-          bias_list.append(bias)
-
-      return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  from sklearn.base import BaseEstimator, TransformerMixin
-
-  class LinearLayerScorer(BaseEstimator, TransformerMixin):
-      def __init__(self, model):
-          self.model = model
-
-      def fit(self, X, y=None):
-          return self
-
-      def transform(self, X, y=None):
-          # Ensure the model is in evaluation mode
-          self.model.net.module_.eval()
-          with torch.no_grad():
-              # Retrieve the linear layer from the model
-              linear_layer = self.model.net.module_.linear
-              # Compute the output of the linear layer
-              linear_output = linear_layer(torch.tensor(X, dtype=torch.float32))
-          return -linear_output.numpy()
-#+end_src
-
-#+RESULTS:
-
-** Parameters
-
-#+begin_src ipython
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  N_NEURONS = [668, 693, 444, 361, 113]
-
-
-  kwargs = {
-      'mouse': 'ACCM03',
-      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
-      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
-      'random_state': None, 'T_WINDOW': 0.0,
-      'l1_ratio': 0.95,
-  }
-
-  options = set_options(**kwargs)
 #+end_src
 
 #+RESULTS:
@@ -447,14 +389,14 @@ class RegularizedNet(NeuralNetClassifier):
 
 #+begin_src ipython
   params = {
-      'net__alpha': np.logspace(-4, 4, 10),
-      # 'net__l1_ratio': np.linspace(0, 1, 10),
-      # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+    'net__alpha': np.logspace(-4, 4, 20),
+    # 'net__l1_ratio': np.linspace(0, 1, 10),
+    # 'net__module__dropout_rate': np.linspace(0, 1, 10),
   }
 
   options['reload'] = 0
   options['task'] = 'Dual'
-  scoring = 'roc_auc'
+  scoring = 'accuracy'
 
   # days = ['first', 'last']
 
@@ -482,9 +424,9 @@ class RegularizedNet(NeuralNetClassifier):
     for day in days:
         options['day'] = day
 
-        # options['task'] = 'all'
+        options['task'] = 'all'
         options['features'] = 'sample'
-        overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
+        overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='MD', params=params, scoring=scoring, **options)
 
         overlaps_sample.append(overlaps)
         coefs_sample.append(coefs)
@@ -498,7 +440,7 @@ class RegularizedNet(NeuralNetClassifier):
         coefs_dist.append(coefs)
         bias_dist.append(bias)
 
-        # options['task'] = 'all'
+        options['task'] = 'all'
         options['features'] = 'choice'
         overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='CHOICE', params=params, scoring=scoring, **options)
 
@@ -506,735 +448,171 @@ class RegularizedNet(NeuralNetClassifier):
         coefs_choice.append(coefs)
         bias_choice.append(bias)
 
+    overlaps_sample = np.array(overlaps_sample)
+    overlaps_dist = np.array(overlaps_dist)
+    overlaps_choice = np.array(overlaps_choice)
+
+    overlaps_dist = np.pad(overlaps_dist, pad_width=[(0, 0), (0, overlaps_sample.shape[1] - overlaps_dist.shape[1]), (0, 0)], mode='constant', constant_values=np.nan)
+
     overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
-    print(overlaps_save.shape)
-    pkl_save(overlaps_save, '%s_overlaps_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+    print('overlaps', overlaps_save.shape)
+    pkl_save(overlaps_save, '%s_overlaps_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
 
     coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
-    print(coefs_save.shape)
-    pkl_save(coefs_save, '%s_coefs_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+    print('coefs', coefs_save.shape)
+    pkl_save(coefs_save, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
     #+end_src
 
 #+RESULTS:
 #+begin_example
   Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 668, 84) y (64,)
+  DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
+  X (96, 668, 84) y (96,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 13s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 16s
+  Elapsed (with compilation) = 0h 0m 14s
+  {'net__alpha': 0.004832930238571752}
   Loading files from /home/leon/dual_task/dual_data/data/ChRM04
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
   X (64, 668, 84) y (64,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.012742749857031334}
   Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 668, 84) y (64,)
+  DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+  X (96, 668, 84) y (96,)
   hyperparam fitting ...
   Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 17s
+  {'net__alpha': 0.012742749857031334}
+  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
+  X (96, 668, 84) y (96,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 3s
+  {'net__alpha': 0.004832930238571752}
   Loading files from /home/leon/dual_task/dual_data/data/ChRM04
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
   X (64, 668, 84) y (64,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
+  Elapsed (with compilation) = 0h 0m 3s
+  {'net__alpha': 0.012742749857031334}
   Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 668, 84) y (64,)
+  DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+  X (96, 668, 84) y (96,)
   hyperparam fitting ...
   Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 16s
+  {'net__alpha': 0.012742749857031334}
+  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+  DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
+  X (96, 668, 84) y (96,)
+  hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 3s
+  {'net__alpha': 0.004832930238571752}
   Loading files from /home/leon/dual_task/dual_data/data/ChRM04
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
   X (64, 668, 84) y (64,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.012742749857031334}
   Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 668, 84) y (64,)
+  DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+  X (96, 668, 84) y (96,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 17s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  (3, 6, 64, 84)
-  (3, 6, 668)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 14s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 8s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 16s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 11s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 9s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 16s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 14s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 14s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 8s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  (3, 6, 64, 84)
-  (3, 6, 693)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 15s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 444, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 1s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  (3, 6, 64, 84)
-  (3, 6, 444)
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 8s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 13s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 1s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 13s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 12s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 5s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 19s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 18s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 11s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 2s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 5s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 361, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 5s
-  (3, 5, 128, 84)
-  (3, 5, 361)
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 17s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 1m 58s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 16s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 1m 44s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 19s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 21s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 20s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 2m 21s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 15s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 13s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 17s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 13s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 22s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 18s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 15s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 14s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 18s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 17s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 17s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 50s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 18s
-  {'net__alpha': 9.999999999999999e-05}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 1m 58s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 17s
-  {'net__alpha': 0.046415888336127774}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 9s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 16s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 14s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 18s
-  {'net__alpha': 0.000774263682681127}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 51s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-  DATA: FEATURES choice TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 113, 84) y (128,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 17s
-  {'net__alpha': 0.005994842503189409}
-  Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 15s
-  (3, 5, 128, 84)
-  (3, 5, 113)
 #+end_example
 
 * Overlaps mice
 
 #+begin_src ipython
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  # mice = ['JawsM15']
+  # mice = ['JawsM15', 'ACCM03']
+  mouse = 'JawsM15'
+
   l1_ratio = 0.95
+  fname = options['fname']
+  fname = '_all'
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  N_NEURONS = [668, 693, 444, 361, 113]
 
-  overlaps_mice = []
+  kwargs = {
+      'mouse': 'ACCM03',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+      'random_state': None, 'T_WINDOW': 0.5,
+      'l1_ratio': 0.95,
+  }
 
-  for mouse in mice:
-      print('mouse', mouse)
-      try:
-          overlaps = pkl_load('%s_overlaps_%.2f_l1_ratio.pkl' % (mouse, l1_ratio), path="../data/%s/" % mouse)
-          print(overlaps.shape)
-          overlaps_mice.append(overlaps)
-      except:
-          print('file not found')
-          overlaps_mice.append(np.ones((6, 2, 84)))
+  options = set_options(**options)
 #+end_src
 
 #+RESULTS:
-: mouse ChRM04
-: (3, 6, 64, 84)
-: mouse JawsM15
-: (3, 6, 64, 84)
-: mouse JawsM18
-: (3, 6, 64, 84)
-: mouse ACCM03
-: (3, 5, 128, 84)
-: mouse ACCM04
-: (3, 5, 128, 84)
+: 09beb03d-22bd-4603-a1e8-7dc0ec3bd71f
 
 #+begin_src ipython
-  options = set_options(**kwargs)
+  overlaps_mice = []
+
+  for mouse in mice:
+      try:
+          filename = '%s_overlaps_%.2f_l1_ratio%s.pkl' % (mouse, l1_ratio, fname)
+          print(filename)
+          overlaps = pkl_load(filename, path="../data/%s/" % mouse)
+          print('overlaps', overlaps.shape)
+          overlaps_mice.append(overlaps)
+      except:
+          print('file not found')
+          overlaps_mice.append(np.zeros((3, 6, 2, 84)))
+#+end_src
+
+#+RESULTS:
+: 45d0e63e-9600-41d7-869f-029738e4254d
+
+#+begin_src ipython
+    cmap = plt.get_cmap('Blues')
+    colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+
+    cmap = plt.get_cmap('Reds')
+    colors2 = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+
+    width = 6
+    golden_ratio = (5**.5 - 1) / 2
+
+    fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+
+    mouse = 'JawsM15'
+    index = mice.index(mouse)
+
+    overlaps_sample = overlaps_mice[index][0]
+    overlaps_dist = overlaps_mice[index][1]
+    overlaps_choice = overlaps_mice[index][2]
+
+    mask = ~np.isnan(overlaps_dist).any(axis=2)
+    overlaps_dist = overlaps_dist[:, mask.any(axis=0)]
+
+    size = overlaps_sample.shape[1] // 2
+
+    for i in range(options['n_days']):
+        ax[0].plot(circcvl(overlaps_sample[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        ax[1].plot(circcvl(overlaps_dist[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        ax[2].plot(circcvl(overlaps_choice[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+        ax[0].plot(circcvl(overlaps_sample[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+        ax[1].plot(circcvl(overlaps_dist[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+        ax[2].plot(circcvl(overlaps_choice[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+
+    # ax[2].legend(fontsize=10)
+    ax[0].set_xlabel('Step')
+    ax[1].set_xlabel('Step')
+    ax[2].set_xlabel('Step')
+    ax[0].set_ylabel('Sample Overlap')
+    ax[1].set_ylabel('Distractor Overlap')
+    ax[2].set_ylabel('Choice Overlap')
+
+    plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
+    plt.show()
+#+end_src
+
+#+RESULTS:
+: dcc54fd6-1d8d-439c-9c03-554b2d5ba4db
+
+#+begin_src ipython
   options['epochs'] = ['LD']
 
   sample_mice = []
@@ -1246,7 +624,7 @@ class RegularizedNet(NeuralNetClassifier):
       for j in range(overlaps_sample.shape[0]):
           sample_epoch = avg_epochs(-overlaps_sample[j][size:] + overlaps_sample[j][:size], **options) / 2.0
           sample_avg.append(sample_epoch.mean(0))
-          sample_ci.append(get_bootstrap_ci(sample_epoch))
+          #sample_ci.append(get_bootstrap_ci(sample_epoch))
 
       sample_avg = np.array(sample_avg)
       if sample_avg.shape[0] !=6:
@@ -1254,9 +632,9 @@ class RegularizedNet(NeuralNetClassifier):
 
       sample_mice.append(sample_avg)
 
-      sample_ci = np.array(sample_ci).T
+      #sample_ci = np.array(sample_ci).T
 
-      plt.plot(np.arange(1, 6+1), sample_avg, '-', label='%s Sample' % options['epochs'][0], color='b', alpha=0.05)
+      plt.plot(np.arange(1, 6+1), sample_avg, '-', color='b', alpha=0.1)
       # plt.fill_between(np.arange(1, overlaps_sample.shape[0]+1), sample_ci[0], sample_ci[1], color='b', alpha=0.1)
 
   sample_mice = np.array(sample_mice)
@@ -1265,31 +643,29 @@ class RegularizedNet(NeuralNetClassifier):
   sample_ci[0][-1] = sample_ci_last[0]
   sample_ci[1][-1] = sample_ci_last[1]
 
-  plt.plot(np.arange(1, 7), np.nanmean(sample_mice, 0), '-or')
+  plt.plot(np.arange(1, 7), np.nanmean(sample_mice, 0), '-or', label='n=%d' % len(mice))
   plt.fill_between(np.arange(1, 7), sample_ci[0], sample_ci[1], color='r', alpha=0.1)
   plt.axhline(y=0.0, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
   plt.xlabel('Day')
   plt.ylabel('Sample Overlap')
-  plt.savefig('overlaps_mice.svg', dpi=300)
+  plt.savefig('./figs/mice_overlaps_sample.svg', dpi=300)
 
   plt.show()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:100: DegenerateDataWarning: The BCa confidence interval cannot be calculated. This problem is known to occur when the distribution is degenerate or the statistic is np.min.
-:   warnings.warn(DegenerateDataWarning(msg))
-[[file:./.ob-jupyter/78a6293c742b5066f4ded69aa5299a03da6f666c.png]]
-:END:
+: e604fe32-c127-4d04-b1ea-3203df353348
 
 #+begin_src ipython
-  options['T_WINDOW'] = 0
-  options = set_options(**kwargs)
-  options['epochs'] = ['STIM_ED']
+  options['T_WINDOW'] = 0.5
+  options['epochs'] = ['ED']
 
   dist_mice = []
   for i in range(len(mice)):
       overlaps_dist = overlaps_mice[i][1]
+      mask = ~np.isnan(overlaps_dist).any(axis=2)
+      overlaps_dist = overlaps_dist[:, mask.any(axis=0)]
 
       if i==2:
           overlaps_dist = - overlaps_dist
@@ -1301,7 +677,7 @@ class RegularizedNet(NeuralNetClassifier):
       for j in range(overlaps_dist.shape[0]):
           dist_epoch = avg_epochs(overlaps_dist[j][size:] + overlaps_dist[j][:size], **options) / 2.0
           dist_avg.append(dist_epoch.mean(0))
-          dist_ci.append(get_bootstrap_ci(dist_epoch))
+          # dist_ci.append(get_bootstrap_ci(dist_epoch))
 
       dist_avg = np.array(dist_avg)
       if dist_avg.shape[0] !=6:
@@ -1309,9 +685,9 @@ class RegularizedNet(NeuralNetClassifier):
 
       dist_mice.append(dist_avg)
 
-      dist_ci = np.array(dist_ci).T
+      # dist_ci = np.array(dist_ci).T
 
-      plt.plot(np.arange(1, 6+1), dist_avg, '-', label='%s Distractor' % options['epochs'][0], color='b', alpha=0.1)
+      plt.plot(np.arange(1, 6+1), dist_avg, '-', color='b', alpha=0.1)
       # plt.fill_between(np.arange(1, overlaps_dist.shape[0]+1), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
 
   dist_mice = np.array(dist_mice)
@@ -1320,23 +696,20 @@ class RegularizedNet(NeuralNetClassifier):
   dist_ci[0][-1] = dist_ci_last[0]
   dist_ci[1][-1] = dist_ci_last[1]
 
-  plt.plot(np.arange(1, 7), np.nanmean(dist_mice, 0), '-ob')
+  plt.plot(np.arange(1, 7), np.nanmean(dist_mice, 0), '-ob', label='n=%d' % len(mice))
   plt.fill_between(np.arange(1, 7), dist_ci[0], dist_ci[1], color='b', alpha=0.1)
   plt.axhline(y=0.0, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
   plt.xlabel('Day')
   plt.ylabel('Dist. Overlap')
   plt.xticks(np.arange(1,7))
-  plt.savefig('overlaps_mice.svg', dpi=300)
+  plt.savefig('./figs/mice_overlaps_dist.svg', dpi=300)
 
   plt.show()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:630: RuntimeWarning: Mean of empty slice
-:   theta_hat_b.append(statistic(*resampled_data, axis=-1))
-[[file:./.ob-jupyter/d0c0e96f3c2c205fce153a763bc7f00cbc6e6822.png]]
-:END:
+: 6f418947-7bbc-4c62-91d8-353fec4ac8fa
 
 #+begin_src ipython
   options = set_options(**kwargs)
@@ -1351,7 +724,7 @@ class RegularizedNet(NeuralNetClassifier):
       for j in range(overlaps_choice.shape[0]):
           choice_epoch = avg_epochs(-overlaps_choice[j][size:] + overlaps_choice[j][:size], **options) / 2.0
           choice_avg.append(choice_epoch.mean(0))
-          choice_ci.append(get_bootstrap_ci(choice_epoch))
+          # choice_ci.append(get_bootstrap_ci(choice_epoch))
 
       choice_avg = np.array(choice_avg)
       if choice_avg.shape[0] !=6:
@@ -1359,9 +732,9 @@ class RegularizedNet(NeuralNetClassifier):
 
       choice_mice.append(choice_avg)
 
-      choice_ci = np.array(choice_ci).T
+      # choice_ci = np.array(choice_ci).T
 
-      plt.plot(np.arange(1, 6+1), choice_avg, 'x-', label='%s Choice' % options['epochs'][0], color='g', alpha=0.05)
+      plt.plot(np.arange(1, 6+1), choice_avg, 'x-', color='g', alpha=0.05)
       # plt.fill_between(np.arange(1, overlaps_choice.shape[0]+1), choice_ci[0], choice_ci[1], color='g', alpha=0.05)
 
   choice_mice = np.array(choice_mice)
@@ -1371,26 +744,28 @@ class RegularizedNet(NeuralNetClassifier):
   choice_ci[0][-1] = choice_ci_last[0]
   choice_ci[1][-1] = choice_ci_last[1]
 
-  plt.plot(np.arange(1, 7), np.nanmean(choice_mice, 0), '-og')
+  plt.plot(np.arange(1, 7), np.nanmean(choice_mice, 0), '-og', label='n=%d' % len(mice))
   plt.fill_between(np.arange(1, 7), choice_ci[0], choice_ci[1], color='g', alpha=0.1)
   plt.axhline(y=0.0, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
   # plt.yticks([0.4, 0.6, 0.8, 1.0])
   plt.xticks(np.arange(1,7))
   plt.xlabel('Day')
   plt.ylabel('Choice Overlap')
-  plt.savefig('mice_overlaps_choice.svg', dpi=300)
+  plt.savefig('./figs/mice_overlaps_choice.svg', dpi=300)
 
   plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/7114baa2c620ca7d24e7d67bc6939fa960c92daf.png]]
+: 653e61e9-a830-41d0-bafe-6ae745d404b8
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
+: 51d1d7d4-173c-42de-bb6a-4d419f634a2f
 
 * Cosine Mice
 
@@ -1403,24 +778,24 @@ class RegularizedNet(NeuralNetClassifier):
 #+end_src
 
 #+RESULTS:
+: 9ebdf3f8-4b9f-4e14-8c73-9b4a0dea9fe2
 
 #+begin_src ipython
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  l1_ratio = 0.95
-
   coefs_mice = []
   angles_mice = []
 
   for mouse in mice:
-      print(mouse)
       try:
-          coefs = pkl_load('%s_coefs_%.2f_l1_ratio.pkl' % (mouse, l1_ratio), path="../data/%s/" % mouse)
-          print(coefs.shape)
-          angles = np.diag(angle_AB(coefs[0], coefs[1].T))
+          filename = '%s_coefs_%.2f_l1_ratio%s.pkl' % (mouse, l1_ratio, fname)
+          print(filename)
+
+          coefs = pkl_load(filename, path="../data/%s/" % mouse)
+          angles = np.diag(angle_AB(-coefs[0], -coefs[1].T))
+
           if angles.shape[0]!=6:
               angles = np.append(angles, np.nan)
 
-          print(coefs.shape, angles.shape)
+          print('coefs', coefs.shape, 'angles', angles.shape)
 
           coefs_mice.append(coefs)
           angles_mice.append(angles)
@@ -1431,23 +806,7 @@ class RegularizedNet(NeuralNetClassifier):
 #+end_src
 
 #+RESULTS:
-#+begin_example
-  ChRM04
-  (3, 6, 668)
-  (3, 6, 668) (6,)
-  JawsM15
-  (3, 6, 693)
-  (3, 6, 693) (6,)
-  JawsM18
-  (3, 6, 444)
-  (3, 6, 444) (6,)
-  ACCM03
-  (3, 5, 361)
-  (3, 5, 361) (6,)
-  ACCM04
-  (3, 5, 113)
-  (3, 5, 113) (6,)
-#+end_example
+: f37d61c7-1a63-4248-a99a-ee96d486b296
 
 #+RESULTS:
 
@@ -1462,23 +821,24 @@ class RegularizedNet(NeuralNetClassifier):
   angles_ci[0][-1] = angles_ci_last[0]
   angles_ci[1][-1] = angles_ci_last[1]
 
-  plt.plot(np.arange(1, 7), np.nanmean(angles_mice, 0), 'k')
-  plt.fill_between(np.arange(1, 7), angles_ci[0], angles_ci[1], color='g', alpha=0.25)
+  plt.plot(np.arange(1, 7), np.nanmean(angles_mice, 0), '-ok', label='n=%d' % len(mice))
+  plt.fill_between(np.arange(1, 7), angles_ci[0], angles_ci[1], color='g', alpha=0.1)
   plt.axhline(y=90.0, color='k', linestyle='--')
-
+  plt.legend(fontsize=16, frameon=0)
   plt.xticks(np.arange(1,7))
   plt.xlabel('Day')
   plt.ylabel('Angle Sample/Dist. (°)')
-  plt.savefig('mice_angles.svg', dpi=300)
+  plt.savefig('./figs/mice_angles.svg', dpi=300)
 
   plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/3a8bf55db26ab51d5329d71a25ae9c7543a07177.png]]
+: a7fd6a9a-5792-4188-8b5f-1f7644f7cefa
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
+: 8d34e2ce-bba2-4faf-b713-0fed220c4b01

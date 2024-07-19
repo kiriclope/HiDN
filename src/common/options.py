@@ -13,6 +13,7 @@ def set_options(**kwargs):
     opts = dict()
 
     opts["path"] = "/home/leon/dual_task/dual_data/"
+    opts["fname"] =''
 
     opts["mouse"] = "JawsM15"
     opts["data_type"] = "raw"  # "raw" or "dF"

@@ -1,6 +1,7 @@
 #+STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session landscape :kernel dual_data
 
+
 * Notebook Settings
 
 #+begin_src ipython
@@ -61,7 +62,6 @@
 
   import torch.optim as optim
   from torch.utils.data import Dataset, TensorDataset, DataLoader
-  DEVICE = 'cuda:0'
 #+end_src
 
 #+RESULTS:
@@ -210,6 +210,21 @@
 #+RESULTS:
 
 ** Other
+
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs = []
+      bias = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs.append(model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0])
+          bias.append(model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0])
+
+      return np.array(coefs).mean(0), np.array(bias).mean(0)
+#+end_src
+
+#+RESULTS:
+
 #+begin_src ipython
   def pkl_save(obj, name, path="."):
       pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
@@ -395,6 +410,65 @@
 
 #+RESULTS:
 
+#+begin_src ipython
+  import numpy as np
+  from scipy.optimize import differential_evolution
+  from scipy.interpolate import interp1d
+  import matplotlib.pyplot as plt
+
+  def get_distance(x, y):
+      distance = abs(x - y)
+      if distance>180:
+          distance -= 360
+          distance *= -1
+      return distance
+
+  def find_multiple_minima_from_values(x_vals, y_vals, num_minima=2, num_runs=50, tol=0.05, popsize=50, maxiter=10000, min_distance=0.1, ax=None):
+      # Interpolate the energy landscape
+      energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
+
+      # Define the bounds for the differential evolution
+      bounds = [(x_vals.min(), x_vals.max())]
+
+      results = []
+
+      for _ in range(num_runs):
+          result = differential_evolution(energy_function, bounds, strategy='best1bin',
+                                          maxiter=maxiter, popsize=popsize, tol=0.01,
+                                          seed=np.random.randint(0, 10000))
+          results.append((result.x[0], result.fun))
+
+      # Filter unique minima within a tolerance and minimum distance
+      unique_minima = []
+      for x_val, energy in results:
+
+          if not any(np.isclose(x_val, um[0], atol=tol) or get_distance(x_val, um[0]) < min_distance for um in unique_minima):
+              unique_minima.append([x_val, energy])
+
+      # Ensure we only return the requested number of unique minima
+      unique_minima = sorted(unique_minima, key=lambda x: x[1])[:num_minima]
+
+      if ax is None:
+          fig, ax = plt.subplots()
+      # Plot the function
+      x = np.linspace(x_vals.min(), x_vals.max(), 400)
+      y = [energy_function(xi) for xi in x]  # Without noise for plotting
+      # ax.plot(x, y)
+
+      for min_x, _ in unique_minima:
+          ax.plot(min_x, energy_function(min_x), 'ro')  # Mark the minima points
+
+      return unique_minima
+
+  # Example usage
+  # x_vals = np.linspace(-2, 2, 50)
+  # y_vals = np.sin(np.pi * x_vals) * 2 + np.cos(2 * np.pi * x_vals) * 2 + 0.1 * x_vals * 2 + np.random.normal(0, 0.1, size=x_vals.shape)
+
+  # find_multiple_minima_from_values(x_vals, y_vals, num_minima=4, num_runs=10, tol=0.05, popsize=15, maxiter=100, min_distance=0.1)
+#+end_src
+
+#+RESULTS:
+
 * Perceptron
 
 #+begin_src ipython
@@ -486,6 +560,28 @@
 
 #+RESULTS:
 
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  kwargs = {
+      'mouse': 'JawsM15',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.5,
+      'bootstrap': 1, 'n_boots': 128,
+  }
+
+  options = set_options(**kwargs)
+#+end_src
+
+#+RESULTS:
+
 * Landscape vs days
 ** Helpers
 
@@ -500,10 +596,10 @@
       options['epochs'] = [epoch]
       X_avg = avg_epochs(X, **options).astype('float32')
       # print('X', X.shape, 'y', y.shape)
-      cv = 5
-      cv = RepeatedStratifiedKFold(n_splits=cv, n_repeats=10)
+      cv = 3
+      cv = RepeatedStratifiedKFold(n_splits=cv, n_repeats=32)
       # Perform grid search
-      grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=30)
+      grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=32)
       start = perf_counter()
       print('hyperparam fitting ...')
       grid.fit(X_avg, y)
@@ -514,52 +610,22 @@
       best_params = grid.best_params_
       print(best_params)
 
-      # if refit true the best model is refitted to the whole dataset
-      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+      if options['bootstrap']==0:
+          # if refit true the best model is refitted to the whole dataset
+          coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+      else:
 
-      start = perf_counter()
-      print('Bagging best model ...')
-      bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=64)
-      bagging_clf.fit(X_avg, y)
-      end = perf_counter()
-      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+          start = perf_counter()
+          print('Bagging best model ...')
+          bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=options['n_boots'])
+          bagging_clf.fit(X_avg, y)
+          end = perf_counter()
+          print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
 
-      coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=64)
+          coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=options['n_boots'])
 
       return best_model, coefs, bias
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  def get_bagged_coefs(clf, n_estimators):
-      coefs = []
-      bias = []
-      for i in range(n_estimators):
-          model = clf.estimators_[i]
-          coefs.append(model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0])
-          bias.append(model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0])
-
-      return np.array(coefs).mean(0), np.array(bias).mean(0)
-#+end_src
-
-#+RESULTS:
-
-** Parameters
-
-#+begin_src ipython
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-
-  kwargs = dict()
-  kwargs = {
-      'mouse': 'JawsM15',
-      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
-      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
-      'random_state': None, 'T_WINDOW': 0.0,
-            }
-
 #+end_src
 
 #+RESULTS:
@@ -567,10 +633,6 @@
 ** Fit
 
 #+begin_src ipython
-  options = set_options(**kwargs)
-  options['day'] = 1
-  X_days, y_days = get_X_y_days(**options)
-  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
 
   net = RegularizedNet(
       module=Perceptron,
@@ -596,8 +658,6 @@
   #+end_src
 
 #+RESULTS:
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
 
 #+begin_src ipython
   params = {
@@ -621,16 +681,22 @@
   days = ['first', 'last']
   # days = np.arange(1, options['n_days']+1)
 
+  index = mice.index(options['mouse'])
+  pipe['net'].module__num_features = N_NEURONS[index]
+
   options['reload'] = 0
   for day in days:
 
       options['day'] = day
+
+      options['task'] = 'all'
       options['features'] = 'sample'
       model, coefs, bias = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
 
       coefs_sample.append(coefs)
       bias_sample.append(bias)
 
+      options['task'] = 'Dual'
       options['features'] = 'distractor'
       model, coefs, bias = hyper_tune(pipe, epoch='MD', params=params, scoring=scoring, **options)
 
@@ -645,37 +711,37 @@
 #+RESULTS:
 #+begin_example
   Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+  DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
   multiple days 0 3 0
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 54s
+  Elapsed (with compilation) = 0h 1m 17s
   {'net__alpha': 0.000774263682681127}
   Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 23s
+  Elapsed (with compilation) = 0h 1m 53s
   Loading files from /home/leon/dual_task/dual_data/data/JawsM15
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
   multiple days 0 3 0
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 27s
-  {'net__alpha': 0.000774263682681127}
+  Elapsed (with compilation) = 0h 0m 8s
+  {'net__alpha': 0.005994842503189409}
   Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 39s
+  Elapsed (with compilation) = 0h 0m 37s
   Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+  DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
   multiple days 0 3 0
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 30s
-  {'net__alpha': 0.000774263682681127}
+  Elapsed (with compilation) = 0h 1m 1s
+  {'net__alpha': 0.005994842503189409}
   Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 19s
+  Elapsed (with compilation) = 0h 0m 47s
   Loading files from /home/leon/dual_task/dual_data/data/JawsM15
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
   multiple days 0 3 0
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 23s
-  {'net__alpha': 9.999999999999999e-05}
+  Elapsed (with compilation) = 0h 0m 8s
+  {'net__alpha': 0.000774263682681127}
   Bagging best model ...
-  Elapsed (with compilation) = 0h 0m 12s
+  Elapsed (with compilation) = 0h 0m 15s
 #+end_example
 
 
@@ -766,8 +832,8 @@
   opts = set_options(T_WINDOW=0.5)
   bins = None
   # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD']))
-  bins = opts['bins_ED']
+  bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
+  # bins = opts['bins_ED']
   # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
   # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
   # bins = opts['bins_PRE_DIST']
@@ -817,12 +883,11 @@
 
 #+RESULTS:
 :RESULTS:
-: bootstrap: 100% 1000/1000 [00:18<00:00, 53.43it/s]
+: bootstrap: 100% 1000/1000 [00:17<00:00, 56.33it/s]
 :
-: bootstrap: 100% 1000/1000 [00:06<00:00, 154.39it/s]
+: bootstrap: 100% 1000/1000 [00:08<00:00, 123.38it/s]
 :
 :END:
-
 
 #+begin_src ipython
   from scipy.signal import find_peaks
@@ -880,46 +945,54 @@
   window = .1
 
   min_angles, min_energies = [], []
+  theta = np.linspace(0, 360, energy_day[0].shape[0]-1, endpoint=False)
+  windowSize = int(window * energy_day[0].shape[0]-1)
 
   fig, ax = plt.subplots()
   for i, day in enumerate(days):
-      plot_theta_energy(theta_day[i], energy_day[i], ci=ci_day[i],
+      plot_theta_energy(theta_day[i], energy_day[i], ci=None,#ci_day[i],
                         window=window, ax=ax, SMOOTH=1, color=colors[i])
 
-      min_angle, min_energy = find_minima(energy_day[i] * 100, window=window,
-                                          prominence=.001,  ax=ax,  color=colors[i], distance=15, height=None)
+      # min_angle, min_energy = find_minima(energy_day[i] * 100, window=window,
+      #                                     prominence=.001,  ax=ax,  color=colors[i], distance=15, height=None)
 
-      min_angles.append(min_angle)
-      min_energies.append(min_energy)
+      minima = find_multiple_minima_from_values(theta, circcvl(energy_day[i][1:]*100, windowSize), num_minima=2, num_runs=150, tol=.01, ax=ax, min_distance=60, popsize=1)
+
+      try:
+          min_angles.append([minima[0][0], minima[1][0]])
+          min_energies.append([minima[0][1], minima[1][1]])
+      except:
+          pass
 
   fig.savefig('%s_landscape.svg' % options['mouse'], dpi=300)
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: [162.94736842105263, 253.89473684210526]
-: [102.3157894736842, 189.4736842105263]
-[[file:./.ob-jupyter/0b1b7c1c3f8f42677cc71447d6f84bc160bc8bca.png]]
-:END:
+[[file:./.ob-jupyter/66a81c9be5c4b478b05e323bd0ddddacb31297e5.png]]
 
 #+begin_src ipython
   min_angles = np.array(min_angles).T
-  print(min_angles.shape)
+  print(np.round(min_angles))
 #+end_src
 
 #+RESULTS:
-: (2, 2)
+: [[356.   0.]
+:  [147. 206.]]
 
 #+begin_src ipython
   distance = np.abs(min_angles[0] - min_angles[1])
+  print(distance)
   for i in range(distance.shape[0]):
       if distance[i]>180:
-          distance[i] -= 180
+          distance[i] -= 360
+          distance[i] *= -1
+
+  print(np.round(distance))
 
   plt.plot(np.arange(1, len(days)+1), distance, '-o')
-  plt.ylim(0, 180)
+  # plt.ylim(0, 45)
   plt.xticks(np.arange(1, len(days)+1))
-  plt.yticks([0, 45, 90, 135, 180])
+  # plt.yticks([0, 45, 90, 135, 180])
   plt.xlabel('Day')
   plt.ylabel('Distance')
   fig.savefig('%s_distance_landscape.svg' % options['mouse'], dpi=300)
@@ -927,7 +1000,17 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/0a382bce36f5badfa165df11ede8a2b5c623253f.png]]
+:RESULTS:
+: [208.88515108 206.02615854]
+: [151. 154.]
+[[file:./.ob-jupyter/10b3c7bf77e8d2de944b3a557de819aeab664c97.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
 
 #+begin_src ipython
       pkl_save(distance, '%s_distance_landscape' % options['mouse'], path="../data/%s/" % options['mouse'])
