@@ -14,51 +14,57 @@
 #+end_src
 
 #+RESULTS:
+:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
 
 * Imports
 
 #+begin_src ipython
-import sys
-sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
 
-import pickle as pkl
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.stats import circmean
-from time import perf_counter
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+  from time import perf_counter
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from skorch import NeuralNetClassifier
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
 
-from sklearn.base import clone
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import cross_val_score, cross_validate
-from sklearn.ensemble import BaggingClassifier
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold
+  from sklearn.base import clone
+  from sklearn.model_selection import StratifiedKFold
+  from sklearn.model_selection import cross_val_score, cross_validate
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold
 
-from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
-from src.decode.my_mne import my_cross_val_multiscore
-from mne.decoding import SlidingEstimator, get_coef
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+  import pandas as pd
 
-from src.common.plot_utils import add_vlines, add_vdashed
-from src.attractor.energy import run_energy, plot_energy
-from src.common.options import set_options
-from src.stats.bootstrap import my_boots_ci
-from src.decode.bump import decode_bump, circcvl
-from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-from src.preprocess.helpers import avg_epochs
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator
+  from src.decode.my_mne import my_cross_val_multiscore
+  from mne.decoding import SlidingEstimator, get_coef
 
-import torch.optim as optim
-from torch.utils.data import Dataset, TensorDataset, DataLoader
-DEVICE = 'cuda:1'
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.attractor.energy import run_energy, plot_energy
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader
 #+end_src
 
 #+RESULTS:
@@ -150,10 +156,10 @@ dict_keys(['__header__', '__version__', '__globals__', 'FR_Trial', 'basFrame', '
 320
 :END:
 
-* Calcium
-** Parameters
+* Parameters
 
 #+begin_src ipython
+  DEVICE = 'cuda:1'
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
   tasks = ['DPA', 'DualGo', 'DualNoGo']
 
@@ -164,12 +170,368 @@ dict_keys(['__header__', '__version__', '__globals__', 'FR_Trial', 'basFrame', '
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95, 'DCVL': 0
   }
+
+  options = set_options(**kwargs)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  options = set_options(**kwargs)
+    X_days, y_days = get_X_y_days(**options)
+    y_days['tasks'] = y_days['tasks'].astype('category')
+    #  y_days = y_days[y_days['laser']==0]
+    print('X', X_days.shape, 'y', y_days.shape)
+    print(y_days.keys())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+  Reading data from source file
+  mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+  mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+  ##########################################
+  PREPROCESSING: SCALER None AVG MEAN False AVG NOISE True UNIT VAR False
+  ##########################################
+  X (1152, 693, 84) y (1152, 6)
+  Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day'], dtype='object')
+#+end_example
+
+* Activity timing
+
+#+begin_src ipython
+  day = 5
+  options['day'] = day
+  options['task'] = 'DualGo'
+  options['T_WINDOW'] = 0.0
+
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+  print('data', X_data.shape)
+
+  size = X_data.shape[0] // 2
+  X = X_data[:, :, options['bins_LD']].mean(0)
+  print('X', X.shape)
+  peak_times = np.argmax(X, axis=1)
+  idx = np.argsort(peak_times)
+
+  # options['epochs'] = ['LD']
+  # X_avg = avg_epochs(X_data, **options).astype('float32').mean(0)
+  # idx = np.argsort(X_avg)
+  # print(idx.shape)
+#+end_src
+
+#+RESULTS:
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+: data (64, 361, 84)
+: X (361, 9)
+
+#+begin_src ipython
+  fig, ax = plt.subplots(2, 3, figsize=0.75 * np.array([3 * width, 2 * height]))
+
+  size = X_data.shape[0]
+
+  for i in range(options['n_days'] // 2):
+      options['day'] = i+1
+      X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+      data = circcvl(np.nanmean(X_data[:size, idx], 0), windowSize=2, axis=0)
+
+      ax[0][i].imshow(data,
+                      aspect='auto', cmap='viridis',
+                      extent=[0, 14, 0, 693],
+                      vmin=-0.5, vmax=1.0,
+                      )
+
+      add_vlines(ax=ax[0][i])
+      add_vlines(ax=ax[0][i])
+      add_vlines(ax=ax[0][i])
+
+  for i in range(options['n_days'] // 2, options['n_days']):
+      options['day'] = i+1
+      X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+      data = circcvl(np.nanmean(X_data[:size, idx], 0), windowSize=2, axis=0)
+      ax[1][i-3].imshow(data,
+                        aspect='auto', cmap='viridis',
+                        extent=[0, 14, 0, 693],
+                        vmin=-0.5, vmax=1.0,
+                      )
+      add_vlines(ax=ax[1][i-3])
+      add_vlines(ax=ax[1][i-3])
+      add_vlines(ax=ax[1][i-3])
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+[[file:./.ob-jupyter/f3aa81ebfbc41c31fa5444e0079f314d04638bc9.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* GLM vs Days
+
+#+begin_src ipython
+    X_days, y_days = get_X_y_days(**options)
+    y_days['tasks'] = y_days['tasks'].astype('category')
+    #  y_days = y_days[y_days['laser']==0]
+    print('X', X_days.shape, 'y', y_days.shape)
+    print(y_days.keys())
+#+end_src
+
+#+RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+: ##########################################
+: PREPROCESSING: SCALER standard AVG MEAN False AVG NOISE True UNIT VAR False
+: ##########################################
+: X (960, 361, 84) y (960, 6)
+: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day'], dtype='object')
+
+#+begin_src ipython
+  options['epochs'] = ['ED']
+  X_avg = avg_epochs(X_days, **options).astype('float32')
+  print('X_avg', X_avg.shape)
+  #+end_src
+
+#+RESULTS:
+: X_avg (960, 361)
+
+  #+begin_src ipython
+    formula = 'df ~ sample_odor * tasks'
+    options['task'] = 'DPA'
+
+    results = []
+    for day in range(1, options['n_days']+1):
+            options['day'] = day
+            X, y = get_X_y_S1_S2(X_avg, y_days, **options)
+            res = []
+
+            data = y_days[(y_days['day'] == day) & (y_days['laser']==0) & (y_days['tasks']=='DPA')]
+            # print(data.shape)
+
+            for neuron in range(1, X_avg.shape[1]):
+                    data.loc[:, ['df']] = X[:, neuron]
+                    glm_gauss = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+                    res.append(glm_gauss.fit())
+
+            results.append(res)
+#+end_src
+
+#+RESULTS:
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+
+#+begin_src ipython
+  results = np.array(results)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print(results[0][2].summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                   Generalized Linear Model Regression Results
+  ==============================================================================
+  Dep. Variable:                     df   No. Observations:                   64
+  Model:                            GLM   Df Residuals:                       62
+  Model Family:                Gaussian   Df Model:                            1
+  Link Function:               Identity   Scale:                          5.3946
+  Method:                          IRLS   Log-Likelihood:                -143.73
+  Date:                Mon, 22 Jul 2024   Deviance:                       334.46
+  Time:                        13:01:05   Pearson chi2:                     334.
+  No. Iterations:                     3   Pseudo R-squ. (CS):           0.009346
+  Covariance Type:            nonrobust
+  =================================================================================================
+                                      coef    std err          z      P>|z|      [0.025      0.975]
+  -------------------------------------------------------------------------------------------------
+  Intercept                         0.3405      0.411      0.829      0.407      -0.464       1.145
+  tasks[T.DualGo]                        0          0        nan        nan           0           0
+  tasks[T.DualNoGo]                      0          0        nan        nan           0           0
+  sample_odor                      -0.4380      0.581     -0.754      0.451      -1.576       0.700
+  sample_odor:tasks[T.DualGo]            0          0        nan        nan           0           0
+  sample_odor:tasks[T.DualNoGo]          0          0        nan        nan           0           0
+  =================================================================================================
+#+end_example
+
+  #+begin_src ipython
+    selective = []
+    beta = []
+    for day in range(options['n_days']):
+        sel = []
+        bet = []
+        for neuron in range(X_avg.shape[1]-1):
+            p_value = results[day, neuron].pvalues['sample_odor']
+            if p_value < 0.05:
+                sel.append(neuron)
+            bet.append(results[day, neuron].params['sample_odor'])
+        selective.append(sel)
+        beta.append(bet)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print(selective[0])
+  print(selective[-1])
+#+end_src
+
+#+RESULTS:
+: [19, 110, 113, 129, 134, 148, 154, 170, 210, 229, 244, 268, 306, 333, 341]
+: [22, 79, 80, 104, 158, 227, 233, 252, 253, 265, 282, 290]
+
+#+begin_src ipython
+  sparse = []
+  for i in range(options['n_days']):
+      sparse.append(len(selective[i]))
+  #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  plt.plot(sparse)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+| <matplotlib.lines.Line2D | at | 0x7f0220323c90> |
+[[file:./.ob-jupyter/b78490388854279e38e76d5bfd1dc5b8113d5a6f.png]]
+:END:
+
+#+begin_src ipython
+  print(beta[0])
+  print(beta[-1])
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[135], line 1
+: ----> 1 print(beta[0])
+:       2 print(beta[-1])
+:
+: IndexError: list index out of range
+:END:
+
+#+begin_src ipython
+  idx = np.array(beta[-1]).argsort()
+  # print(np.array(beta[-1])[idx])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  day = options['n_days']
+  options['day'] = day
+  fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+  print(X_data.shape)
+
+  size = X_data.shape[0] // 2
+
+  data = circcvl(np.nanmean(X_data[:size, idx], 0), windowSize=10, axis=0)
+
+  ax[0].imshow(data,
+            aspect='auto', cmap='jet',
+            extent=[0, 14, 0, len(selective[day-1])],
+            vmin=-0.5, vmax=1.5,
+            interpolation='lanczos')
+
+  data = circcvl(np.nanmean(X_data[size:, idx], 0), windowSize=10, axis=0)
+
+  ax[1].imshow(data,
+            aspect='auto', cmap='jet',
+            extent=[0, 14, 0, len(selective[day-1])],
+            vmin=-0.5, vmax=1.5,
+            interpolation='lanczos')
+
+  # add_vdashed(ax)
+  # cb = ax.set_colorbar()
+  # cb.set_label('$\Delta F / F$')
+
+  ax[0].set_xticks(np.arange(0, 16, 4))
+  ax[0].set_xlabel('Time')
+  ax[0].set_ylabel('Neuron')
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+: (64, 361, 84)
+[[file:./.ob-jupyter/5e826e58a48536e59f48d5b0c7a35df223775132.png]]
+:END:
+
+#+begin_src ipython
+  fig, ax = plt.subplots(2, 3, figsize=0.75 * np.array([3 * width, 2 * height]))
+
+  size = X_data.shape[0]
+
+  for i in range(options['n_days'] // 2):
+      options['day'] = i+1
+      X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+      data = circcvl(np.nanmean(X_data[:size, idx], 0), windowSize=10, axis=0)
+
+      ax[0][i].imshow(data,
+                      aspect='auto', cmap='jet',
+                      extent=[0, 14, 0, 693],
+                      vmin=-0.5, vmax=1.5,
+                      )
+
+      add_vlines(ax=ax[0][i])
+      add_vlines(ax=ax[0][i])
+      add_vlines(ax=ax[0][i])
+
+  for i in range(options['n_days'] // 2, options['n_days']):
+      options['day'] = i+1
+      X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+      data = circcvl(np.nanmean(X_data[:size, idx], 0), windowSize=10, axis=0)
+      ax[1][i-3].imshow(data,
+                        aspect='auto', cmap='jet',
+                        extent=[0, 14, 0, 693],
+                        vmin=-0.5, vmax=1.5,
+                      )
+      add_vlines(ax=ax[1][i-3])
+      add_vlines(ax=ax[1][i-3])
+      add_vlines(ax=ax[1][i-3])
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+[[file:./.ob-jupyter/4b4e4167916aef7828483f297a53c40c09e94c45.png]]
+:END:
+
+* Data
+
+#+begin_src ipython
   X_days, y_days = get_X_y_days(**options)
   y_days['tasks'] = y_days['tasks'].astype('category')
   # y_days = y_days[y_days['laser']==0]
@@ -201,7 +563,7 @@ dict_keys(['__header__', '__version__', '__globals__', 'FR_Trial', 'basFrame', '
 #+RESULTS:
 [[file:./.ob-jupyter/18c1919442723cfcc0b6bc34b542eb35c8041ca7.png]]
 
-** GLM
+* GLM
 
 #+begin_src ipython
   import statsmodels.api as sm
@@ -333,7 +695,7 @@ dict_keys(['__header__', '__version__', '__globals__', 'FR_Trial', 'basFrame', '
 #+RESULTS:
 : [17, 169, 317, 372, 460, 464, 516, 560, 647]
 
-** Fluorescence
+* Fluorescence
 
 #+begin_src ipython
   x_time =  np.linspace(0, 14, 84)
@@ -357,552 +719,3 @@ dict_keys(['__header__', '__version__', '__globals__', 'FR_Trial', 'basFrame', '
 
 #+RESULTS:
 [[file:./.ob-jupyter/22de8b0a6fc9e81afc0e6d3b936fe3cd274ff4f1.png]]
-
-** GLM vs Days
-
-#+begin_src ipython
-  options['epochs'] = ['ED']
-  X_avg = avg_epochs(X_days, **options).astype('float32')
-  print(X_avg.shape)
-  #+end_src
-
-#+RESULTS:
-: (1152, 693)
-
-
-  #+begin_src ipython
-    formula = 'df ~ sample_odor * tasks'
-    options['task'] = 'all'
-
-    results = []
-    for day in range(1, options['n_days']+1):
-            options['day'] = day
-            X, y = get_X_y_S1_S2(X_avg, y_days, **options)
-            res = []
-
-            data = y_days[(y_days['day'] == day) & (y_days['laser']==0)]
-            # print(data.shape)
-
-            for neuron in range(1, X_avg.shape[1]):
-                    data.loc[:, ['df']] = X[:, neuron]
-                    glm_gauss = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
-                    res.append(glm_gauss.fit())
-
-            results.append(res)
-#+end_src
-
-#+RESULTS:
-: DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
-: DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
-: DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
-: DATA: FEATURES sample TASK all TRIALS  DAYS 4 LASER 0
-: DATA: FEATURES sample TASK all TRIALS  DAYS 5 LASER 0
-: DATA: FEATURES sample TASK all TRIALS  DAYS 6 LASER 0
-
-#+begin_src ipython
-  results = np.array(results)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  print(results[0][2].summary())
-#+end_src
-
-#+RESULTS:
-#+begin_example
-                   Generalized Linear Model Regression Results
-  ==============================================================================
-  Dep. Variable:                     df   No. Observations:                   96
-  Model:                            GLM   Df Residuals:                       90
-  Model Family:                Gaussian   Df Model:                            5
-  Link Function:               Identity   Scale:                       0.0016246
-  Method:                          IRLS   Log-Likelihood:                 175.16
-  Date:                Mon, 15 Jul 2024   Deviance:                      0.14622
-  Time:                        17:45:45   Pearson chi2:                    0.146
-  No. Iterations:                     3   Pseudo R-squ. (CS):            0.02805
-  Covariance Type:            nonrobust
-  =================================================================================================
-                                      coef    std err          z      P>|z|      [0.025      0.975]
-  -------------------------------------------------------------------------------------------------
-  Intercept                         0.0166      0.010      1.651      0.099      -0.003       0.036
-  tasks[T.DualGo]                  -0.0077      0.014     -0.542      0.587      -0.036       0.020
-  tasks[T.DualNoGo]                 0.0036      0.014      0.250      0.803      -0.024       0.031
-  sample_odor                      -0.0139      0.014     -0.978      0.328      -0.042       0.014
-  sample_odor:tasks[T.DualGo]       0.0080      0.020      0.395      0.693      -0.032       0.047
-  sample_odor:tasks[T.DualNoGo]     0.0015      0.020      0.072      0.942      -0.038       0.041
-  =================================================================================================
-#+end_example
-
-  #+begin_src ipython
-    selective = []
-    beta = []
-    for day in range(options['n_days']):
-        sel = []
-        bet = []
-        for neuron in range(X_avg.shape[1]-1):
-            p_value = results[day, neuron].pvalues['sample_odor']
-            # if p_value < 0.05:
-            sel.append(neuron)
-            bet.append(results[day, neuron].params['sample_odor'])
-        selective.append(sel)
-        beta.append(bet)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  idx = np.array(beta[-1]).argsort()
-  # print(np.array(beta[-1])[idx])
-  neur = np.array(selective[-1])[idx]
-  print(neur)
-#+end_src
-
-#+RESULTS:
-#+begin_example
-  [316 168  45 513 559 442 411   2 340 162 368 203 178 456 237 382 185 548
-   350 298 420  48 431 520  89 174 223  60 667  73 560 176 576 346 103 394
-   454 294  11 462 451 261  70 166 212 371 668  38  90  14 406  64  54 437
-   445 640 508 236 401 282  62 523 234  75 167 518 124  16 531 334 206 186
-   330 356 290 137 448 264 596 541  30 427 648 235 601 295 599 191 317 145
-   630 273  39 537 627 679 571 386 132 524 292 215 552 534 536  91 398 123
-   584 675 324 365 268 603 200 527  77 412 274  71  88 147 490 588 106 370
-   512 214 369 348 219 366 357 384 573 689 143 251 439 266 602 149 107 614
-   351 554 310 558 291 570 687  20 608 562 449  13 302 242  65 432 297 181
-   626 362   3 634  47 388 355 344 660 561 613 629 511 672 581 213 478 136
-   535 222 104 102 593 111  24 262 575 159 221 256 122 502 564 633  81 319
-   662 665 567 323 611 580 637 587 170 329 676  63 392 598 108 192 281  43
-   275 455  92 146 285 563 177 425 673 100 688 121 517 538 460   4 233 379
-   226 267 345 526 642 466 278 414 649 436 583 378 446 424 461 120 276 671
-   150 303 589 405 415 187 211 644 161 574 342 279 528  83 623  58 551 399
-     1  61 389 257 112  31 239 305  99 115 339 184  98 311 577 631 313 141
-   277 217  44 605 457 487 393 621 497  74 473 489 438 270 443  85 429 287
-   635 367 228 477 690 163 506 208 669 157 315 293 682 155 485 572 492 678
-   441 600 248 101  15 484 641 480 138 503 309  55 354 591 385 244 619 209
-   243 180  56 594 666 505 500 110 595 504 320 182 337  18  68 381 253  37
-   650 133 372 677 347 453  46 199 670 498  22 661  97   0 632 495 579 204
-   494 653 127 547 312 546 529 397 532 231 288 142 440 471 205 507 684 636
-   332 691 195 404  79 522 651 109 525 173  41 271 597 501 263 151 483 306
-   514 472 566  80 364 656 519 435 578 585  49  78 655 465 410 280 269 407
-   544 647 172 249 590  87 421 521 314 333 624 434 296 118 481 197 194 468
-   327 467 338 540 272  17 542 638 335 486 375 645 607 300 604 193  72 183
-   450 201 148 423 592 135 403 153 188  84 606 620 289 685 417 304  21  26
-   683 134 299 516 250 119 459 156 569 652 681 428 493 165 326 680 349 482
-   402 400 408 359 474  96 308 128 610 659 246 545  25 254 464 686 568 416
-   207 469 144 617   7 458 609  76 639 499 391 654 452 586 396 515 125 549
-   363 476 238 496 126 265 387 307 380 663 422 447  51 616 376 383 475  40
-   582 260 325 444 565 225 557 196 510 255 674 131 643 252 395 555  27 618
-   533 247 615 202 220 664 419 479 622 341 343 530  50 336 179 413  23 258
-   556  34 227 628 646 657 390  28 286 164  52 230 216 409 550 129   5 373
-   470  12 488 245 229  19 116 240  42  57 377 426 361  67  94 130 658 114
-    53  33 113 189 491 152 117 105  82  59  95   8   6 169  10 321 612 232
-   430 625 322 328   9 543  86 198 433 360 509  36 175 463 331 283 553 358
-   160 210 259 218 318 241 171  66 140 284 154 418 374 352  69 190  29 139
-   224 539  32 301 353  35  93 158]
-#+end_example
-
-#+begin_src ipython
-  day = 6
-  options['day'] = day
-  fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
-  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-  print(X_data.shape)
-
-  ax[0].imshow(X_data[48:, neur].mean(0),
-            aspect='auto', cmap='jet',
-            extent=[0, 14, 0, len(selective[day-1])],
-            vmin=0, vmax=0.1, interpolation='lanczos')
-
-  ax[1].imshow(X_data[:48, neur].mean(0),
-            aspect='auto', cmap='jet',
-            extent=[0, 14, 0, len(selective[day-1])],
-               vmin=0, vmax=0.1,  interpolation='lanczos')
-
-  # add_vdashed(ax)
-  # cb = ax.set_colorbar()
-  # cb.set_label('$\Delta F / F$')
-
-  ax[0].set_xticks(np.arange(0, 16, 4))
-  ax[0].set_xlabel('Time')
-  ax[0].set_ylabel('Neuron')
-
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: DATA: FEATURES sample TASK all TRIALS  DAYS 6 LASER 0
-: (96, 693, 84)
-[[file:./.ob-jupyter/e24ecb6895604ef8fb24745fd8cd1f88055ea616.png]]
-:END:
-
-** Weights
-
-#+begin_src ipython
-  idx = np.array(beta[-1]).argsort()
-  print(np.array(beta[-1])[idx])
-  neur = np.array(selective[-1])[idx]
-  print(neur)
-#+end_src
-
-#+RESULTS:
-#+begin_example
-  [-1.04341987e-01 -7.34038732e-02 -5.86929808e-02 -4.82407843e-02
-   -4.58388016e-02 -4.49727236e-02 -4.25260361e-02 -3.93460414e-02
-   -3.38673434e-02 -3.36365643e-02 -3.31528036e-02 -3.23021938e-02
-   -3.22263076e-02 -3.20575511e-02 -3.03924479e-02 -2.99061503e-02
-   -2.86604298e-02 -2.81945868e-02 -2.68448701e-02 -2.65377248e-02
-   -2.44359705e-02 -2.44326261e-02 -2.43114267e-02 -2.34500372e-02
-   -2.24841514e-02 -2.18412675e-02 -2.18327341e-02 -2.15552574e-02
-   -2.11571285e-02 -2.06833954e-02 -2.05493194e-02 -1.96581524e-02
-   -1.89255654e-02 -1.87590254e-02 -1.86268657e-02 -1.85501706e-02
-   -1.84959890e-02 -1.84107776e-02 -1.83844768e-02 -1.70564009e-02
-   -1.66380813e-02 -1.65661449e-02 -1.65085190e-02 -1.63601581e-02
-   -1.61301499e-02 -1.60261471e-02 -1.59279659e-02 -1.50890733e-02
-   -1.49622165e-02 -1.49346222e-02 -1.48135408e-02 -1.43072860e-02
-   -1.42831369e-02 -1.37699910e-02 -1.37629881e-02 -1.36783463e-02
-   -1.35208178e-02 -1.34567332e-02 -1.33333800e-02 -1.31989584e-02
-   -1.28918792e-02 -1.27007202e-02 -1.25847718e-02 -1.25761743e-02
-   -1.24545615e-02 -1.23268110e-02 -1.13570044e-02 -1.08426278e-02
-   -1.08170965e-02 -1.06376616e-02 -1.06079273e-02 -1.04922102e-02
-   -1.03092307e-02 -1.02715516e-02 -1.01485407e-02 -1.01238365e-02
-   -1.00605610e-02 -9.98272831e-03 -9.88028507e-03 -9.81565747e-03
-   -9.55967259e-03 -9.44174854e-03 -9.35063138e-03 -9.08308261e-03
-   -9.05465831e-03 -8.89527113e-03 -8.89514576e-03 -8.88261710e-03
-   -8.84849008e-03 -8.68441806e-03 -8.66137457e-03 -8.65994531e-03
-   -8.49423228e-03 -8.36968151e-03 -8.31067670e-03 -8.19271339e-03
-   -8.10485290e-03 -8.06364675e-03 -8.01797292e-03 -8.01594133e-03
-   -7.96725197e-03 -7.92745805e-03 -7.62655478e-03 -7.45179970e-03
-   -7.27211370e-03 -6.97921032e-03 -6.83709000e-03 -6.38834426e-03
-   -6.36516416e-03 -6.33163235e-03 -6.27655740e-03 -6.26589301e-03
-   -6.21817182e-03 -6.15802534e-03 -6.05530180e-03 -6.03764752e-03
-   -6.00981625e-03 -5.97738092e-03 -5.80438384e-03 -5.74693535e-03
-   -5.69133839e-03 -5.55008167e-03 -5.54780113e-03 -5.50379276e-03
-   -5.48146015e-03 -5.34493738e-03 -5.34137673e-03 -5.24460312e-03
-   -4.99317842e-03 -4.97174822e-03 -4.85599126e-03 -4.82457801e-03
-   -4.81826728e-03 -4.64606253e-03 -4.60919025e-03 -4.44442421e-03
-   -4.34518939e-03 -4.29832733e-03 -4.24930163e-03 -4.23580135e-03
-   -4.21821409e-03 -4.19421895e-03 -4.15724927e-03 -4.02625212e-03
-   -3.92251906e-03 -3.91458708e-03 -3.81910399e-03 -3.80912707e-03
-   -3.79544041e-03 -3.77015807e-03 -3.76636666e-03 -3.76005048e-03
-   -3.70926475e-03 -3.67470803e-03 -3.66779225e-03 -3.61306994e-03
-   -3.61110457e-03 -3.57475382e-03 -3.56284697e-03 -3.49004525e-03
-   -3.46639822e-03 -3.39783582e-03 -3.29168651e-03 -3.24217026e-03
-   -3.19886829e-03 -3.19371963e-03 -3.15757569e-03 -3.15618802e-03
-   -3.08819184e-03 -3.08608013e-03 -3.06822743e-03 -3.03847231e-03
-   -3.00919576e-03 -2.99247493e-03 -2.93810399e-03 -2.92732640e-03
-   -2.90600431e-03 -2.82514407e-03 -2.75113453e-03 -2.73675490e-03
-   -2.73230039e-03 -2.66840385e-03 -2.63154422e-03 -2.61090388e-03
-   -2.53394287e-03 -2.49322296e-03 -2.42220603e-03 -2.41341059e-03
-   -2.37656142e-03 -2.37326120e-03 -2.36825695e-03 -2.30393164e-03
-   -2.30038787e-03 -2.27876669e-03 -2.22961530e-03 -2.22897580e-03
-   -2.22842953e-03 -2.13627001e-03 -2.13003651e-03 -2.10498357e-03
-   -2.09631896e-03 -2.09387736e-03 -2.02654437e-03 -1.98157725e-03
-   -1.93061641e-03 -1.90435069e-03 -1.87906964e-03 -1.86693355e-03
-   -1.86172132e-03 -1.85036138e-03 -1.83425139e-03 -1.82506468e-03
-   -1.79298164e-03 -1.78317483e-03 -1.69064563e-03 -1.66292974e-03
-   -1.60396885e-03 -1.58965328e-03 -1.58774153e-03 -1.57192374e-03
-   -1.56412331e-03 -1.55889831e-03 -1.53077480e-03 -1.52090030e-03
-   -1.50711262e-03 -1.46333074e-03 -1.45160017e-03 -1.44208560e-03
-   -1.42553923e-03 -1.41621771e-03 -1.38227164e-03 -1.37487009e-03
-   -1.35269781e-03 -1.34202300e-03 -1.29533166e-03 -1.29110821e-03
-   -1.28298224e-03 -1.24342116e-03 -1.23808975e-03 -1.17819767e-03
-   -1.15600574e-03 -1.15495934e-03 -1.12207362e-03 -1.11076061e-03
-   -1.08336551e-03 -1.06529222e-03 -1.05996463e-03 -1.03663691e-03
-   -1.02982348e-03 -1.02693759e-03 -9.92539251e-04 -9.86779856e-04
-   -9.74482440e-04 -9.73938382e-04 -8.87221729e-04 -8.86890209e-04
-   -8.48393349e-04 -7.96998342e-04 -7.89752874e-04 -7.55491248e-04
-   -7.49691437e-04 -6.73585388e-04 -6.55668471e-04 -6.38067686e-04
-   -6.15902776e-04 -5.85116824e-04 -5.55645856e-04 -4.89712402e-04
-   -4.74287561e-04 -4.48337538e-04 -3.67115609e-04 -3.02736611e-04
-   -2.95542355e-04 -2.81762455e-04 -2.56317304e-04 -2.39377047e-04
-   -2.33947274e-04 -2.28669734e-04 -2.13412182e-04 -1.16030627e-04
-   -1.01465892e-04 -9.70732071e-05 -9.49471578e-05 -4.30796499e-05
-   -3.98710617e-05 -3.75220770e-05 -2.59532790e-05 -2.43258983e-05
-   -9.15586861e-06  2.70945586e-18  1.17624459e-05  3.55916291e-05
-    9.52113478e-05  9.89611658e-05  1.02228227e-04  1.02411479e-04
-    1.30955828e-04  1.53295031e-04  1.58079696e-04  1.63299735e-04
-    1.73290101e-04  2.26787015e-04  2.41732661e-04  2.41854505e-04
-    2.51720208e-04  2.51859898e-04  2.61445417e-04  2.79916392e-04
-    3.07348739e-04  3.13402801e-04  3.17903476e-04  3.34390934e-04
-    3.37947175e-04  3.60255013e-04  3.60966191e-04  3.61881655e-04
-    3.78435345e-04  3.80319088e-04  3.90592908e-04  4.17444317e-04
-    4.24834154e-04  4.32590237e-04  4.62176467e-04  4.63567834e-04
-    4.82300293e-04  4.82626197e-04  4.83155120e-04  4.97960043e-04
-    5.16092361e-04  5.42042540e-04  5.47347125e-04  5.56128447e-04
-    5.74328331e-04  5.99829596e-04  6.14122819e-04  6.28490965e-04
-    6.56081451e-04  6.86513347e-04  7.09454838e-04  7.14860507e-04
-    7.26600636e-04  7.33609209e-04  7.51713924e-04  7.63162975e-04
-    7.75627668e-04  7.87968551e-04  8.13042614e-04  8.16749729e-04
-    8.42498746e-04  8.62794077e-04  8.80921434e-04  8.89813309e-04
-    8.98370119e-04  9.04331237e-04  9.27681343e-04  9.31756513e-04
-    9.56077623e-04  9.58468852e-04  9.61577154e-04  9.64922241e-04
-    9.65826723e-04  9.69211010e-04  9.81707853e-04  9.90422239e-04
-    9.96499773e-04  9.98359716e-04  9.98687345e-04  1.03066744e-03
-    1.03520309e-03  1.05171736e-03  1.05532299e-03  1.07300589e-03
-    1.07652498e-03  1.07735651e-03  1.09275941e-03  1.11786395e-03
-    1.12046493e-03  1.12567270e-03  1.13229818e-03  1.16700478e-03
-    1.19109592e-03  1.19446029e-03  1.19758866e-03  1.22284987e-03
-    1.23413390e-03  1.24627219e-03  1.28975471e-03  1.33504969e-03
-    1.36298347e-03  1.37249140e-03  1.51389794e-03  1.51440900e-03
-    1.52384856e-03  1.53852604e-03  1.53893552e-03  1.55097258e-03
-    1.55774732e-03  1.58961653e-03  1.61115851e-03  1.61127585e-03
-    1.61984608e-03  1.64020492e-03  1.65014254e-03  1.66337067e-03
-    1.66671176e-03  1.70168935e-03  1.70886171e-03  1.71240382e-03
-    1.72040493e-03  1.75951495e-03  1.76144189e-03  1.77254682e-03
-    1.78522451e-03  1.79694210e-03  1.85853787e-03  1.86362134e-03
-    1.86947158e-03  1.93392898e-03  2.01092514e-03  2.03191797e-03
-    2.06848181e-03  2.07211376e-03  2.08709811e-03  2.09508416e-03
-    2.10840790e-03  2.11637337e-03  2.11655164e-03  2.14421204e-03
-    2.14900796e-03  2.15182654e-03  2.19895268e-03  2.20566576e-03
-    2.20688264e-03  2.25026492e-03  2.26571154e-03  2.29847788e-03
-    2.37406598e-03  2.38546857e-03  2.39259812e-03  2.41160506e-03
-    2.50791129e-03  2.53251562e-03  2.55322621e-03  2.57508066e-03
-    2.61223956e-03  2.63462298e-03  2.65333758e-03  2.66045493e-03
-    2.67728882e-03  2.67961639e-03  2.67977202e-03  2.69892628e-03
-    2.70129618e-03  2.70788770e-03  2.75371522e-03  2.76190526e-03
-    2.76411801e-03  2.76432812e-03  2.77419553e-03  2.77567764e-03
-    2.77790395e-03  2.79322697e-03  2.81807541e-03  2.82949553e-03
-    2.87801035e-03  2.91645731e-03  2.94255567e-03  2.99401175e-03
-    2.99579382e-03  3.03966808e-03  3.04699797e-03  3.05403710e-03
-    3.06927966e-03  3.09234790e-03  3.13458196e-03  3.15037233e-03
-    3.20832295e-03  3.21117335e-03  3.27826708e-03  3.29160878e-03
-    3.30093594e-03  3.32806232e-03  3.35051000e-03  3.36842889e-03
-    3.39543894e-03  3.43474111e-03  3.44162509e-03  3.47850114e-03
-    3.48154851e-03  3.48983298e-03  3.49236151e-03  3.49334732e-03
-    3.53565728e-03  3.59273952e-03  3.68204270e-03  3.70086017e-03
-    3.82567604e-03  3.88469869e-03  3.93430771e-03  3.94433555e-03
-    4.03230759e-03  4.04057775e-03  4.04980329e-03  4.06197517e-03
-    4.06909783e-03  4.12251754e-03  4.14531906e-03  4.20491758e-03
-    4.23395257e-03  4.31205338e-03  4.37040350e-03  4.40517052e-03
-    4.42867968e-03  4.43931841e-03  4.47880033e-03  4.54006256e-03
-    4.58632666e-03  4.59375845e-03  4.62496349e-03  4.65043315e-03
-    4.79423146e-03  4.83026693e-03  4.84202411e-03  4.86456402e-03
-    4.93681710e-03  5.11366376e-03  5.24084808e-03  5.42729367e-03
-    5.42747335e-03  5.46441827e-03  5.62965333e-03  5.71088218e-03
-    5.72760243e-03  5.79940274e-03  5.80027121e-03  5.83910558e-03
-    5.90145498e-03  5.93433732e-03  5.96655045e-03  6.01757734e-03
-    6.25833494e-03  6.38641960e-03  6.41713844e-03  6.52022992e-03
-    6.57547194e-03  6.57735916e-03  6.62400294e-03  6.64169453e-03
-    6.66641998e-03  6.78568952e-03  6.79739390e-03  6.89856723e-03
-    6.91327294e-03  6.99920892e-03  7.05114673e-03  7.10746825e-03
-    7.43068241e-03  7.45630416e-03  7.45835387e-03  7.67735563e-03
-    7.76634640e-03  7.76947022e-03  7.85690896e-03  7.86327271e-03
-    7.90640881e-03  8.08962422e-03  8.10359918e-03  8.12204641e-03
-    8.21101981e-03  8.21195914e-03  8.33753197e-03  8.35933277e-03
-    8.39755829e-03  8.39902665e-03  8.45694455e-03  8.70303353e-03
-    8.86492964e-03  9.27423017e-03  9.27605606e-03  9.28725569e-03
-    9.34024290e-03  9.34407457e-03  9.36665880e-03  9.51337076e-03
-    9.52276152e-03  9.63393973e-03  9.78678707e-03  9.90222912e-03
-    1.01311370e-02  1.01699872e-02  1.01716265e-02  1.01965407e-02
-    1.02387519e-02  1.07756439e-02  1.08174444e-02  1.08494806e-02
-    1.10628426e-02  1.11994221e-02  1.13260970e-02  1.13418225e-02
-    1.14920916e-02  1.17777937e-02  1.22208404e-02  1.22437753e-02
-    1.22549682e-02  1.23016593e-02  1.26013543e-02  1.26495427e-02
-    1.28153950e-02  1.28184658e-02  1.28925715e-02  1.30580443e-02
-    1.30674432e-02  1.31935791e-02  1.32240267e-02  1.32742536e-02
-    1.35921349e-02  1.37913430e-02  1.38280169e-02  1.38820303e-02
-    1.38997521e-02  1.42227280e-02  1.42308029e-02  1.42783425e-02
-    1.45397234e-02  1.46186715e-02  1.46752297e-02  1.51135297e-02
-    1.51728742e-02  1.52553799e-02  1.55384581e-02  1.55410536e-02
-    1.57278218e-02  1.58419514e-02  1.60162819e-02  1.64936288e-02
-    1.67869466e-02  1.70305580e-02  1.71909864e-02  1.74456696e-02
-    1.79562596e-02  1.79703970e-02  1.80405488e-02  1.83071370e-02
-    1.86331797e-02  1.88244510e-02  1.94053553e-02  1.95173435e-02
-    2.07673945e-02  2.09524311e-02  2.10783958e-02  2.11836541e-02
-    2.17701407e-02  2.18212200e-02  2.24258354e-02  2.36895609e-02
-    2.38383390e-02  2.49984703e-02  2.57770348e-02  2.58025319e-02
-    2.76536300e-02  2.78559580e-02  2.86662593e-02  2.93930687e-02
-    3.02372192e-02  3.03910810e-02  3.10513772e-02  3.15895854e-02
-    3.26996541e-02  3.33447081e-02  3.37021959e-02  3.37788928e-02
-    3.50667835e-02  3.51472116e-02  3.53903268e-02  3.54699656e-02
-    3.54844404e-02  3.77162785e-02  3.81870143e-02  4.13017530e-02
-    4.32536296e-02  4.60120480e-02  4.61920151e-02  4.94562538e-02
-    4.96862833e-02  4.99209284e-02  5.01919338e-02  5.06238146e-02
-    5.43147180e-02  5.72795840e-02  7.22635192e-02  7.55002090e-02]
-  [316 168  45 513 559 442 411   2 340 162 368 203 178 456 237 382 185 548
-   350 298 420  48 431 520  89 174 223  60 667  73 560 176 576 346 103 394
-   454 294  11 462 451 261  70 166 212 371 668  38  90  14 406  64  54 437
-   445 640 508 236 401 282  62 523 234  75 167 518 124  16 531 334 206 186
-   330 356 290 137 448 264 596 541  30 427 648 235 601 295 599 191 317 145
-   630 273  39 537 627 679 571 386 132 524 292 215 552 534 536  91 398 123
-   584 675 324 365 268 603 200 527  77 412 274  71  88 147 490 588 106 370
-   512 214 369 348 219 366 357 384 573 689 143 251 439 266 602 149 107 614
-   351 554 310 558 291 570 687  20 608 562 449  13 302 242  65 432 297 181
-   626 362   3 634  47 388 355 344 660 561 613 629 511 672 581 213 478 136
-   535 222 104 102 593 111  24 262 575 159 221 256 122 502 564 633  81 319
-   662 665 567 323 611 580 637 587 170 329 676  63 392 598 108 192 281  43
-   275 455  92 146 285 563 177 425 673 100 688 121 517 538 460   4 233 379
-   226 267 345 526 642 466 278 414 649 436 583 378 446 424 461 120 276 671
-   150 303 589 405 415 187 211 644 161 574 342 279 528  83 623  58 551 399
-     1  61 389 257 112  31 239 305  99 115 339 184  98 311 577 631 313 141
-   277 217  44 605 457 487 393 621 497  74 473 489 438 270 443  85 429 287
-   635 367 228 477 690 163 506 208 669 157 315 293 682 155 485 572 492 678
-   441 600 248 101  15 484 641 480 138 503 309  55 354 591 385 244 619 209
-   243 180  56 594 666 505 500 110 595 504 320 182 337  18  68 381 253  37
-   650 133 372 677 347 453  46 199 670 498  22 661  97   0 632 495 579 204
-   494 653 127 547 312 546 529 397 532 231 288 142 440 471 205 507 684 636
-   332 691 195 404  79 522 651 109 525 173  41 271 597 501 263 151 483 306
-   514 472 566  80 364 656 519 435 578 585  49  78 655 465 410 280 269 407
-   544 647 172 249 590  87 421 521 314 333 624 434 296 118 481 197 194 468
-   327 467 338 540 272  17 542 638 335 486 375 645 607 300 604 193  72 183
-   450 201 148 423 592 135 403 153 188  84 606 620 289 685 417 304  21  26
-   683 134 299 516 250 119 459 156 569 652 681 428 493 165 326 680 349 482
-   402 400 408 359 474  96 308 128 610 659 246 545  25 254 464 686 568 416
-   207 469 144 617   7 458 609  76 639 499 391 654 452 586 396 515 125 549
-   363 476 238 496 126 265 387 307 380 663 422 447  51 616 376 383 475  40
-   582 260 325 444 565 225 557 196 510 255 674 131 643 252 395 555  27 618
-   533 247 615 202 220 664 419 479 622 341 343 530  50 336 179 413  23 258
-   556  34 227 628 646 657 390  28 286 164  52 230 216 409 550 129   5 373
-   470  12 488 245 229  19 116 240  42  57 377 426 361  67  94 130 658 114
-    53  33 113 189 491 152 117 105  82  59  95   8   6 169  10 321 612 232
-   430 625 322 328   9 543  86 198 433 360 509  36 175 463 331 283 553 358
-   160 210 259 218 318 241 171  66 140 284 154 418 374 352  69 190  29 139
-   224 539  32 301 353  35  93 158]
-#+end_example
-
-
-#+begin_src ipython
-  day = 6
-  options['day'] = day
-  fig, ax = plt.subplots(1, 2)
-  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-
-  ax[0].imshow(X_data[16:, neur].mean(0),
-            aspect='auto', cmap='viridis',
-            extent=[0, 14, 0, len(selective[day-1])],
-            vmin=0)
-
-  ax[1].imshow(X_data[:16, neur].mean(0),
-            aspect='auto', cmap='viridis',
-            extent=[0, 14, 0, len(selective[day-1])],
-            vmin=0)
-
-  # add_vdashed(ax)
-  # cb = ax.set_colorbar()
-  # cb.set_label('$\Delta F / F$')
-
-  plt.xticks(np.arange(0, 16, 2))
-  plt.xlabel('Time')
-  plt.ylabel('$\Delta F/F$')
-  plt.ylabel('Trial')
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: DATA: FEATURES sample TASK all TRIALS  DAYS 6 LASER 0
-[[file:./.ob-jupyter/ac63c36d86d825e6d7d20f2aac0047d4ccace6a6.png]]
-:END:
-
-#+begin_src ipython
-  print(y_days[y_days['day'] == 1])
-#+end_src
-
-#+RESULTS:
-#+begin_example
-       sample_odor  test_odor        response     tasks  laser  day        df
-  0            0.0        1.0     correct_rej  DualNoGo    0.0  1.0  0.000000
-  1            1.0        0.0    incorrect_fa  DualNoGo    1.0  1.0  0.085709
-  2            1.0        0.0     correct_rej    DualGo    0.0  1.0  0.003190
-  3            0.0        0.0     correct_hit    DualGo    0.0  1.0  0.009788
-  4            1.0        1.0     correct_hit  DualNoGo    1.0  1.0  0.108112
-  ..           ...        ...             ...       ...    ...  ...       ...
-  187          1.0        0.0     correct_rej  DualNoGo    0.0  1.0  0.019521
-  188          0.0        1.0     correct_rej       DPA    1.0  1.0  0.079777
-  189          1.0        1.0  incorrect_miss       DPA    0.0  1.0  0.000000
-  190          1.0        0.0     correct_rej    DualGo    1.0  1.0  0.057520
-  191          1.0        1.0  incorrect_miss       DPA    1.0  1.0  0.067437
-
-  [192 rows x 7 columns]
-#+end_example
-
-#+begin_src ipython
-  data = y_days[(y_days['day'] == 1) & (y_days['laser']==0)]
-#+end_src
-
-#+RESULTS:
-
-** Activity timing
-
-#+begin_src ipython
-  day = 6
-  options['day'] = day
-  options['task'] = 'DPA'
-  options['T_WINDOW'] = 0.0
-
-  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-  print('data', X_data.shape)
-
-  size = X_data.shape[0] // 2
-  X = X_data[:size, :, options['bins_STIM']].mean(0)
-  print('X', X.shape)
-
-  # X = np.nanmean(circcvl(X_data[:size, :, options['bins_ED']], windowSize=2), 0)
-
-  peak_times = np.argmax(X, axis=1)
-  print(peak_times.shape)
-
-  idx = np.argsort(peak_times)
-  print(idx.shape)
-#+end_src
-
-#+RESULTS:
-: DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
-: data (32, 693, 84)
-: X (693, 6)
-: (693,)
-: (693,)
-
-#+begin_src ipython
-  fig, ax = plt.subplots(2, 3, figsize=0.75 * np.array([3 * width, 2 * height]))
-
-  size = X_data.shape[0] // 2
-
-  for i in range(options['n_days'] // 2):
-      options['day'] = i+1
-      X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-
-      data = circcvl(np.nanmean(X_data[:size, idx], 0), windowSize=2)
-
-      ax[0][i].imshow(data,
-                      aspect='auto', cmap='viridis',
-                      extent=[0, 14, 0, 693],
-                      vmin=-0, vmax=.25,
-                      )
-      add_vlines(ax=ax[0][i])
-      add_vlines(ax=ax[0][i])
-      add_vlines(ax=ax[0][i])
-
-  for i in range(options['n_days'] // 2, options['n_days']):
-      options['day'] = i+1
-      X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-
-      data = circcvl(np.nanmean(X_data[:size, idx], 0), windowSize=2)
-      ax[1][i-3].imshow(data,
-                      aspect='auto', cmap='viridis',
-                      extent=[0, 14, 0, 693],
-                      vmin=-0, vmax=.25,
-                      )
-      add_vlines(ax=ax[1][i-3])
-      add_vlines(ax=ax[1][i-3])
-      add_vlines(ax=ax[1][i-3])
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
-: DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
-: DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
-: DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
-: DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
-: DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
-[[file:./.ob-jupyter/780a5f40b70f77bb133b4700ad8fbddbd8cee606.png]]
-:END:
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:

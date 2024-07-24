@@ -57,6 +57,7 @@ def set_options(**kwargs):
     opts["n_boots"] = 1000  # for bootstrap
     opts["n_repeats"] = 10  # for repeated Kfold
 
+    opts["n_splits"] = 3
     opts["avg_coefs"] = True
 
     opts["add_vlines"] = 0
@@ -85,6 +86,7 @@ def set_options(**kwargs):
 
     # adjust imbalance in trial types
     opts["balance"] = 'under' # under, over, aug
+    opts["class_weight"] = 0 # to use pos_weight in nn.BCEwithLogitsLoss and balance the classes
 
     ################################
     # classification parameters

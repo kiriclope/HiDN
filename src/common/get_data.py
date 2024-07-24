@@ -283,7 +283,6 @@ def get_X_y_days(**kwargs):
         # print("X_days", X_days.shape, "y_days", y_days.shape)
 
     if kwargs["preprocess"]:
-        print("##########################################")
         print(
             "PREPROCESSING:",
             "SCALER",
@@ -295,7 +294,6 @@ def get_X_y_days(**kwargs):
             "UNIT VAR",
             kwargs["unit_var_BL"],
         )
-        print("##########################################")
 
         X_days = preprocess_df(X_days, y_days, **kwargs)
 
@@ -327,19 +325,20 @@ def get_X_y_mice(mice=gv.mice, days=gv.days, path=gv.filedir, IF_RELOAD=0):
 
 
 def get_X_y_S1_S2(X, y, **kwargs):
-    print(
-        "DATA:",
-        "FEATURES",
-        kwargs["features"],
-        "TASK",
-        kwargs["task"],
-        "TRIALS",
-        kwargs["trials"],
-        "DAYS",
-        kwargs["day"],
-        "LASER",
-        kwargs["laser"],
-    )
+    if kwargs['verbose']:
+        print(
+            "DATA:",
+            "FEATURES",
+            kwargs["features"],
+            "TASK",
+            kwargs["task"],
+            "TRIALS",
+            kwargs["trials"],
+            "DAYS",
+            kwargs["day"],
+            "LASER",
+            kwargs["laser"],
+        )
 
     idx_trials = True
     if kwargs["trials"] == "correct":

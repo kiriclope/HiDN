@@ -250,7 +250,7 @@ def pkl_load(name, path="."):
   }
 
   options = set_options(**kwargs)
-  options['fname'] = '_scaled_BL_DualGo'
+  options['fname'] = '_tuned_scaled_BL'
 #+end_src
 
 #+RESULTS:
@@ -271,7 +271,7 @@ def pkl_load(name, path="."):
       print('X', X.shape, 'y', y.shape)
 
       # cv = 3
-      cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
+      cv = RepeatedStratifiedKFold(n_splits=options['n_splits'], n_repeats=options['n_repeats'])
       # cv = LeaveOneOut()
       # Perform grid search
       grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=30)
@@ -285,7 +285,7 @@ def pkl_load(name, path="."):
       best_params = grid.best_params_
       print(best_params)
 
-      cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
+      cv = RepeatedStratifiedKFold(n_splits=options['n_splits'], n_repeats=options['n_repeats'])
       # cross validated scores
       print('Computing cv scores ...')
       estimator = SlidingEstimator(clone(best_model), n_jobs=1,
@@ -600,11 +600,11 @@ def pkl_load(name, path="."):
 
 #+RESULTS:
 
+
 * Scores mice
 
 #+begin_src ipython
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  mice = ['JawsM15', 'JawsM18']
   mouse = 'JawsM15'
 
   l1_ratio = 0.95
@@ -626,7 +626,7 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: _scaled_BL_DualGo
+: _tuned_scaled_BL
 
 #+begin_src ipython
   scores_mice = []
@@ -644,10 +644,16 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: JawsM15_scores_0.95_l1_ratio_scaled_BL_DualGo.pkl
+: ChRM04_scores_0.95_l1_ratio_tuned_scaled_BL.pkl
 : scores (3, 6, 30, 84)
-: JawsM18_scores_0.95_l1_ratio_scaled_BL_DualGo.pkl
-: file not found
+: JawsM15_scores_0.95_l1_ratio_tuned_scaled_BL.pkl
+: scores (3, 6, 30, 84)
+: JawsM18_scores_0.95_l1_ratio_tuned_scaled_BL.pkl
+: scores (3, 6, 30, 84)
+: ACCM03_scores_0.95_l1_ratio_tuned_scaled_BL.pkl
+: scores (3, 5, 30, 84)
+: ACCM04_scores_0.95_l1_ratio_tuned_scaled_BL.pkl
+: scores (3, 5, 30, 84)
 
 #+begin_src ipython
   cmap = plt.get_cmap('Blues')
@@ -660,7 +666,7 @@ def pkl_load(name, path="."):
   golden_ratio = (5**.5 - 1) / 2
 
   fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
-  mouse = 'JawsM15'
+  mouse = 'ACCM03'
   index = mice.index(mouse)
 
   scores_sample = scores_mice[index][0]
@@ -670,9 +676,9 @@ def pkl_load(name, path="."):
   size = scores_sample.shape[1] // 2
 
   for i in range(options['n_days']):
-      ax[0].plot(circcvl(scores_sample[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[1].plot(circcvl(scores_dist[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[2].plot(circcvl(scores_choice[i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[0].plot(circcvl(scores_sample[i].mean(0), windowSize=6), label=i+1, color = colors[i]);
+      ax[1].plot(circcvl(scores_dist[i].mean(0), windowSize=6), label=i+1, color = colors[i]);
+      ax[2].plot(circcvl(scores_choice[i].mean(0), windowSize=6), label=i+1, color = colors[i]);
 
   # ax[2].legend(fontsize=10)
   ax[0].set_xlabel('Step')
@@ -683,12 +689,12 @@ def pkl_load(name, path="."):
   ax[2].set_ylabel('Choice Score')
   ax[0].axhline(y=0.5, color='k', linestyle='--')
 
-  plt.savefig('%s_scores.svg' % options['mouse'], dpi=300)
+  plt.savefig('./figs/%s_scores.svg' % options['mouse'], dpi=300)
   plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/41021294feb6342f94464e6c601e40f03f05d655.png]]
+[[file:./.ob-jupyter/5ac3008018f5499b295295546172a82b5ce6be45.png]]
 
 #+begin_src ipython
   options = set_options(**kwargs)

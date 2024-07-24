@@ -1,0 +1,1462 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import pickle as pkl
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import circmean
+from time import perf_counter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, TensorDataset, DataLoader
+from skorch import NeuralNetClassifier
+
+from sklearn.base import clone
+from sklearn.metrics import make_scorer
+from sklearn.metrics import roc_auc_score
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold, LeaveOneOut
+from sklearn.decomposition import PCA
+
+from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.attractor.energy import run_energy, plot_energy
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.decode.bump import decode_bump, circcvl
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.common.options import set_options
+from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Perceptron
+
+#+begin_src ipython
+class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+    def __init__(self, pos_weight=None, weight=None, reduction='mean'):
+        super(CustomBCEWithLogitsLoss, self).__init__(weight=weight, reduction=reduction, pos_weight=pos_weight)
+
+    def forward(self, input, target):
+        target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+        return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/decode/perceptron.py
+class Perceptron(nn.Module):
+    def __init__(self, num_features, dropout_rate=0.0):
+        super(Perceptron, self).__init__()
+        self.linear = nn.Linear(num_features, 1)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        x = self.dropout(x)
+        hidden = self.linear(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          x = self.relu(self.linear(x))
+          x = self.dropout(x)
+          hidden = self.linear2(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+from skorch.callbacks import Callback
+from skorch.callbacks import EarlyStopping
+
+early_stopping = EarlyStopping(
+    monitor='train_loss',    # Metric to monitor
+    patience=5,              # Number of epochs to wait for improvement
+    threshold=0.001,       # Minimum change to qualify as an improvement
+    threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+    lower_is_better=True     # Set to True if lower metric values are better
+)
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+class RegularizedNet(NeuralNetClassifier):
+    def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
+n        self.alpha = alpha  # Regularization strength
+        self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+        super().__init__(module, **kwargs)
+
+    def get_loss(self, y_pred, y_true, X=None, training=False):
+        # Call super method to compute primary loss
+        if y_pred.shape != y_true.shape:
+            y_true = y_true.unsqueeze(-1)
+
+        loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+        if self.alpha>0:
+            elastic_net_reg = 0
+            for param in self.module_.parameters():
+                elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+        # Add the elastic net regularization term to the primary loss
+        return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+** Model
+
+#+begin_src ipython
+  class ClassificationCV():
+      def __init__(self, net, n_splits=3, n_repeats=10, params={}, num_features=1, scoring='roc_auc', scaler=None, n_comp=None, verbose=0, n_jobs=30):
+
+          pipe = []
+          if scaler is not None:
+              pipe.append(("scaler", StandardScaler()))
+          if n_comp is not None:
+              self.n_comp = n_comp
+              pipe.append(("pca", PCA(n_components=n_comp)))
+
+          pipe.append(("net", net))
+          self.model = Pipeline(pipe)
+
+          self.num_features = num_features
+          self.scoring = scoring
+
+          if n_splits==-1:
+              self.cv = LeaveOneOut()
+          else:
+              self.cv = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+
+          self.verbose = verbose
+          self.n_jobs = n_jobs
+
+      def fit(self, X, y):
+          self.model['net'].module__num_features = self.num_features
+          grid = GridSearchCV(self.model, params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
+          start = perf_counter()
+          if self.verbose:
+              print('Hyperparam fitting ...')
+          grid.fit(X.astype('float32'), y.astype('float32'))
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          self.best_model = grid.best_estimator_
+          self.best_params = grid.best_params_
+
+          if self.verbose:
+              print(self.best_params)
+
+          self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+      def get_bootstrap_coefs(self, X, y, n_boots=10):
+          start = perf_counter()
+          if self.verbose:
+              print('Bagging best model ...')
+
+          self.bagging_clf = BaggingClassifier(base_estimator=self.best_model, n_estimators=n_boots)
+          self.bagging_clf.fit(X.astype('float32'), y.astype('float32'))
+          end = perf_counter()
+
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
+
+          return self.coefs, self.bias
+
+      def get_overlap(self, model, X):
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          if self.scaler is not None and self.scaler!=0:
+              scaler = model.named_steps['scaler']
+              for i in range(X.shape[-1]):
+                  X[..., i] = scaler.transform(X[..., i])
+
+          if self.n_comp is not None:
+              pca = model.named_steps['pca']
+              X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
+
+              for i in range(X.shape[-1]):
+                  X_pca[..., i] = pca.transform(X[..., i])
+
+              self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+          else:
+              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+          return self.overlaps
+
+      def get_bagged_overlaps(self, X, n_boots):
+          X_copy = np.copy(X)
+          overlaps_list = []
+          n_boots = self.bagging_clf.estimatiors_.shape[0]
+
+          for i in range(n_boots):
+              model = self.bagging_clf.estimators_[i]
+              overlaps = self.get_overlap(model, X_copy)
+              overlaps_list.append(overlaps)
+
+          return np.array(overlaps_list).mean(0)
+
+      def get_cv_scores(self, X, y, scoring, cv):
+          start = perf_counter()
+          if self.verbose:
+              print('Computing cv scores ...')
+
+          estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
+                                       scoring=scoring, verbose=False)
+
+          self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
+                                             cv=cv, n_jobs=-1, verbose=False)
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          return self.scores
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  model = ClassificationCV(net, n_splits=options['n_splits'], n_repeats=options['n_repeats'], scaler=options['scaler'], n_comp=options['n_comp'])
+
+  model.fit(X, y)
+  model.get_bootstrap_coefs(self, X, y, n_boots=options['n_boots'])
+  model.get_cv_scores(X, y, scoring, cv)
+#+end_src
+
+** Other
+#+begin_src ipython
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_bagged_overlaps(clf, X, n_estimators):
+      X_copy = np.copy(X)
+      overlaps_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          scaler_exists = any(name == 'scaler' for name, _ in model.steps)
+          pca_exists = any(name == 'pca' for name, _ in model.steps)
+
+          if scaler_exists:
+              scaler = model.named_steps['scaler']
+              for j in range(X.shape[-1]):
+                  X_copy[..., j] = scaler.transform(X[..., j])
+
+          if  pca_exists:
+              pca = model.named_steps['pca']
+              X_pca = np.zeros((X.shape[0], coefs.shape[0], X.shape[-1]))
+
+              for i in range(X.shape[-1]):
+                  X_pca[..., i] = pca.transform(X[..., i])
+
+              overlaps = -(np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+          else:
+              overlaps = -(np.swapaxes(X_copy, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+          overlaps_list.append(overlaps)
+
+      return np.array(overlaps_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs_list = []
+      bias_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          coefs, bias = rescale_coefs(model, coefs, bias)
+
+          coefs_list.append(coefs)
+          bias_list.append(bias)
+
+      return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  kwargs = {
+      'mouse': 'ACCM03',
+      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'preprocess': True, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL':False,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 32,
+      'n_splits': 3, 'n_repeats': 16,
+      'class_weight': 0
+  }
+
+  options = set_options(**kwargs)
+
+#+end_src
+
+#+RESULTS:
+
+* Decoding vs days
+** Helpers
+
+#+begin_src ipython
+  def hyper_tune(model, epoch, params, scoring, **options):
+
+      # load data
+      dum = 0
+      if options['features'] == 'distractor':
+          if options['task'] != 'Dual':
+              task = options['task']
+              options['task'] = 'Dual'
+              dum = 1
+
+      X_days, y_days = get_X_y_days(**options)
+      X, y = get_X_y_S1_S2(X_days, y_days, **options)
+      y[y==-1] = 0
+
+      options['epochs'] = [epoch]
+      X_avg = avg_epochs(X, **options).astype('float32')
+      print('X', X.shape, 'y', y.shape)
+
+
+      if options['class_weight']:
+          pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
+          print('imbalance', pos_weight)
+          model.criterion__pos_weight = pos_weight
+
+      # cv = 5
+      if options['n_splits']==-1:
+          cv = LeaveOneOut()
+      else:
+          cv = RepeatedStratifiedKFold(n_splits=options['n_splits'], n_repeats=options['n_repeats'])
+
+      # Perform grid search
+      grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=30)
+      start = perf_counter()
+      print('hyperparam fitting ...')
+      grid.fit(X_avg, y)
+      end = perf_counter()
+      print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+      best_model = grid.best_estimator_
+      best_params = grid.best_params_
+      print(best_params)
+
+      scores = None
+      # if refit true the best model is refitted to the whole dataset
+      coefs = best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+      bias = best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+      # coefs, bias = rescale_coefs(best_model, coefs, bias)
+
+      if options['trials'] == 'correct':
+          options['trials'] = ''
+          X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
+      if dum:
+          options['features'] = 'sample'
+          options['task'] = task
+          X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+      # # bootstrapped coefficients
+      if options['bootstrap']:
+          start = perf_counter()
+          print('Bagging best model ...')
+          bagging_clf = BaggingClassifier(base_estimator=best_model, n_estimators=options['n_boots'])
+          bagging_clf.fit(X_avg, y)
+          end = perf_counter()
+          print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=options['n_boots'])
+          overlaps = get_bagged_overlaps(bagging_clf, X, n_estimators=options['n_boots'])
+
+      else:
+          if options['scaler'] is not None:
+              scaler = best_model.named_steps['scaler']
+              for i in range(X.shape[-1]):
+                  X[..., i] = scaler.transform(X[..., i])
+
+          if options['n_comp'] is not None:
+              pca = best_model.named_steps['pca']
+              X_pca = np.zeros((X.shape[0], options['n_comp'], X.shape[-1]))
+
+              for i in range(X.shape[-1]):
+                  X_pca[..., i] = pca.transform(X[..., i])
+
+              overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+          else:
+              overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+      return overlaps
+#+end_src
+
+#+RESULTS:
+
+** Fit
+
+#+begin_src ipython
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=693,
+      module__dropout_rate=0.0,
+      alpha=0.01,
+      l1_ratio=options['l1_ratio'],
+      criterion=CustomBCEWithLogitsLoss,
+      criterion__pos_weight=torch.tensor(1.0, device=DEVICE).to(torch.float32),
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=1000,
+      callbacks=[early_stopping],
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      verbose=0,
+      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+  )
+
+  pipe = []
+  if options['scaler'] is not None:
+      pipe.append(("scaler", StandardScaler()))
+  if options['n_comp'] is not None:
+      pipe.append(("pca", PCA(n_components=options['n_comp'])))
+
+  pipe.append(("net", net))
+  pipe = Pipeline(pipe)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  params = {'net__alpha': np.logspace(-4, 4, 10)}
+  scoring = 'roc_auc'
+
+  model = ClassificationCV(net, n_splits=options['n_splits'], n_repeats=options['n_repeats'],
+                           params=params, scoring=scoring, scaler=options['scaler'], n_comp=options['n_comp'])
+
+  X_days, y_days = get_X_y_days(**options)
+  X, y = get_X_y_S1_S2(X_days, y_days, **options)
+  y[y==-1] = 0
+  print('X', X.shape, 'y', y.shape)
+
+  options['epochs'] = ['ED']
+  X_avg = avg_epochs(X, **options).astype('float32')
+
+  index = mice.index(options['mouse'])
+  model.num_features = N_NEURONS[index]
+
+  model.fit(X_avg, y)
+  # model.get_bootstrap_coefs(self, X, y, n_boots=options['n_boots'])
+  model.get_cv_scores(X, y, scoring, cv=3)
+#+end_src
+
+#+RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+: X (64, 361, 84) y (64,)
+
+#+begin_src ipython
+  scores = model.get_cv_scores(X, y, scoring, cv=3)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  model.get_bootstrap_coefs(self, X, y, n_boots=options['n_boots'])
+#+end_src
+
+#+begin_src ipython
+  params = {
+    'net__alpha': np.logspace(-4, 4, 10),
+    # 'net__l1_ratio': np.linspace(0, 1, 10),
+    # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+  }
+
+  options['reload'] = 0
+  options['verbose'] = 1
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  scoring = safe_roc_auc
+
+  days = np.arange(1, options['n_days']+1)
+  options = set_options(**options)
+
+  if options['n_comp'] is None:
+      index = mice.index(options['mouse'])
+      pipe['net'].module__num_features = N_NEURONS[index]
+  else:
+      pipe['net'].module__num_features = options['n_comp']
+
+  overlaps_sample = []
+  overlaps_dist = []
+  overlaps_choice = []
+
+  for task in tasks:
+    options['task'] = task
+
+    overlaps_sample_task = []
+    overlaps_dist_task = []
+    overlaps_choice_task = []
+
+    for day in days:
+        options['day'] = day
+
+        options['features'] = 'sample'
+        overlaps = hyper_tune(pipe, epoch='ED', params=params, scoring=scoring, **options)
+        overlaps_sample_task.append(overlaps)
+
+        options['features'] = 'distractor'
+        overlaps = hyper_tune(pipe, epoch='MD', params=params, scoring=scoring, **options)
+        overlaps_dist_task.append(overlaps)
+
+        options['features'] = 'choice'
+        overlaps = hyper_tune(pipe, epoch='CHOICE', params=params, scoring=scoring, **options)
+        overlaps_choice_task.append(overlaps)
+
+    overlaps_sample.append(overlaps_sample_task)
+    overlaps_dist.append(overlaps_dist_task)
+    overlaps_choice.append(overlaps_choice_task)
+
+    overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
+    print(overlaps_save.shape)
+    pkl_save(overlaps_save, '%s_overlaps_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+
+    #+end_src
+
+    #+RESULTS:
+    #+begin_example
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 13s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR FalseDATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 9.999999999999999e-05}
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 1s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DPA TRIALS  DAYS 1 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 9.999999999999999e-05}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 1s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DPA TRIALS  DAYS 2 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.046415888336127774}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DPA TRIALS  DAYS 3 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DPA TRIALS  DAYS 4 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.046415888336127774}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DPA TRIALS  DAYS 5 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      (3, 1, 5, 64, 84)
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.005994842503189409}
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 1s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualGo TRIALS  DAYS 1 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.046415888336127774}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualGo TRIALS  DAYS 2 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_split.py:737: UserWarning: The least populated class in y has only 2 members, which is less than n_splits=3.
+        warnings.warn(
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 9.999999999999999e-05}
+      Bagging best model ...
+      /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/sklearn/model_selection/_search.py:979: UserWarning: One or more of the test scores are non-finite: [nan nan nan nan nan nan nan nan nan nan]
+        warnings.warn(
+      Elapsed (with compilation) = 0h 0m 1s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.046415888336127774}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualGo TRIALS  DAYS 3 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 21.54434690031882}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualGo TRIALS  DAYS 4 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.046415888336127774}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualGo TRIALS  DAYS 5 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      (3, 2, 5, 64, 84)
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 1 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.000774263682681127}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 1s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.046415888336127774}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 2 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 3 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.005994842503189409}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 1s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 4 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 9.999999999999999e-05}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 1s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.046415888336127774}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.3593813663804626}
+      DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 0s
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+      DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 5 LASER 0
+      X (64, 361, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 3s
+      {'net__alpha': 0.000774263682681127}
+      Bagging best model ...
+      Elapsed (with compilation) = 0h 0m 1s
+      (3, 3, 5, 64, 84)
+    #+end_example
+
+#+begin_src ipython
+  print(np.array(overlaps_dist).shape)
+#+end_src
+
+#+RESULTS:
+: (3, 5, 64, 84)
+
+* Overlaps
+
+#+begin_src ipython
+  filename = '%s_overlaps_tasks_%.2f_l1_ratio%s.pkl' % (options['mouse'], options['l1_ratio'], options['fname'])
+  print(filename)
+  try:
+      overlaps = pkl_load(filename, path="../data/%s/" % options['mouse'])
+      print('overlaps', overlaps.shape)
+  except:
+      print('file not found')
+#+end_src
+
+#+RESULTS:
+: ACCM03_overlaps_tasks_0.95_l1_ratio.pkl
+: overlaps (3, 3, 5, 64, 84)
+
+#+begin_src ipython
+  overlaps_sample = overlaps[0]
+  overlaps_dist = overlaps[1]
+  overlaps_choice = overlaps[2]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  time = np.linspace(0, 14, 84)
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+  cmap = plt.get_cmap('Reds')
+  colors2 = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
+
+  task = 1
+  # mask = ~np.isnan(overlaps_dist).any(axis=2)
+  # overlaps_dist = overlaps_dist[:, mask.any(axis=0)]
+  options['features'] = 'choice'
+  options['preprocess'] = False
+  X_days, y_days = get_X_y_days(**options)
+
+  fig, ax = plt.subplots(3, 3, figsize= [2.5 * width, 2.5*height])
+
+  for task in range(3):
+    for i in range(options['n_days']):
+        size = overlaps_sample.shape[2] // 2
+
+        ax[task][0].plot(time, circcvl(overlaps_sample[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        ax[task][1].plot(time, circcvl(overlaps_dist[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+        ax[task][0].plot(time, circcvl(overlaps_sample[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+        ax[task][1].plot(time, circcvl(overlaps_dist[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+
+        options['day'] = i+1
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        size = np.sum(y==-1)
+
+        ax[task][2].plot(time, circcvl(overlaps_choice[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+        ax[task][2].plot(time, circcvl(overlaps_choice[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+    # ax[task][2].legend(fontsize=10)
+    ax[task][0].set_xlabel('Time (s)')
+    ax[task][1].set_xlabel('Time (s)')
+    ax[task][2].set_xlabel('Time (s)')
+    ax[task][0].set_ylabel('Sample Overlap')
+    ax[task][1].set_ylabel('Distractor Overlap')
+    ax[task][2].set_ylabel('Choice Overlap')
+
+    for i in range(3):
+        ax[task][i].set_xticks(np.arange(0, 16, 2))
+        ax[task][i].set_xlim([0, 14])
+        add_vlines(ax[task][i])
+        # ax[task][i].set_ylim([-20, 20])
+
+  plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/d7633c484f744b88d09aa3bb5967b279b8da78a9.png]]
+:END:
+
+#+begin_src ipython
+  options['epochs'] = ['POST_DIST']
+  size = overlaps_sample.shape[2] // 2
+  colors = ['r', 'b', 'g']
+  for task in range(len(tasks)):
+      sample_avg = []
+      sample_ci = []
+      for i in range(options['n_days']):
+          sample_epoch = avg_epochs(-overlaps_sample[task][i][size:] + overlaps_sample[task][i][:size], **options) / 2.0
+          sample_avg.append(sample_epoch.mean(0))
+          sample_ci.append(get_bootstrap_ci(sample_epoch))
+
+      sample_avg = np.array(sample_avg)
+      sample_ci = np.array(sample_ci).T
+
+      plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
+      plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color=colors[task], alpha=0.1)
+
+  plt.axhline(y=0.5, color='k', linestyle='--')
+
+  plt.legend(fontsize=10)
+  plt.xticks(np.arange(1, options['n_days']+1))
+  # plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xlabel('Day')
+  plt.ylabel('Sample Overlap')
+  plt.savefig('%s_overlaps_sample_day.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+  options['epochs'] = ['PRE_DIST']
+  size = overlaps_dist.shape[2] // 2
+  colors = ['r', 'b', 'g']
+  for task in range(len(tasks)):
+      dist_avg = []
+      dist_ci = []
+      for i in range(options['n_days']):
+          dist_epoch = avg_epochs(overlaps_dist[task][i][size:] + overlaps_dist[task][i][:size], **options) / 2.0
+          dist_avg.append(dist_epoch.mean(0))
+          dist_ci.append(get_bootstrap_ci(dist_epoch))
+
+      dist_avg = np.array(dist_avg)
+      dist_ci = np.array(dist_ci).T
+
+      plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
+      plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color=colors[task], alpha=0.1)
+
+  plt.axhline(y=0.5, color='k', linestyle='--')
+
+  plt.legend(fontsize=10)
+  plt.xticks(np.arange(1, options['n_days']+1))
+  # plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xlabel('Day')
+  plt.ylabel('Dist. Overlap')
+  plt.savefig('%s_overlaps_dist_day.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/a407bfef919904843be7cbfd5bc9f0d80db924ff.png]]
+
+
+#+begin_src ipython
+  colors = ['r', 'b', 'g']
+  options['epochs'] = ['LD']
+  options['features'] = 'choice'
+  options['preprocess'] = False
+  options['verbose'] = 0
+  X_days, y_days = get_X_y_days(**options)
+
+  for task in range(len(tasks)):
+      choice_avg = []
+      choice_ci = []
+      options['task'] = options['tasks'][task]
+
+      for i in range(options['n_days']):
+          options['day'] = i+1
+          X, y = get_X_y_S1_S2(X_days, y_days, **options)
+          size = np.sum(y==-1)
+          # print(y.shape, size, overlaps_choice[task][i].shape)
+
+          choice_epoch = avg_epochs(-overlaps_choice[task][i][size:], **options).mean(0) + avg_epochs(overlaps_choice[task][i][:size], **options).mean(0)
+          choice_avg.append(choice_epoch)
+
+          choice_epoch = np.hstack((avg_epochs(-overlaps_choice[task][i][size:], **options), avg_epochs(overlaps_choice[task][i][:size], **options)))
+          choice_ci.append(get_bootstrap_ci(choice_epoch))
+
+      choice_avg = np.array(choice_avg) / 2
+      choice_ci = np.array(choice_ci).T
+
+      plt.plot(np.arange(1, options['n_days']+1), choice_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
+      plt.fill_between(np.arange(1, options['n_days']+1), choice_ci[0], choice_ci[1], color=colors[task], alpha=0.1)
+
+  plt.axhline(y=0.5, color='k', linestyle='--')
+
+  plt.legend(fontsize=10)
+  plt.xticks(np.arange(1, options['n_days']+1))
+  # plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.xlabel('Day')
+  plt.ylabel('Choice Overlap')
+  plt.savefig('%s_overlaps_choice_day.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+[[file:./.ob-jupyter/04d2a38ab7beb22d1f3ccd4b0e644146634cb0f5.png]]
+:END:
+
+* Overlaps mice
+
+#+begin_src ipython
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  # mice = ['JawsM15', 'JawsM18']
+  mouse = 'JawsM15'
+
+  l1_ratio = 0.95
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  kwargs = {
+      'mouse': 'ACCM03',
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
+      'scaler_BL': 'robust', 'avg_noise':True, 'unit_var_BL':False,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+  }
+
+  options = set_options(**options)
+  fname = options['fname']
+  print(fname)
+#+end_src
+
+#+RESULTS:
+: _tasks
+
+#+begin_src ipython
+  overlaps_mice = []
+
+  for mouse in mice:
+      filename = '%s_overlaps_tasks_%.2f_l1_ratio%s.pkl' % (mouse, l1_ratio, fname)
+      print(filename)
+      try:
+          overlaps = pkl_load(filename, path="../data/%s/" % mouse)
+          print('overlaps', overlaps.shape)
+          overlaps_mice.append(overlaps)
+      except:
+          print('file not found')
+          overlaps_mice.append(np.nan * np.ones((3, 6, 2, 84)))
+#+end_src
+
+#+RESULTS:
+: ChRM04_overlaps_tasks_0.95_l1_ratio_tasks.pkl
+: overlaps (2, 3, 6, 30, 84)
+: JawsM15_overlaps_tasks_0.95_l1_ratio_tasks.pkl
+: overlaps (2, 3, 6, 30, 84)
+: JawsM18_overlaps_tasks_0.95_l1_ratio_tasks.pkl
+: overlaps (2, 3, 6, 30, 84)
+: ACCM03_overlaps_tasks_0.95_l1_ratio_tasks.pkl
+: overlaps (2, 3, 5, 30, 84)
+: ACCM04_overlaps_tasks_0.95_l1_ratio_tasks.pkl
+: overlaps (2, 3, 5, 30, 84)
+
+#+begin_src ipython
+  colors = ['r', 'b', 'g']
+  options = set_options(**kwargs)
+  options['T_WINDOW'] = 0
+  options['epochs'] = ['POST_DIST']
+
+  for task in range(3):
+    sample_mice = []
+    for i in range(len(mice)):
+        overlaps_sample = overlaps_mice[i][0][task]
+        sample_avg = []
+        # sample_ci = []
+        for j in range(overlaps_sample.shape[0]):
+            sample_epoch = avg_epochs(overlaps_sample[j], **options)
+            sample_avg.append(sample_epoch.mean(0))
+            # sample_ci.append(get_bootstrap_ci(sample_epoch))
+
+        sample_avg = np.array(sample_avg)
+        while sample_avg.shape[0] !=6:
+            sample_avg = np.append(sample_avg, np.nan)
+
+        sample_mice.append(sample_avg)
+
+    sample_mice = np.array(sample_mice)
+    sample_ci = get_bootstrap_ci(sample_mice)
+    sample_ci_last = get_bootstrap_ci(sample_mice[:3][-1])
+    sample_ci[0][-1] = sample_ci_last[0]
+    sample_ci[1][-1] = sample_ci_last[1]
+
+    plt.plot(np.arange(1, 7), np.nanmean(sample_mice, 0), '-o', label='%s' % options['tasks'][task], color=colors[task])
+    plt.fill_between(np.arange(1, 7), sample_ci[0], sample_ci[1], color=colors[task], alpha=0.05)
+    plt.axhline(y=0.5, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
+  plt.xlabel('Day')
+  plt.ylabel('Sample Overlap')
+  plt.xticks(np.arange(1,7))
+  plt.yticks([0.5, 0.6, 0.7, 0.8])
+  plt.savefig('./figs/mice_overlaps_tasks_sample%s.svg' % fname, dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/96869e7a27345008277a877803c90c09e3239eaf.png]]
+
+#+begin_src ipython
+  colors = ['r', 'b', 'g']
+  options = set_options(**kwargs)
+  options['T_WINDOW'] = 0
+  options['epochs'] = ['ED']
+
+  for task in range(3):
+    choice_mice = []
+    for i in range(len(mice)):
+        overlaps_choice = overlaps_mice[i][1][task]
+        choice_avg = []
+        for j in range(overlaps_choice.shape[0]):
+            choice_epoch = avg_epochs(overlaps_choice[j], **options)
+            choice_avg.append(choice_epoch.mean(0))
+
+        choice_avg = np.array(choice_avg)
+        while choice_avg.shape[0] !=6:
+            choice_avg = np.append(choice_avg, np.nan)
+        choice_mice.append(choice_avg)
+
+    choice_mice = np.array(choice_mice)
+    choice_ci = get_bootstrap_ci(choice_mice)
+    choice_ci_last = get_bootstrap_ci(choice_mice[:3][-1])
+    choice_ci[0][-1] = choice_ci_last[0]
+    choice_ci[1][-1] = choice_ci_last[1]
+
+    plt.plot(np.arange(1, 7), np.nanmean(choice_mice, 0), '-o', label='%s' % options['tasks'][task], color=colors[task])
+    plt.fill_between(np.arange(1, 7), choice_ci[0], choice_ci[1], color=colors[task], alpha=0.05)
+    plt.axhline(y=0.5, color='k', linestyle='--')
+  plt.legend(fontsize=16, frameon=0)
+  plt.xlabel('Day')
+  plt.ylabel('Choice Overlap')
+  plt.xticks(np.arange(1,7))
+  plt.yticks([0.5, 0.6, 0.7, 0.8])
+  plt.savefig('./figs/mice_overlaps_tasks_choice%s.svg' % fname, dpi=300)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/74b944587a0da69150fca547c389e9c2505ca1f8.png]]
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

@@ -13,10 +13,13 @@
 #+end_src
 
 #+RESULTS:
+:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
 
 * Imports
 
@@ -266,6 +269,9 @@ def pkl_load(name, path="."):
 
 #+begin_src ipython
 class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+    def __init__(self, pos_weight=None):
+        super(CustomBCEWithLogitsLoss, self).__init__(pos_weight=pos_weight)
+
     def forward(self, input, target):
         target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
         return super().forward(input.to(torch.float32), target.to(torch.float32))
@@ -362,17 +368,19 @@ class RegularizedNet(NeuralNetClassifier):
   tasks = ['DPA', 'DualGo', 'DualNoGo']
 
   kwargs = {
-      'mouse': 'JawsM15',
+      'mouse': 'ACCM03',
       'trials': '', 'reload': 0, 'data_type': 'dF',
       'preprocess': True, 'scaler_BL': 'robust',
       'avg_noise':True, 'unit_var_BL':False,
-      'random_state': None, 'T_WINDOW': 0.5,
+      'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
-      'bootstrap': 0, 'n_boots': 128,
+      'bootstrap': 1, 'n_boots': 32,
+      'n_splits': 3, 'n_repeats': 10,
   }
 
   options = set_options(**kwargs)
+
 #+end_src
 
 #+RESULTS:
@@ -388,13 +396,19 @@ class RegularizedNet(NeuralNetClassifier):
       X, y = get_X_y_S1_S2(X_days, y_days, **options)
       y[y==-1] = 0
 
+      pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1)).to(torch.float32)
+      print('imbalance', pos_weight)
+
       options['epochs'] = [epoch]
       X_avg = avg_epochs(X, **options).astype('float32')
       print('X', X.shape, 'y', y.shape)
 
       # cv = 5
-      # cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
-      cv = LeaveOneOut()
+      if options['n_splits']==-1:
+          cv = LeaveOneOut()
+      else:
+          cv = RepeatedStratifiedKFold(n_splits=options['n_splits'], n_repeats=options['n_repeats'])
+
       # Perform grid search
       grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=30)
       start = perf_counter()
@@ -510,8 +524,8 @@ class RegularizedNet(NeuralNetClassifier):
   angles_list = []
 
   options['reload'] = 0
-  options['task'] = 'DualGo'
-  scoring = 'accuracy'
+  options['task'] = 'Dual'
+  scoring = 'roc_auc'
 
   # days = ['first', 'last']
   days = np.arange(1, options['n_days']+1)
@@ -543,183 +557,204 @@ class RegularizedNet(NeuralNetClassifier):
       coefs_dist.append(coefs)
       bias_dist.append(bias)
 
-      angles = angle_AB(-coefs_sample[-1], -coefs_dist[-1].T)
-      angles_list.append(angles)
-
       options['task'] = 'all'
       options['features'] = 'choice'
       overlaps, scores, coefs, bias = hyper_tune(pipe, epoch='CHOICE', params=params, scoring=scoring, **options)
+
 
       scores_choice.append(scores)
       overlaps_choice.append(overlaps)
       coefs_choice.append(coefs)
       bias_choice.append(bias)
+
+      angles_sd = angle_AB(-coefs_sample[-1], -coefs_dist[-1].T)
+      angles_sc = angle_AB(-coefs_sample[-1], -coefs_choice[-1].T)
+      angles_dc = angle_AB(-coefs_choice[-1], -coefs_dist[-1].T)
+      angles_list.append([angles_sd, angles_sc, angles_dc])
 #+end_src
 
 #+RESULTS:
 #+begin_example
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 16s
-  {'net__alpha': 9.999999999999999e-05}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 12s
+  {'net__alpha': 0.005994842503189409}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 2s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 693, 84) y (64,)
+  imbalance tensor(1.)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.005994842503189409}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 9.999999999999999e-05}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 1s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.5263)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.000774263682681127}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 2s
+  {'net__alpha': 0.005994842503189409}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 13s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.046415888336127774}
+  Bagging best model ...
   Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 0.3593813663804626}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 693, 84) y (64,)
+  imbalance tensor(1.)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.3593813663804626}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(4.3333)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.000774263682681127}
+  Bagging best model ...
   Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.005994842503189409}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 0.000774263682681127}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.046415888336127774}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 3s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 693, 84) y (64,)
+  imbalance tensor(1.)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.000774263682681127}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.3593813663804626}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(2.0968)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 9.999999999999999e-05}
+  Bagging best model ...
   Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.000774263682681127}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES sample TASK all TRIALS  DAYS 4 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
+  Elapsed (with compilation) = 0h 0m 1s
   {'net__alpha': 0.046415888336127774}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 6s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (64, 693, 84) y (64,)
+  imbalance tensor(1.)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 9.999999999999999e-05}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.3593813663804626}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.5263)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
+  Elapsed (with compilation) = 0h 0m 1s
   {'net__alpha': 0.3593813663804626}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 6s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES sample TASK all TRIALS  DAYS 5 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 0.3593813663804626}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.005994842503189409}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 3s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (64, 693, 84) y (64,)
+  imbalance tensor(1.)
+  X (128, 361, 84) y (128,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.046415888336127774}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.3593813663804626}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 0s
+  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
   ##########################################
   PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
   ##########################################
   DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
-  X (96, 693, 84) y (96,)
+  imbalance tensor(1.2069)
+  X (192, 361, 84) y (192,)
   hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.000774263682681127}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  ##########################################
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  ##########################################
-  DATA: FEATURES sample TASK all TRIALS  DAYS 6 LASER 0
-  X (96, 693, 84) y (96,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 9.999999999999999e-05}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  ##########################################
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  ##########################################
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-  X (64, 693, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 9.999999999999999e-05}
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  ##########################################
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  ##########################################
-  DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
-  X (96, 693, 84) y (96,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 4s
-  {'net__alpha': 9.999999999999999e-05}
+  Elapsed (with compilation) = 0h 0m 1s
+  {'net__alpha': 0.3593813663804626}
+  Bagging best model ...
+  Elapsed (with compilation) = 0h 0m 6s
 #+end_example
 
 
@@ -749,7 +784,11 @@ class RegularizedNet(NeuralNetClassifier):
 #+end_src
 
 #+RESULTS:
-: [90.37651668 93.97036415 90.73739656 93.47221113 89.26363981 86.74876416]
+: [[100.20405241  85.87706126  87.15595955]
+:  [ 87.7987145   89.86668404  81.88054   ]
+:  [ 86.30357926  90.67941508  88.77485098]
+:  [ 90.03503454  88.96975043  73.7522802 ]
+:  [ 89.25246562  92.23277768  86.35704598]]
 
 #+begin_src ipython
   try:
@@ -762,10 +801,10 @@ class RegularizedNet(NeuralNetClassifier):
 #+end_src
 
 #+RESULTS:
-: overlaps (6, 96, 84) (6, 64, 84) (6, 96, 84)
-: scores (6,) (6,) (6,)
-: coefs (6, 693) (6, 693) (6, 693)
-: angles (6,)
+: overlaps (5, 192, 84) (5, 128, 84) (5, 192, 84)
+: scores (5,) (5,) (5,)
+: coefs (5, 361) (5, 361) (5, 361)
+: angles (5, 3)
 
 * Overlaps
 
@@ -806,6 +845,7 @@ class RegularizedNet(NeuralNetClassifier):
 #+END_comment
 
 #+begin_src ipython
+  time = np.linspace(0, 14, 84)
   cmap = plt.get_cmap('Blues')
   colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
   cmap = plt.get_cmap('Reds')
@@ -814,36 +854,45 @@ class RegularizedNet(NeuralNetClassifier):
   golden_ratio = (5**.5 - 1) / 2
   size = overlaps_sample.shape[1] // 2
 
+  mask = ~np.isnan(overlaps_dist).any(axis=2)
+  overlaps_dist = overlaps_dist[:, mask.any(axis=0)]
+
   fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
 
   for i in range(options['n_days']):
-      ax[0].plot(circcvl(overlaps_sample[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[1].plot(circcvl(overlaps_dist[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
-      ax[2].plot(circcvl(overlaps_choice[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[0].plot(time, circcvl(overlaps_sample[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(time, circcvl(overlaps_dist[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(time, circcvl(overlaps_choice[i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
 
-      ax[0].plot(circcvl(overlaps_sample[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-      ax[1].plot(circcvl(overlaps_dist[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-      ax[2].plot(circcvl(overlaps_choice[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[0].plot(time, circcvl(overlaps_sample[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[1].plot(time, circcvl(overlaps_dist[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+      ax[2].plot(time, circcvl(overlaps_choice[i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
 
   # ax[2].legend(fontsize=10)
-  ax[0].set_xlabel('Step')
-  ax[1].set_xlabel('Step')
-  ax[2].set_xlabel('Step')
+  ax[0].set_xlabel('Time (s)')
+  ax[1].set_xlabel('Time (s)')
+  ax[2].set_xlabel('Time (s)')
   ax[0].set_ylabel('Sample Overlap')
   ax[1].set_ylabel('Distractor Overlap')
   ax[2].set_ylabel('Choice Overlap')
+
+  for i in range(3):
+      ax[i].set_xticks(np.arange(0, 16, 2))
+      ax[i].set_xlim([0, 14])
+      add_vlines(ax[i])
+      # ax[i].set_ylim([-20, 20])
 
   plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
   plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/5306d582c2f28b0376fdbda2879188e42b29adac.png]]
+[[file:./.ob-jupyter/b9831897279467afb3ba46a0dbb2cfe502dd2d6b.png]]
 
 #+begin_src ipython
     options['T_WINDOW'] = 0
     size = overlaps_sample.shape[1] // 2
-    options['epochs'] = ['STIM_ED']
+    options['epochs'] = ['LD']
     sample_avg = []
     sample_ci = []
 
@@ -878,7 +927,7 @@ class RegularizedNet(NeuralNetClassifier):
     choice_avg = []
     choice_ci = []
     for i in range(options['n_days']):
-        choice_epoch = avg_epochs(-overlaps_choice[i][size:] + overlaps_choice[i][:size], **options) / 2.0
+        choice_epoch = avg_epochs(overlaps_choice[i][size:] + overlaps_choice[i][:size], **options) / 2.0
         choice_avg.append(choice_epoch.mean(0))
         choice_ci.append(get_bootstrap_ci(choice_epoch))
 
@@ -899,46 +948,39 @@ class RegularizedNet(NeuralNetClassifier):
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/bce22e49131d161270e94b17f001672585cb96b9.png]]
+[[file:./.ob-jupyter/9f6e65ba597f5ca7c9300758cc13fb7d577570e5.png]]
 
 #+begin_src ipython
-  plt.plot(np.arange(1, options['n_days']+1), angles_list, 'o-')
-  plt.ylabel('Angle Sample/Dist.')
+  colors = ['r', 'b', 'g']
+  labels = ['Sample/Dist.', 'Sample/Choice', 'Dist/Choice']
+  for i in range(angles_list.shape[-1]):
+      plt.plot(np.arange(1, options['n_days']+1), angles_list[:,i], 'o-', color=colors[i], label=labels[i])
+
+  plt.legend(fontsize=10)
+  plt.ylabel('Angle (°)')
   plt.xlabel('Day')
+  plt.xticks(np.arange(1, options['n_days']+1))
   plt.axhline(y=90.0, color='k', linestyle='--')
   plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/b89634988c9844ab71de1c4cc2b74a8f5fc9aaef.png]]
+[[file:./.ob-jupyter/6def44d788be16502f44389c9b2d00c379c0ec03.png]]
 
 * Save
 
 #+begin_src ipython
-  #overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
-  #print(overlaps_save.shape)
-  # pkl_save(overlaps_save, '%s_overlaps_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
-  # pkl_save(overlaps, '%s_overlaps_%.2f_l1_ratio_loocv' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
-  # options['l1_ratio'] = 'tuned'
-  # pkl_save(overlaps, '%s_overlaps_%s_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
+  overlaps_dist = np.pad(overlaps_dist, pad_width=[(0, 0), (0, overlaps_sample.shape[1] - overlaps_dist.shape[1]), (0, 0)], mode='constant', constant_values=np.nan)
 
-  # scores = np.stack((scores_sample, scores_dist, scores_choice))
-  # print(scores.shape)
-  # pkl_save(scores, '%s_scores' % options['mouse'], path="../data/%s/" % options['mouse'])
+  overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
+  print('overlaps', overlaps_save.shape)
+  pkl_save(overlaps_save, '%s_overlaps_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
 
-  #coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
-  # print(coefs_save.shape)
-  # pkl_save(coefs, '%s_coefs_%.2f_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
-  # pkl_save(coefs, '%s_coefs_%.2f_l1_ratio_loocv' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
-  # pkl_save(coefs, '%s_coefs_%s_l1_ratio' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
-
+  coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
+  print('coefs', coefs_save.shape)
+  pkl_save(coefs_save, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
   #+end_src
 
 #+RESULTS:
-
-
-#+begin_src ipython
-  # overlaps = pkl_load('%s_overlaps_%.2f_l1_ratio_loocv' % (options['mouse'], options['l1_ratio']), path="../data/%s/" % options['mouse'])
-#+end_src
-
-#+RESULTS:
+: overlaps (3, 5, 192, 84)
+: coefs (3, 5, 361)

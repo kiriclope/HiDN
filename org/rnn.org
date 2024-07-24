@@ -8,7 +8,7 @@
   %load_ext autoreload
   %autoreload 2
   %reload_ext autoreload
-  
+
   %run /home/leon/dual_task/dual_data/notebooks/setup.py
   %matplotlib inline
   %config InlineBackend.figure_format = 'png'
@@ -23,6 +23,7 @@
 * Imports
 
 #+begin_src ipython
+  DEVICE = 'cuda'
   import torch
   import torch.nn as nn
   import torch.optim as optim
@@ -67,45 +68,126 @@
 ** Data Split
 
 #+begin_src ipython
-  def split_data(X, Y, train_perc=0.8, batch_size=32):
+  def training_step(dataloader, model, loss_fn, optimizer, penalty=None, lbd=1, clip_grad=0, zero_grad=0, l1_ratio=0.95):
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
 
-    # Split the dataset into training and validation sets
-    train_size = int(train_perc * X.shape[0])
+      model.train()
+      for batch, (X, y) in enumerate(dataloader):
+          X, y = X.to(device), y.to(device)
 
-    X_train = X[:train_size]
-    X_test = X[train_size:]
-    
-    # X_train, X_mean, X_std = standard_scaler(X_train, IF_RETURN=1)
-    # X_test = (X_test - X_mean) / X_std
+          if zero_grad > 0:
+              try:
+                  model.U[:, zero_grad-1] = 0
+                  model.V[:, zero_grad-1] = 0
+              except:
+                  pass
 
-    Y_train = Y[:train_size]    
-    Y_test = Y[train_size:]
+          y_pred = model(X)
+          loss = loss_fn(y_pred, y)
 
-    # Y_train, Y_mean, Y_std = standard_scaler(Y_train, IF_RETURN=1)
-    # Y_test = (Y_test - Y_mean) / Y_std
+          if penalty is not None:
+              reg_loss = 0
+              for param in model.parameters():
+                  if penalty=='l1':
+                      reg_loss += torch.sum(torch.abs(param))
+                  elif penalty=='l2':
+                      reg_loss += torch.sum(torch.square(param))
+                  else:
+                      reg_loss += l1_ratio * torch.sum(torch.abs(param)) + (1.0-l1_ratio) * torch.sum(torch.square(param))
 
-    # Create data sets
-    # train_dataset = TensorDataset(X_train_scaled, Y_train_scaled)
-    # val_dataset = TensorDataset(X_test_scaled, Y_test_scaled)
+                  loss = loss + lbd * reg_loss
 
-    print(X_train.shape, Y_train.shape)
-    train_dataset = TensorDataset(X_train, Y_train)
+          # Backpropagation
+          loss.backward()
 
-    print(X_test.shape, Y_test.shape)
-    val_dataset = TensorDataset(X_test, Y_test)
+          if zero_grad > 0:
+              try:
+                  model.U.grad[:, zero_grad-1] = 0
+                  model.V.grad[:, zero_grad-1] = 0
+              except:
+                  pass
 
-    # Create data loaders
-    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
+          # Clip gradients
+          if clip_grad:
+              torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+              #torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
 
-    # sequence_length = 14  # or any other sequence length you want
-    # stride = 1  # or any other stride you want
+          optimizer.step()
+          optimizer.zero_grad()
 
-    # sliding_window_dataset = SlidingWindowDataset(X, sequence_length, stride)
-    # train_loader = torch.utils.data.DataLoader(sliding_window_dataset, batch_size=5, shuffle=True)
-    # val_loader = torch.utils.data.DataLoader(sliding_window_dataset, batch_size=5, shuffle=True)
+      return loss
+#+end_src
 
-    return train_loader, val_loader
+#+RESULTS:
+
+#+begin_src ipython
+    def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
+
+       sample_size = int(train_perc * (X.shape[0] // n_labels))
+       all_indices = np.arange(X.shape[0] // n_labels)
+
+       train_indices = []
+       test_indices = []
+       for i in range(n_labels):
+          all_indices = np.arange(i * X.shape[0] // n_labels, (i+1) * X.shape[0] // n_labels)
+          idx = np.random.choice(all_indices, size=sample_size, replace=False)
+
+          train_indices.append(idx)
+          test_indices.append(np.setdiff1d(all_indices, idx))
+
+       X_train = X[train_indices]
+       X_test = X[test_indices]
+
+       Y_train = Y[train_indices]
+       Y_test = Y[test_indices]
+
+       print(X_train.shape, Y_train.shape)
+       train_dataset = TensorDataset(X_train, Y_train)
+
+       print(X_test.shape, Y_test.shape)
+       val_dataset = TensorDataset(X_test, Y_test)
+
+       # Create data loaders
+       train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+       val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
+
+       # sequence_length = 14  # or any other sequence length you want
+       # stride = 1  # or any other stride you want
+
+       # sliding_window_dataset = SlidingWindowDataset(X, sequence_length, stride)
+       # train_loader = torch.utils.data.DataLoader(sliding_window_dataset, batch_size=5, shuffle=True)
+       # val_loader = torch.utils.data.DataLoader(sliding_window_dataset, batch_size=5, shuffle=True)
+
+       return train_loader, val_loader
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def validation_step(dataloader, model, loss_fn):
+      size = len(dataloader.dataset)
+      num_batches = len(dataloader)
+
+      device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+
+      # Validation loop.
+      model.eval()
+      val_loss = 0.0
+
+      with torch.no_grad():
+          for X, y in dataloader:
+              X, y = X.to(device), y.to(device)
+
+              y_pred = model(X)
+              loss = loss_fn(y_pred, y)
+
+              val_loss += loss.item() * X.size(0)
+
+          val_loss /= size
+          # acc = metric.compute()
+          # print(f"Accuracy: {acc}")
+          # metric.reset()
+      return val_loss
 #+end_src
 
 #+RESULTS:
@@ -113,7 +195,7 @@
 ** Optimization
 
 #+begin_src ipython
-  def train(dataloader, model, loss_fn, optimizer):
+  def train(dataloader, model, loss_fn, optimizer, penalty=None, zero_grad=0):
       size = len(dataloader.dataset)
       device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -125,6 +207,16 @@
           # Compute prediction error
           pred = model(X)
           loss = loss_fn(pred, y)
+
+          if penalty is not None:
+              reg_loss = 0
+              for param in model.parameters():
+                  if penalty=='l1':
+                      reg_loss += torch.sum(torch.abs(param))
+                  else:
+                      reg_loss += torch.sum(torch.square(param))
+
+                  loss = loss + lbd * reg_loss
 
           # Backpropagation
           loss.backward()
@@ -162,24 +254,36 @@
 #+RESULTS:
 
 #+begin_src ipython
-  def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100):
+    def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, zero_grad=0, penalty=None, lbd=0, thresh=0.005, l1_ratio=0.95):
 
-    # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
-    # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+      # scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9)
+      scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
+      # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
+      # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
+      device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+      model.to(device)
 
-    # Training loop.
-    for epoch in range(num_epochs):
-        loss = train(train_loader, model, loss_fn, optimizer)
-        val_loss = test(val_loader, model, loss_fn)
-        scheduler.step(val_loss)
+      # Training loop.
+      for epoch in range(num_epochs):
+          loss = training_step(train_loader, model, loss_fn, optimizer, penalty, lbd, zero_grad=zero_grad, l1_ratio=l1_ratio)
+          val_loss = validation_step(val_loader, model, loss_fn)
+          scheduler.step(val_loss)
 
-        if epoch % int(num_epochs  / 10) == 0:
-            print(f'Epoch {epoch}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
+          if epoch % int(num_epochs  / 10) == 0:
+              print(f'Epoch {epoch}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
 
+          if val_loss < thresh and loss < thresh:
+              print(f'Stopping training as loss has fallen below the threshold: {loss}, {val_loss}')
+              break
+
+          if val_loss > 300:
+              print(f'Stopping training as loss is too high: {val_loss}')
+              break
+
+          if torch.isnan(loss):
+              print(f'Stopping training as loss is NaN.')
+              break
 #+end_src
 
 #+RESULTS:
@@ -191,7 +295,7 @@
   def get_predictions(model, future_steps, device='cuda:1'):
       model.eval()  # Set the model to evaluation mode
 
-      # Start with an initial seed sequence 
+      # Start with an initial seed sequence
       input_size = model.input_size
       hidden_size = model.hidden_size
 
@@ -203,7 +307,7 @@
       # Initialize the hidden state (optional, depends on your model architecture)
       hidden = torch.zeros(model.num_layers, 1, hidden_size).to(device)
       # hidden = torch.randn(model.num_layers, 1, hidden_size, device=device) * 0.01
-      
+
       # Generate time series
       for _ in range(future_steps):
           # Forward pass
@@ -281,11 +385,13 @@
 
 #+RESULTS:
 :RESULTS:
+: /home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/torchvision/io/image.py:13: UserWarning: Failed to load image Python extension: '/home/leon/mambaforge/envs/torch/lib/python3.10/site-packages/torchvision/image.so: undefined symbol: _ZN3c1017RegisterOperatorsD1Ev'If you don't plan on using image functionality from `torchvision.io`, you can ignore this warning. Otherwise, there might be something wrong with your environment. Did you have `libjpeg` or `libpng` installed before building `torchvision` from source?
+:   warn(
 # [goto error]
 #+begin_example
   ---------------------------------------------------------------------------
   NameError                                 Traceback (most recent call last)
-  Cell In[10], line 22
+  Cell In[12], line 22
        16 preprocessing = transforms.Compose([
        17     transforms.ToTensor(),
        18     # standard_scaler()
@@ -320,7 +426,7 @@
       for i in range(num_series):
           for j in range(num_steps):
               for k in range(num_features):
-                  data[i, j, k] = np.sin(2 * np.pi * j / num_steps - phases[k]) + np.random.uniform()
+                  data[i, j, k] = np.sin(2 * np.pi * j / num_steps - phases[k]) + np.random.uniform() * .1
 
       # Return as torch.FloatTensor
       return torch.FloatTensor(data).to(device)
@@ -343,7 +449,7 @@
           proba = torch.sigmoid(y_pred).squeeze(-1)
 
           loss = F.binary_cross_entropy(proba, targets, reduction='none')
-          
+
           return loss.mean()  # Or .sum(), or custom reduction as needed.
 #+end_src
 
@@ -377,7 +483,7 @@
           # Initial hidden state (can also initialize this outside and pass it as a parameter)
           rates = torch.zeros(self.num_layers, input.size(1), self.hidden_size, device=self.device)
           h = torch.zeros(self.num_layers, input.size(1), self.hidden_size, device=self.device)
-          
+
           # Forward propagate the RNN
           h, _ = self.rnn(input, rates)
           rates = self.EXP_DT_TAU * rates + self.DT_TAU * h
@@ -396,13 +502,13 @@
           super(CustomCombinedLoss, self).__init__()
           self.weight1 = weight1
           self.weight2 = weight2
-          # You could also include additional initializations for 
+          # You could also include additional initializations for
           # each distinct condition if necessary.
 
       def forward(self, inputs, targets):
           # Condition 1 (for example, Mean Squared Error)
           loss1 = torch.mean((inputs - targets[0]) ** 2)
-          
+
           # Condition 2 (for example, Mean Absolute Error)
           loss2 = torch.mean(torch.abs(inputs - targets[1]))
 
@@ -410,6 +516,8 @@
           loss = self.weight1 * loss1 + self.weight2 * loss2
           return loss
 #+end_src
+
+#+RESULTS:
 
 #+BEGIN_SRC ipython
   import torch
@@ -473,7 +581,7 @@
 
               full = torch.mm(rates, self.W_hh.t()) + self.b_hh
               lr = rates.matmul(self.xi).matmul(self.xi.t()) / self.hidden_size
-              
+
               hidden = (1.0 - self.alpha) * full + self.alpha * lr
               rec_inputs = self.exp_syn * rec_inputs + self.decay_syn * hidden
               # rec_inputs = full + lr
@@ -513,7 +621,7 @@
 
   input_tensor = torch.randn(batch_size, seq_length, input_size)
   input_tensor = input_tensor.to(device)
-  
+
   output = model(input_tensor)
   print(input_tensor.shape, output.shape)
 #+END_SRC
@@ -529,13 +637,13 @@
           super(CustomCombinedLoss, self).__init__()
           self.weight1 = weight1
           self.weight2 = weight2
-          # You could also include additional initializations for 
+          # You could also include additional initializations for
           # each distinct condition if necessary.
 
       def forward(self, inputs, targets):
           # Condition 1 (for example, Mean Squared Error)
           loss1 = torch.mean((inputs - targets[0]) ** 2)
-          
+
           # Condition 2 (for example, Mean Absolute Error)
           loss2 = torch.mean(torch.abs(inputs - targets[1]))
 
@@ -543,6 +651,8 @@
           loss = self.weight1 * loss1 + self.weight2 * loss2
           return loss
 #+end_src
+
+#+RESULTS:
 
 #+begin_src ipython
   covariance = torch.tensor([[1.0, self.LR_COV],
@@ -554,9 +664,34 @@
 
 #+end_src
 
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[20], line 1
+: ----> 1 covariance = torch.tensor([[1.0, self.LR_COV],
+:       2                            [self.LR_COV, 1.0],], dtype=self.FLOAT, device=self.device)
+:       5 multivariate_normal = MultivariateNormal(mean, covariance)
+:       6 self.ksi = multivariate_normal.sample((Nb,)).T
+:
+: NameError: name 'self' is not defined
+:END:
+
 #+begin_src ipython
   ff_input = self.Ja0[0] * (1.0 + self.ksi[0] * self.I0[0] * self.M0)
 #+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[21], line 1
+: ----> 1 ff_input = self.Ja0[0] * (1.0 + self.ksi[0] * self.I0[0] * self.M0)
+:
+: NameError: name 'self' is not defined
+:END:
 
 
 #+BEGIN_SRC ipython
@@ -621,7 +756,7 @@
 
               full = torch.mm(rates, self.W_hh.t()) + self.b_hh
               lr = rates.matmul(self.xi).matmul(self.xi.t()) / self.hidden_size
-              
+
               hidden = (1.0 - self.alpha) * full + self.alpha * lr
               rec_inputs = self.exp_syn * rec_inputs + self.decay_syn * hidden
               # rec_inputs = full + lr
@@ -661,7 +796,7 @@
 
   input_tensor = torch.randn(batch_size, seq_length, input_size)
   input_tensor = input_tensor.to(device)
-  
+
   output = model(input_tensor)
   print(input_tensor.shape, output.shape)
 #+END_SRC
@@ -699,7 +834,7 @@
           self.fc = nn.Linear(hidden_size, output_size, bias=False)
           # Decay rate for the hidden state
 
-          with torch.no_grad():          
+          with torch.no_grad():
               self.decay_rate = torch.tensor(dt / 20)
               self.exp_rate = torch.exp(-self.decay_rate)
 
@@ -727,7 +862,7 @@
 
           outputs = []
           for t in range(seq_length):
-              
+
               ff_inputs = torch.mm(x[:, t], self.W_ih.t()) + self.b_ih
               hidden = torch.mm(rates, self.W_hh.t()) + self.b_hh
 
@@ -767,7 +902,7 @@
 
   seq_length = 5
   batch_size = 3
-  
+
   model = MultivariateRNN(input_size, hidden_size, num_layers, output_size, decay_rate)
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
   model.to(device)
@@ -782,14 +917,90 @@
 #+RESULTS:
 : torch.Size([3, 5, 10]) torch.Size([3, 5, 10])
 
+** Low rank
+
+#+begin_src ipython
+  class LRRNN(nn.Module):
+      def __init__(self, N_NEURON, N_BATCH, RANK=2, DT=0.05, TAU=1, NONLINEAR='sig', DEVICE='cuda', DROP=0.5):
+          super(LRRNN, self).__init__()
+
+          self.N_BATCH = N_BATCH
+          self.N_NEURON = N_NEURON
+          self.RANK = RANK
+          self.DEVICE = DEVICE
+          self.DT = DT
+          self.TAU = TAU
+          self.EXP_DT_TAU = torch.exp(-torch.tensor(self.DT / self.TAU))
+          self.DT_TAU = self.DT / self.TAU
+
+          self.dropout = nn.Dropout(DROP)
+
+          if NONLINEAR == 'relu':
+              self.Activation = nn.ReLU()
+          else:
+              self.Activation = nn.Tanh()
+
+          self.U = nn.Parameter(
+              torch.randn((self.N_NEURON, int(self.RANK)), device=self.DEVICE) * 0.001
+          )
+
+          # self.V = nn.Parameter(
+          #     torch.randn((self.N_NEURON, int(self.RANK)), device=self.DEVICE) * 0.001
+          # )
+
+      def update_dynamics(self, rates, ff_input, rec_input, lr):
+          noise = torch.randn_like(rates) * 0.01
+
+          # update hidden state
+          hidden = rates @ lr
+
+          rec_input = rec_input * self.EXP_DT_TAU + hidden * self.DT_TAU + noise
+
+          # compute net input
+          net_input = ff_input + rec_input
+
+          # update rates
+          # non_linear = self.Activation(net_input)
+          # rates = rates * self.EXP_DT_TAU + non_linear * self.DT_TAU + noise
+          rates = self.Activation(net_input)
+
+          return rates, rec_input
+
+      def forward(self, ff_input):
+
+          # initialize state
+          rates = torch.zeros(ff_input.size(0), self.N_NEURON, device=self.DEVICE)
+          rec_input = torch.zeros(ff_input.size(0), self.N_NEURON, device=self.DEVICE)
+          lr = self.U @ self.U.T
+
+          # print('ff_input', ff_input.shape, 'rates', rates.shape, 'lr', lr.shape)
+
+          rates_sequence = []
+          for step in range(ff_input.size(1)):
+              rates, rec_input = self.update_dynamics(self.dropout(rates), ff_input[:, step], rec_input, lr)
+              rates_sequence.append(rates.unsqueeze(1))
+
+          rates_sequence = torch.cat(rates_sequence, dim=1)
+
+          return rates_sequence
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
 * Train on synthetic data
 *** Create synthetic data
 
 #+begin_src ipython
-  num_series = 32  # Number of time series samples to generate
+  num_series = 128  # Number of time series samples to generate
   num_steps = 84  # Number of time steps in each time series
   num_features = 100  # Number of features (signals) in each time series
-  
+
   # Generate synthetic data
   synthetic_data = generate_multivariate_time_series(num_series, num_steps, num_features)
 
@@ -803,8 +1014,8 @@
 #+end_src
 
 #+RESULTS:
-: Input shape: torch.Size([32, 83, 100])
-: Target shape: torch.Size([32, 83, 100])
+: Input shape: torch.Size([128, 83, 100])
+: Target shape: torch.Size([128, 83, 100])
 
 #+begin_src ipython
   plt.plot(np.arange(0, num_steps, 180), np.sin(num_steps))
@@ -814,51 +1025,48 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/3b18165ce9cd91277e97f3d4353d14ebbde9a524.png]]
+[[file:./.ob-jupyter/4ec29a7710e2ba5a441ddf5b12b4b74c011fc6f7.png]]
 
 *** Train model
 
 #+begin_src ipython
-
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
   hidden_size = 1000
   num_layers = 1
-  model = MultivariateRNN(input_size=num_features, hidden_size=hidden_size,
-                          num_layers=num_layers, output_size=num_features, device=device)
+  # model = LRRNN(input_size=num_features, hidden_size=hidden_size,
+  #               num_layers=num_layers, output_size=num_features, device=device)
 
-  batch_size = 8
+  batch_size = 32
+  model = LRRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device, RANK=4)
+
   train_loader, val_loader = split_data(X, Y, train_perc=0.8, batch_size=batch_size)
 
-  learning_rate = 0.001
-  criterion = nn.MSELoss()
-  optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-  
   num_epochs = 100
-  run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs)  
+  learning_rate = 0.01
+  criterion = nn.MSELoss()
+  optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+  model = LRRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device, RANK=4)
+
+  num_epochs = 100
+  run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs)
 #+end_src
 
 #+RESULTS:
 #+begin_example
-  torch.Size([25, 83, 100]) torch.Size([25, 83, 100])
-  torch.Size([7, 83, 100]) torch.Size([7, 83, 100])
-  Epoch 0/100, Training Loss: 0.2809, Validation Loss: 0.1823
-  Epoch 10/100, Training Loss: 0.0889, Validation Loss: 0.0885
-  Epoch 20/100, Training Loss: 0.0857, Validation Loss: 0.0875
-  Epoch 30/100, Training Loss: 0.0847, Validation Loss: 0.0875
-  Epoch 40/100, Training Loss: 0.0800, Validation Loss: 0.0875
-  Epoch 00043: reducing learning rate of group 0 to 1.0000e-04.
-  Epoch 50/100, Training Loss: 0.0814, Validation Loss: 0.0872
-  Epoch 00058: reducing learning rate of group 0 to 1.0000e-05.
-  Epoch 60/100, Training Loss: 0.0818, Validation Loss: 0.0872
-  Epoch 70/100, Training Loss: 0.0817, Validation Loss: 0.0872
-  Epoch 80/100, Training Loss: 0.0820, Validation Loss: 0.0872
-  Epoch 00082: reducing learning rate of group 0 to 1.0000e-06.
-  Epoch 90/100, Training Loss: 0.0825, Validation Loss: 0.0872
-  Epoch 00093: reducing learning rate of group 0 to 1.0000e-07.
+  torch.Size([102, 83, 100]) torch.Size([102, 83, 100])
+  torch.Size([26, 83, 100]) torch.Size([26, 83, 100])
+  Epoch 0/100, Training Loss: 0.5030, Validation Loss: 0.5031
+  Epoch 10/100, Training Loss: 0.4986, Validation Loss: 0.4985
+  Epoch 20/100, Training Loss: 0.4900, Validation Loss: 0.4900
+  Epoch 30/100, Training Loss: 0.4856, Validation Loss: 0.4856
+  Epoch 40/100, Training Loss: 0.4847, Validation Loss: 0.4846
+  Epoch 50/100, Training Loss: 0.4838, Validation Loss: 0.4841
+  Epoch 60/100, Training Loss: 0.4837, Validation Loss: 0.4838
+  Epoch 70/100, Training Loss: 0.4838, Validation Loss: 0.4837
+  Epoch 80/100, Training Loss: 0.4835, Validation Loss: 0.4835
+  Epoch 90/100, Training Loss: 0.4833, Validation Loss: 0.4834
 #+end_example
-
-#+RESULTS:
 
 *** See data
 
@@ -895,7 +1103,8 @@
 #+end_src
 
 #+RESULTS:
-: (7, 83, 100) (7, 83, 100)
+: (26, 83, 100) (26, 83, 100)
+
 
 #+begin_src ipython
   import matplotlib.pyplot as plt
@@ -903,15 +1112,15 @@
   # Convert tensors to numpy arrays for plotting
   predictions_np = predictions.numpy()
   ground_truth_np = ground_truth.numpy()
-  
+
   # Plot the predictions on top of the ground truth
   plt.figure()
   pal = sns.color_palette("tab10")
 
   # Example for plotting the first feature dimension
   for i in range(2):
-     plt.plot(ground_truth_np[0, :, i], label='Ground Truth', marker='.', color=pal[i])
-     plt.plot(predictions_np[0, :, i], label='Model Prediction', marker='x', color=pal[i])
+     # plt.plot(ground_truth_np[0, :, i], label='Ground Truth', marker='.', color=pal[i])
+     plt.plot(predictions_np[1, :, i], label='Model Prediction', marker='x', color=pal[i])
 
   plt.title("Model Prediction vs Ground Truth", fontsize=14)
   plt.xlabel("Time steps")
@@ -921,7 +1130,7 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/d1a83e29b24b28332a20c96cc5c0b3cb4954b379.png]]
+[[file:./.ob-jupyter/2c71401b65b1e954193f28dbfb7a94098950f67c.png]]
 
 * Train on Experimental Data
 ** Imports
@@ -929,7 +1138,7 @@
 #+begin_src ipython
   import sys
   sys.path.insert(0, '../')
-  
+
   from src.common.get_data import get_X_y_days, get_X_y_S1_S2
   from src.common.options import set_options
 #+end_src
@@ -944,16 +1153,8 @@
   days = ['first', 'last']
 
   kwargs = dict()
-  kwargs = {'prescreen': None, 'pval': 0.05, 'trials': '', 'balance': 'under',
-            'method': 'bootstrap', 'bolasso_pval':0.05, 'bolasso_penalty': 'l2',
-            'bootstrap': True, 'n_boots': 1000,
-            'preprocess': True, 'scaler_BL': None, 'avg_noise':True, 'unit_var_BL':False,
-            'clf':'log_loss', 'scaler': None, 'tol':0.001, 'penalty':'l2',
-            'out_fold': 'stratified', 'n_out': 5,
-            'in_fold': 'stratified', 'n_in': 5,
-            'random_state': None, 'n_repeats': 10,
-            'n_lambda': 20, 'T_WINDOW': 0.5,
-            }
+  kwargs = {'trials': '',
+            'preprocess': True, 'scaler_BL': 'standard', 'avg_noise':True, 'unit_var_BL':True}
 
   kwargs['mouse'] = 'JawsM15'
 #+end_src
@@ -964,42 +1165,51 @@
 
 #+begin_src ipython
   options = set_options(**kwargs)
-  options['reload'] = True
-  options['data_type'] = 'raw'
-  options['DCVL'] = 1
+  options['reload'] = False
+  options['data_type'] = 'dF'
+  options['DCVL'] = 0
 #+end_src
 
 #+RESULTS:
 
-#+begin_src ipython  
-  # X_days, y_days = get_X_y_days(**options)
-  # X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+#+begin_src ipython
+  X_days, y_days = get_X_y_days(**options)
+  options['day'] = 'last'
+  options['task'] = 'DPA'
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
 
   # y_data = y_data[:, np.newaxis]
-  # print(X_data.shape, y_data.shape)
+  print(X_data.shape, y_data.shape)
+#+end_src
+
+#+RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+: ##########################################
+: PREPROCESSING: SCALER standard AVG MEAN False AVG NOISE True UNIT VAR True
+: ##########################################
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+: multiple days 0 3 0
+: (96, 693, 84) (96,)
+
+#+begin_src ipython
+  # import pickle as pkl
+
+  # filename = "../data/" + kwargs['mouse'] + "/X_dcvl.pkl"
+  # # pkl.dump(X_data, open(filename + ".pkl", "wb"))
+
+  # filename = "../data/" + kwargs['mouse'] + "/y_dcvl_.pkl"
+  # # pkl.dump(y_data, open(filename + ".pkl", "wb"))
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  import pickle as pkl
+  # import pickle as pkl
+  # filename = "../data/" + kwargs['mouse'] + "/X_dcvl.pkl"
+  # X_data = pkl.load(open(filename + ".pkl", "rb"))
 
-  filename = "../data/" + kwargs['mouse'] + "/X_dcvl.pkl"
-  # pkl.dump(X_data, open(filename + ".pkl", "wb"))
-
-  filename = "../data/" + kwargs['mouse'] + "/y_dcvl_.pkl"
-  # pkl.dump(y_data, open(filename + ".pkl", "wb"))
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  import pickle as pkl
-  filename = "../data/" + kwargs['mouse'] + "/X_dcvl.pkl"
-  X_data = pkl.load(open(filename + ".pkl", "rb"))
-
-  filename = "../data/" + kwargs['mouse'] + "/y_dcvl_.pkl"
-  y_data = pkl.load(open(filename + ".pkl", "rb"))
+  # filename = "../data/" + kwargs['mouse'] + "/y_dcvl_.pkl"
+  # y_data = pkl.load(open(filename + ".pkl", "rb"))
 #+end_src
 
 #+RESULTS:
@@ -1007,13 +1217,13 @@
 #+begin_src ipython
   import numpy as np
   from scipy.ndimage import convolve1d
-  
+
   def moving_average_multidim(data, window_size, axis=-1):
       """
       Apply a 1D moving average across a specified axis of a multi-dimensional array.
 
       :param data: multi-dimensional array of data
-      :param window_size: size of the moving window 
+      :param window_size: size of the moving window
       :param axis: axis along which to apply the moving average
       :return: smoothed data with the same shape as input data
       """
@@ -1035,17 +1245,16 @@
   # from scipy.ndimage import gaussian_filter1d
   # smoothed_data = gaussian_filter1d(X_data, axis=-1, sigma=2)
   # smoothed_data = moving_average_multidim(X_data[..., :52], window_size, axis=-1)
-  smoothed_data = moving_average_multidim(X_data, window_size, axis=-1)
+  smoothed_data = moving_average_multidim(X_data, window_size, axis=-1) / 10
 #+end_src
 
 #+RESULTS:
-: (96, 693, 84)
 
 #+begin_src ipython
   time = np.linspace(0, 14, 84)
   for i in range(10):
       i = np.random.randint(100)
-      plt.plot(time, smoothed_data[0, i,:], alpha=.5)
+      plt.plot(time, smoothed_data[-1, i,:], alpha=.5)
 
   plt.ylabel('Rate (Hz)')
   plt.xlabel('Time (s)')
@@ -1053,7 +1262,7 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/7f4539ef4bed2a80edcf910fae40892f08148ad8.png]]
+[[file:./.ob-jupyter/02565f4436274ea86b847fb20f637924ea0acbba.png]]
 
 ** Training
 
@@ -1063,7 +1272,7 @@
 
   Y = smoothed_data[..., 1:]
   X = smoothed_data[..., :-1]
-  
+
   X = np.swapaxes(X, 1, -1)
   Y = np.swapaxes(Y, 1, -1)
 
@@ -1080,67 +1289,69 @@
 #+end_src
 
 #+RESULTS:
-: torch.Size([96, 83, 693]) torch.Size([96, 83, 693])
+:RESULTS:
+# [goto error]
+#+begin_example
+  ---------------------------------------------------------------------------
+  RuntimeError                              Traceback (most recent call last)
+  Cell In[417], line 1
+  ----> 1 X = torch.tensor(X, dtype=torch.float32, device=device)
+        2 Y = torch.tensor(Y, dtype=torch.float32, device=device)
+        3 print(X.shape, Y.shape)
+
+  RuntimeError: CUDA error: device-side assert triggered
+  CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+  For debugging consider passing CUDA_LAUNCH_BLOCKING=1.
+  Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+#+end_example
+:END:
 
 #+RESULTS:
 
 #+begin_src ipython
-  y_data[y_data==-1] = 0
-  Y = torch.tensor(y_data, dtype=torch.float32, device=device)
-  print(Y.shape)
+  # y_data[y_data==-1] = 0
+  # Y = torch.tensor(y_data, dtype=torch.float32, device=device)
+  # print(Y.shape)
 #+end_src
 
 #+RESULTS:
-: torch.Size([96])
 
 #+begin_src ipython
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
   hidden_size = 1024
   num_layers = 1
-  num_features = 693
-  
-  batch_size = 8
+  num_features = X.shape[-1]
+
+  batch_size = 16
   train_loader, val_loader = split_data(X, Y, train_perc=0.8, batch_size=batch_size)
 #+end_src
 
 #+RESULTS:
-: torch.Size([76, 83, 693]) torch.Size([76, 83, 693])
-: torch.Size([20, 83, 693]) torch.Size([20, 83, 693])
-
 #+begin_src ipython
-  learning_rate = 0.001
+  learning_rate = 0.01
   criterion = nn.MSELoss()
+  # criterion = nn.L1Loss()
+  criterion = nn.SmoothL1Loss()
   # criterion = nn.BCELoss() # Binary Cross-Entropy Loss
 
-  optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.001)
+  optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+  # optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
 
   num_epochs = 100
-  
-  model = MultivariateRNN(input_size=num_features, hidden_size=hidden_size,
-                        num_layers=num_layers, output_size=num_features, device=device, dt=.01, noise=0, alpha=1)
 
-  run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs)
+  # model = MultivariateRNN(input_size=num_features, hidden_size=hidden_size,
+  #                       num_layers=num_layers, output_size=num_features, device=device, dt=.01, noise=0, alpha=1)
+  model = LRRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device, RANK=2)
 #+end_src
 
 #+RESULTS:
-#+begin_example
-  Epoch 0/100, Training Loss: 0.0018, Validation Loss: 0.0022
-  Epoch 10/100, Training Loss: 0.0026, Validation Loss: 0.0022
-  Epoch 00012: reducing learning rate of group 0 to 1.0000e-04.
-  Epoch 20/100, Training Loss: 0.0021, Validation Loss: 0.0022
-  Epoch 00023: reducing learning rate of group 0 to 1.0000e-05.
-  Epoch 30/100, Training Loss: 0.0022, Validation Loss: 0.0022
-  Epoch 00034: reducing learning rate of group 0 to 1.0000e-06.
-  Epoch 40/100, Training Loss: 0.0019, Validation Loss: 0.0022
-  Epoch 00045: reducing learning rate of group 0 to 1.0000e-07.
-  Epoch 50/100, Training Loss: 0.0025, Validation Loss: 0.0022
-  Epoch 00056: reducing learning rate of group 0 to 1.0000e-08.
-  Epoch 60/100, Training Loss: 0.0021, Validation Loss: 0.0022
-  Epoch 70/100, Training Loss: 0.0019, Validation Loss: 0.0022
-  Epoch 80/100, Training Loss: 0.0017, Validation Loss: 0.0022
-  Epoch 90/100, Training Loss: 0.0019, Validation Loss: 0.0022
-#+end_example
+
+#+begin_src ipython
+  run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs, zero_grad=2, penalty='elastic', lbd=.001)
+#+end_src
+
+#+RESULTS:
 
 * Reverse Engineering
 ** Generate series
@@ -1149,7 +1360,7 @@
   from sklearn.metrics import mean_squared_error
 
   model.eval()  # Set the model to evaluation mode
-  
+
   # This function feeds inputs through the model and computes the predictions
   def get_predictions(data_loader):
       predictions = []
@@ -1182,7 +1393,7 @@
 
 #+begin_src ipython
   import matplotlib.pyplot as plt
-  
+
   # Assuming predictions and ground_truth are for a single batch or example:
   # predictions: tensor of shape (batch_size, sequence_length, output_size)
   # ground_truth: tensor of shape (batch_size, sequence_length, output_size)
@@ -1198,13 +1409,13 @@
   # Example for plotting the first feature dimension
   for i in range(3):
      j = np.random.randint(693)
-     plt.plot(time, ground_truth_np[0, :, j], '-', label='Ground Truth', color=pal[i], alpha=.2)
-     plt.plot(time, predictions_np[0, :, j], label='Model Prediction', marker='o', color=pal[i], alpha=1, lw=0)
+     plt.plot(time, ground_truth_np[0, :, j], 'x', label='Ground Truth', color=pal[i], alpha=.2)
+     plt.plot(time, predictions_np[0, :, j], '-', label='Model Prediction', color=pal[i], alpha=1)
 
   # You can loop through more feature dimensions if needed
   # for i in range(output_size):
-  #     plt.plot(ground_truth_np[0, :, i], label=f'Ground Truth Feature {i}', marker='.')
-  #     plt.plot(predictions_np[0, :, i], label=f'Prediction Feature {i}', marker='x')
+     # plt.plot(ground_truth_np[0, :, i], label=f'Ground Truth Feature {i}', marker='.')
+     # plt.plot(predictions_np[0, :, i], label=f'Prediction Feature {i}', marker='x')
 
   plt.title("Model Prediction vs Ground Truth")
   plt.xlabel("Time steps")
@@ -1214,9 +1425,95 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/c300ecd214cc68557e80464695d21404a2d435d8.png]]
+[[file:./.ob-jupyter/6e7ba587925611ded6083969cb515334df8444fb.png]]
 
-** Connectivity
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Low rank
+
+#+begin_src ipython
+  print(model.U.shape, model.U.shape)
+  UdotV = model.U.T @ model.U
+  print(UdotV.detach().cpu().numpy())
+#+end_src
+
+#+RESULTS:
+: torch.Size([693, 2]) torch.Size([693, 2])
+: [[6.489632e-04 9.939262e-06]
+:  [9.939262e-06 6.078492e-04]]
+
+#+begin_src ipython
+  def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print(angle_AB(model.U[:, 0].detach().cpu().numpy(), model.U[:, 1].detach().cpu().numpy()))
+  # print(angle_AB(model.U[:, 1].detach().cpu().numpy(), model.V[:, 1].detach().cpu().numpy()))
+#+end_src
+
+#+RESULTS:
+: 89
+
+#+begin_src ipython
+  options['task'] = 'DPA'
+  options['features'] = 'sample'
+  print(options['day'])
+
+  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+  X_data = np.swapaxes(X_data, 1, -1)
+
+  print('X', X_data.shape, 'U', model.U.shape)
+  fig, ax = plt.subplots(1, 2, figsize= [1.5 * width, height])
+
+  U_proj = -(X_data @ model.U.detach().cpu().numpy()) * 100
+  # V_proj = -(X_data @ model.V.detach().cpu().numpy()) * 100
+  print('proj', U_proj.shape)
+
+  idx = np.where(y_data==1)[0]
+  # print('idx', idx.shape)
+
+  ax[0].plot(U_proj[idx].mean(0)[..., 0], label='A')
+  ax[1].plot(U_proj[idx].mean(0)[..., 1], label='A')
+
+  idx = np.where(y_data==-1)[0]
+  # print('idx', idx.shape)
+
+  ax[0].plot(U_proj[idx].mean(0)[..., 0], label='B')
+  ax[1].plot(U_proj[idx].mean(0)[..., 1], label='B')
+
+  ax[0].set_ylabel('Axis U')
+  ax[1].set_ylabel('Axis V')
+  plt.legend(fontsize=10)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: last
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+: multiple days 0 3 0
+: X (96, 84, 693) U torch.Size([693, 2])
+: proj (96, 84, 2)
+[[file:./.ob-jupyter/77384d0f7ce8c0e67a484be0aca2d9f1fc45e4a0.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Connectivity
 
 #+begin_src ipython
   # weights = model.rnn.weight_hh_l0.data.cpu().numpy()  # Get the recurring weights of the RNN

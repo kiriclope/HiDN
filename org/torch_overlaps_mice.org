@@ -22,37 +22,37 @@
 * Imports
 
 #+begin_src ipython
-import sys
-sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
 
-import pickle as pkl
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.stats import circmean
-from time import perf_counter
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.stats import circmean
+  from time import perf_counter
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, TensorDataset, DataLoader
-from skorch import NeuralNetClassifier
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from torch.utils.data import Dataset, TensorDataset, DataLoader
+  from skorch import NeuralNetClassifier
 
-from sklearn.base import clone
-from sklearn.ensemble import BaggingClassifier
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold, LeaveOneOut
+  from sklearn.base import clone
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, RepeatedStratifiedKFold, StratifiedKFold, LeaveOneOut
 
-from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
 
-from src.common.plot_utils import add_vlines, add_vdashed
-from src.attractor.energy import run_energy, plot_energy
-from src.common.options import set_options
-from src.stats.bootstrap import my_boots_ci
-from src.decode.bump import decode_bump, circcvl
-from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-from src.common.options import set_options
-from src.preprocess.helpers import avg_epochs
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.attractor.energy import run_energy, plot_energy
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.common.options import set_options
+  from src.preprocess.helpers import avg_epochs
 #+end_src
 
 #+RESULTS:
@@ -266,16 +266,22 @@ def pkl_load(name, path="."):
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
   N_NEURONS = [668, 693, 444, 361, 113]
 
+  # mice = ['RP13','PP17', 'PP09']
+  # N_NEURONS = [437, 478, 894]
+
+  # mice = [ 'AP02', 'AP12']
+  # N_NEURONS = [702, 741]
+
   tasks = ['DPA', 'DualGo', 'DualNoGo']
 
   kwargs = {
-      'mouse': 'ACCM03',
-      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': False,
-      'scaler_BL': 'robust', 'avg_noise': True, 'unit_var_BL': True,
+      'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': True,
+      'scaler_BL': 'robust', 'avg_noise': False, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
       'bootstrap': 0, 'n_boots': 128,
+      'n_splits': 3, 'n_repeats': 10,
   }
 
   options = set_options(**kwargs)
@@ -299,9 +305,11 @@ def pkl_load(name, path="."):
       X_avg = avg_epochs(X, **options).astype('float32')
       print('X', X.shape, 'y', y.shape)
 
-      # cv = 5
-      cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=10)
-      # cv = LeaveOneOut()
+      if options['n_splits'] == -1:
+          cv = LeaveOneOut()
+      else:
+          cv = RepeatedStratifiedKFold(n_splits=options['n_splits'], n_repeats=options['n_repeats'])
+
       # Perform grid search
       grid = GridSearchCV(model, params, refit=True, cv=cv, scoring=scoring, n_jobs=30)
       start = perf_counter()
@@ -334,7 +342,6 @@ def pkl_load(name, path="."):
           print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
 
           coefs, bias = get_bagged_coefs(bagging_clf, n_estimators=options['n_boots'])
-
           overlaps = get_bagged_overlaps(bagging_clf, X, n_estimators=options['n_boots'])
 
       else:
@@ -387,16 +394,16 @@ def pkl_load(name, path="."):
 
 #+RESULTS:
 
-#+begin_src ipython
+#+begin_src ipython results :maxlines 20
   params = {
-    'net__alpha': np.logspace(-4, 4, 20),
+    'net__alpha': np.logspace(-4, 4, 10),
     # 'net__l1_ratio': np.linspace(0, 1, 10),
     # 'net__module__dropout_rate': np.linspace(0, 1, 10),
   }
 
   options['reload'] = 0
   options['task'] = 'Dual'
-  scoring = 'accuracy'
+  scoring = 'roc_auc'
 
   # days = ['first', 'last']
 
@@ -461,76 +468,786 @@ def pkl_load(name, path="."):
     coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
     print('coefs', coefs_save.shape)
     pkl_save(coefs_save, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+
     #+end_src
 
-#+RESULTS:
-#+begin_example
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
-  X (96, 668, 84) y (96,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 14s
-  {'net__alpha': 0.004832930238571752}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.012742749857031334}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
-  X (96, 668, 84) y (96,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.012742749857031334}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
-  X (96, 668, 84) y (96,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.004832930238571752}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.012742749857031334}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
-  X (96, 668, 84) y (96,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.012742749857031334}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
-  X (96, 668, 84) y (96,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 3s
-  {'net__alpha': 0.004832930238571752}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (64, 668, 84) y (64,)
-  hyperparam fitting ...
-  Elapsed (with compilation) = 0h 0m 2s
-  {'net__alpha': 0.012742749857031334}
-  Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-  DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
-  X (96, 668, 84) y (96,)
-  hyperparam fitting ...
-#+end_example
+    #+RESULTS:
+    #+begin_example
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 12s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (64, 668, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (64, 668, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (64, 668, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 4 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (64, 668, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 5 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (64, 668, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 6 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
+      X (64, 668, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/ChRM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+      X (96, 668, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      overlaps (3, 6, 96, 84)
+      coefs (3, 6, 668)
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (64, 693, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (64, 693, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (64, 693, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 4 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (64, 693, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 5 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (64, 693, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 6 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
+      X (64, 693, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+      X (96, 693, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      overlaps (3, 6, 96, 84)
+      coefs (3, 6, 693)
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (64, 444, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (64, 444, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (64, 444, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 4 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (64, 444, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 5 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (64, 444, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 6 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
+      X (64, 444, 84) y (64,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/JawsM18
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+      X (96, 444, 84) y (96,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      overlaps (3, 6, 96, 84)
+      coefs (3, 6, 444)
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 2s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.000774263682681127}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 4 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 5 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (128, 361, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+      X (192, 361, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 1s
+      {'net__alpha': 0.3593813663804626}
+      overlaps (3, 5, 192, 84)
+      coefs (3, 5, 361)
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 18s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+      X (128, 113, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 19s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 11s
+      {'net__alpha': 10000.0}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 2 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 18s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+      X (128, 113, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 18s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 19s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 3 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 22s
+      {'net__alpha': 9.999999999999999e-05}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+      X (128, 113, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 17s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 18s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 4 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 20s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+      X (128, 113, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 12s
+      {'net__alpha': 0.005994842503189409}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 20s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES sample TASK all TRIALS  DAYS 5 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 19s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+      X (128, 113, 84) y (128,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 10s
+      {'net__alpha': 0.046415888336127774}
+      Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+      ##########################################
+      PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+      ##########################################
+      DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+      X (192, 113, 84) y (192,)
+      hyperparam fitting ...
+      Elapsed (with compilation) = 0h 0m 17s
+      {'net__alpha': 0.046415888336127774}
+      overlaps (3, 5, 192, 84)
+      coefs (3, 5, 113)
+    #+end_example
 
 * Overlaps mice
 
 #+begin_src ipython
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  # mice = ['JawsM15', 'ACCM03']
-  mouse = 'JawsM15'
 
   l1_ratio = 0.95
   fname = options['fname']
   fname = '_all'
   tasks = ['DPA', 'DualGo', 'DualNoGo']
-  N_NEURONS = [668, 693, 444, 361, 113]
 
   kwargs = {
       'mouse': 'ACCM03',
@@ -544,7 +1261,6 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: 09beb03d-22bd-4603-a1e8-7dc0ec3bd71f
 
 #+begin_src ipython
   overlaps_mice = []
@@ -562,7 +1278,16 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: 45d0e63e-9600-41d7-869f-029738e4254d
+: ChRM04_overlaps_0.95_l1_ratio_all.pkl
+: overlaps (3, 6, 96, 84)
+: JawsM15_overlaps_0.95_l1_ratio_all.pkl
+: overlaps (3, 6, 96, 84)
+: JawsM18_overlaps_0.95_l1_ratio_all.pkl
+: overlaps (3, 6, 96, 84)
+: ACCM03_overlaps_0.95_l1_ratio_all.pkl
+: overlaps (3, 5, 192, 84)
+: ACCM04_overlaps_0.95_l1_ratio_all.pkl
+: overlaps (3, 5, 192, 84)
 
 #+begin_src ipython
     cmap = plt.get_cmap('Blues')
@@ -605,12 +1330,12 @@ def pkl_load(name, path="."):
     ax[1].set_ylabel('Distractor Overlap')
     ax[2].set_ylabel('Choice Overlap')
 
-    plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
+    plt.savefig('./figs/%s_overlaps.svg' % options['mouse'], dpi=300)
     plt.show()
 #+end_src
 
 #+RESULTS:
-: dcc54fd6-1d8d-439c-9c03-554b2d5ba4db
+[[file:./.ob-jupyter/16c866b34c9d064f3fdf2f7ef1acb4928de4fc48.png]]
 
 #+begin_src ipython
   options['epochs'] = ['LD']
@@ -655,10 +1380,14 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: e604fe32-c127-4d04-b1ea-3203df353348
+:RESULTS:
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:100: DegenerateDataWarning: The BCa confidence interval cannot be calculated. This problem is known to occur when the distribution is degenerate or the statistic is np.min.
+:   warnings.warn(DegenerateDataWarning(msg))
+[[file:./.ob-jupyter/47d15bcc6e571450fda6ea74abfbcbd5a5137a2e.png]]
+:END:
 
 #+begin_src ipython
-  options['T_WINDOW'] = 0.5
+  options['T_WINDOW'] = 0.0
   options['epochs'] = ['ED']
 
   dist_mice = []
@@ -709,7 +1438,11 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: 6f418947-7bbc-4c62-91d8-353fec4ac8fa
+:RESULTS:
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:630: RuntimeWarning: Mean of empty slice
+:   theta_hat_b.append(statistic(*resampled_data, axis=-1))
+[[file:./.ob-jupyter/f22ab3bf7f41ac25dc1f3db9dbfb03c59288826b.png]]
+:END:
 
 #+begin_src ipython
   options = set_options(**kwargs)
@@ -722,7 +1455,7 @@ def pkl_load(name, path="."):
       choice_avg = []
       choice_ci = []
       for j in range(overlaps_choice.shape[0]):
-          choice_epoch = avg_epochs(-overlaps_choice[j][size:] + overlaps_choice[j][:size], **options) / 2.0
+          choice_epoch = avg_epochs(overlaps_choice[j][size:] + overlaps_choice[j][:size], **options) / 2.0
           choice_avg.append(choice_epoch.mean(0))
           # choice_ci.append(get_bootstrap_ci(choice_epoch))
 
@@ -758,14 +1491,13 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: 653e61e9-a830-41d0-bafe-6ae745d404b8
+[[file:./.ob-jupyter/7abb9d4f6699b002b5ee4852118b11d65c9131f2.png]]
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
-: 51d1d7d4-173c-42de-bb6a-4d419f634a2f
 
 * Cosine Mice
 
@@ -778,7 +1510,6 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: 9ebdf3f8-4b9f-4e14-8c73-9b4a0dea9fe2
 
 #+begin_src ipython
   coefs_mice = []
@@ -806,7 +1537,16 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: f37d61c7-1a63-4248-a99a-ee96d486b296
+: ChRM04_coefs_0.95_l1_ratio_all.pkl
+: coefs (3, 6, 668) angles (6,)
+: JawsM15_coefs_0.95_l1_ratio_all.pkl
+: coefs (3, 6, 693) angles (6,)
+: JawsM18_coefs_0.95_l1_ratio_all.pkl
+: coefs (3, 6, 444) angles (6,)
+: ACCM03_coefs_0.95_l1_ratio_all.pkl
+: coefs (3, 5, 361) angles (6,)
+: ACCM04_coefs_0.95_l1_ratio_all.pkl
+: coefs (3, 5, 113) angles (6,)
 
 #+RESULTS:
 
@@ -834,11 +1574,10 @@ def pkl_load(name, path="."):
 #+end_src
 
 #+RESULTS:
-: a7fd6a9a-5792-4188-8b5f-1f7644f7cefa
+[[file:./.ob-jupyter/3b476d77df687b1ac4a5ae1f0884ae35c063f4c7.png]]
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
-: 8d34e2ce-bba2-4faf-b713-0fed220c4b01
