@@ -38,6 +38,7 @@ def set_options(**kwargs):
     opts["day"] = "first"  # int or 'first', 'middle', 'last'
     opts["trials"] = ""  # 'correct', 'incorrect'
     opts["features"] = "sample"
+    opts["num_features"] = 1
     # 'sample', 'distractor', 'task', 'reward', "choice"
     opts["overlap"] = "sample"
     opts["show_AB"] = False
@@ -146,6 +147,7 @@ def set_options(**kwargs):
     opts["out_fold"] = "repeated"  # stratified, loo, repeated
     opts["n_out"] = 5
     opts["outer_score"] = "f1_weighted"
+    opts["scoring"] = 'roc_auc'
     # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning

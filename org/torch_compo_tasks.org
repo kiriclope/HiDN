@@ -22,35 +22,36 @@
 * Imports
 
 #+begin_src ipython
-import sys
-sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
 
-import pickle as pkl
-import numpy as np
-import matplotlib.pyplot as plt
-from time import perf_counter
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from time import perf_counter
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from skorch import NeuralNetClassifier
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
 
-from sklearn.base import clone
-from sklearn.metrics import make_scorer, roc_auc_score
-from sklearn.ensemble import BaggingClassifier
-from sklearn.preprocessing import StandardScaler, RobustScaler
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
-from sklearn.decomposition import PCA
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+  from sklearn.decomposition import PCA
 
-from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+  from src.decode.my_mne import my_cross_val_multiscore
 
-from src.common.plot_utils import add_vlines, add_vdashed
-from src.common.options import set_options
-from src.stats.bootstrap import my_boots_ci
-from src.decode.bump import decode_bump, circcvl
-from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-from src.preprocess.helpers import avg_epochs
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
 #+end_src
 
 #+RESULTS:
@@ -117,7 +118,7 @@ from src.preprocess.helpers import avg_epochs
 
   early_stopping = EarlyStopping(
       monitor='train_loss',    # Metric to monitor
-      patience=10,              # Number of epochs to wait for improvement
+      patience=5,              # Number of epochs to wait for improvement
       threshold=0.001,       # Minimum change to qualify as an improvement
       threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
       lower_is_better=True     # Set to True if lower metric values are better
@@ -268,16 +269,26 @@ from src.preprocess.helpers import avg_epochs
 
           return np.array(overlaps_list).mean(0)
 
-      def get_cv_scores(self, X, y, scoring):
+      def get_cv_scores(self, X, y, scoring, cv=None, X_test=None, y_test=None):
+          if cv is None:
+              cv = self.cv
+          if X_test is None:
+              X_test = X
+              y_test = y
+
           start = perf_counter()
           if self.verbose:
               print('Computing cv scores ...')
 
-          estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
+          estimator = SlidingEstimator(clone(self.best_model), n_jobs=16,
                                        scoring=scoring, verbose=False)
 
-          self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
-                                             cv=self.cv, n_jobs=-1, verbose=False)
+          # self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
+          #                                    cv=cv, n_jobs=-1, verbose=False)
+
+          self.scores = my_cross_val_multiscore(estimator, X.astype('float32'), X_test.astype('float32'),
+                                           y.astype('float32'), y_test.astype('float32'), cv=cv, n_jobs=-1, verbose=False)
+
           end = perf_counter()
           if self.verbose:
               print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
@@ -286,7 +297,6 @@ from src.preprocess.helpers import avg_epochs
 #+end_src
 
 #+RESULTS:
-
 
   #+begin_src ipython :tangle ../src/torch/main.py
     from src.common.get_data import get_X_y_days, get_X_y_S1_S2
@@ -305,14 +315,8 @@ from src.preprocess.helpers import avg_epochs
             X_days, y_days = get_X_y_days(**options)
             X, y = get_X_y_S1_S2(X_days, y_days, **options)
             y[y==-1] = 0
-            if options['verbose']:
-                print('X', X.shape, 'y', y.shape)
 
             X_avg = avg_epochs(X, **options).astype('float32')
-            if dum:
-                    options['features'] = 'sample'
-                    options['task'] = task
-                    X, _ = get_X_y_S1_S2(X_days, y_days, **options)
 
             index = mice.index(options['mouse'])
             model.num_features = N_NEURONS[index]
@@ -324,8 +328,26 @@ from src.preprocess.helpers import avg_epochs
 
             model.fit(X_avg, y)
 
+            if dum:
+                    options['features'] = 'sample'
+                    options['task'] = task
+                    if 'scores' in RETURN:
+                            X, y = get_X_y_S1_S2(X_days, y_days, **options)
+                    else:
+                            X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+            if options['compo']:
+                    print('composition DPA vs', options['compo_task'])
+                    options['task'] = options['compo_task']
+                    X_test, y_test = get_X_y_S1_S2(X_days, y_days, **options)
+            else:
+                    X_test, y_test = None, None
+
+            if options['verbose']:
+                    print('X', X.shape, 'y', y.shape)
+
             if 'scores' in RETURN:
-                scores = model.get_cv_scores(X, y, options['scoring'])
+                scores = model.get_cv_scores(X, y, options['scoring'], cv=3, X_test=X_test, y_test=y_test)
                 end = perf_counter()
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
                 return scores
@@ -406,10 +428,8 @@ from src.preprocess.helpers import avg_epochs
   def pkl_save(obj, name, path="."):
       pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
 
-
   def pkl_load(name, path="."):
       return pkl.load(open(path + "/" + name, "rb"))
-
 #+end_src
 
 #+RESULTS:
@@ -435,13 +455,14 @@ from src.preprocess.helpers import avg_epochs
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
-      'bootstrap': 1, 'n_boots': 32,
+      'bootstrap': 0, 'n_boots': 32,
       'n_splits': 3, 'n_repeats': 16,
-      'class_weight': 1
+      'class_weight': 0,
+      'compo':1, 'compo_task': 'DPA',
   }
 
   options = set_options(**kwargs)
-  days = np.arange(1, options['n_days']+1)
+  days = np.arange(1,  options['n_days']+1)
 
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
   options['scoring'] = safe_roc_auc
@@ -470,7 +491,7 @@ from src.preprocess.helpers import avg_epochs
       iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
       verbose=0,
       device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
-      compile=True,
+      compile=False,
       warm_start=True,
   )
 
@@ -482,241 +503,280 @@ from src.preprocess.helpers import avg_epochs
 #+RESULTS:
 
 #+begin_src ipython
-  overlaps_sample = []
-  overlaps_dist = []
-  overlaps_choice = []
+  scores_sample = []
+  scores_dist = []
+  scores_choice = []
+
+  options['task'] = 'DPA'
 
   for task in tasks:
-    options['task'] = task
+    options['compo_task'] = task
 
-    overlaps_sample_task = []
-    overlaps_dist_task = []
-    overlaps_choice_task = []
+    scores_sample_task = []
+    scores_dist_task = []
+    scores_choice_task = []
 
     for day in days:
         options['day'] = day
 
         options['features'] = 'sample'
         options['epochs'] = ['ED']
-        overlaps = get_classification(model, RETURN='overlaps', **options)
-        overlaps_sample_task.append(overlaps)
+        scores = get_classification(model, RETURN='scores', **options)
+        scores_sample_task.append(scores)
 
-        options['features'] = 'distractor'
-        options['epochs'] = ['MD']
-        overlaps = get_classification(model, RETURN='overlaps', **options)
-        overlaps_dist_task.append(overlaps)
+        # options['features'] = 'distractor'
+        # options['epochs'] = ['MD']
+        # scores = get_classification(model, RETURN='scores', **options)
+        # scores_dist_task.append(scores)
 
-        options['features'] = 'choice'
-        options['epochs'] = ['CHOICE']
-        overlaps = get_classification(model, RETURN='overlaps', **options)
-        overlaps_choice_task.append(overlaps)
+        # options['features'] = 'choice'
+        # options['epochs'] = ['CHOICE']
+        # scores = get_classification(model, RETURN='scores', **options)
+        # scores_choice_task.append(scores)
 
-    overlaps_sample.append(overlaps_sample_task)
-    overlaps_dist.append(overlaps_dist_task)
-    overlaps_choice.append(overlaps_choice_task)
+    scores_sample.append(scores_sample_task)
+    # scores_dist.append(scores_dist_task)
+    # scores_choice.append(scores_choice_task)
 
-    overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
-    print(overlaps_save.shape)
-    pkl_save(overlaps_save, '%s_overlaps_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
-
+    # scores_save = np.stack((scores_sample, scores_choice))
+    # print(scores_save.shape)
+    # pkl_save(scores_save, '%s_scores_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
     #+end_src
 
 #+RESULTS:
+#+begin_example
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DPA
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 34s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DPA
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DPA
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DPA
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 31s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DPA
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 31s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DPA
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 31s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualGo
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualGo
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualGo
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualGo
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualGo
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualGo
+  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 31s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualNoGo
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 33s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualNoGo
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualNoGo
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualNoGo
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualNoGo
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+  DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
+  imbalance tensor(1., device='cuda:0')
+  composition DPA vs DualNoGo
+  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 32s
+#+end_example
 
-
-* Overlaps
+* Scores
 
 #+begin_src ipython
-  filename = '%s_overlaps_tasks_%.2f_l1_ratio%s.pkl' % (options['mouse'], options['l1_ratio'], options['fname'])
+  filename = '%s_scores_tasks_%.2f_l1_ratio%s.pkl' % (options['mouse'], options['l1_ratio'], options['fname'])
   print(filename)
   try:
-      overlaps = pkl_load(filename, path="../data/%s/" % options['mouse'])
-      print('overlaps', overlaps.shape)
+      scores = pkl_load(filename, path="../data/%s/" % options['mouse'])
+      print('scores', scores.shape)
   except:
       print('file not found')
 #+end_src
 
 #+RESULTS:
-: JawsM15_overlaps_tasks_0.95_l1_ratio.pkl
-: overlaps (3, 3, 6, 32, 84)
+: JawsM15_scores_tasks_0.95_l1_ratio.pkl
+: scores (2, 3, 6, 3, 84)
 
 #+begin_src ipython
-  overlaps_sample = overlaps[0]
-  overlaps_dist = overlaps[1]
-  overlaps_choice = overlaps[2]
+  scores_sample = scores[0]
+  # scores_choice = scores[1]
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  time = np.linspace(0, 14, 84)
-  cmap = plt.get_cmap('Blues')
-  colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
-  cmap = plt.get_cmap('Reds')
-  colors2 = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
-  width = 6
-  golden_ratio = (5**.5 - 1) / 2
+    options['epochs'] = ['ED']
 
-  task = 1
-  # mask = ~np.isnan(overlaps_dist).any(axis=2)
-  # overlaps_dist = overlaps_dist[:, mask.any(axis=0)]
-  options['features'] = 'choice'
-  options['preprocess'] = False
-  X_days, y_days = get_X_y_days(**options)
+    colors = ['r', 'b', 'g']
+    for task in range(len(tasks)):
+        sample_avg = []
+        sample_ci = []
+        for i in range(options['n_days']):
+            sample_epoch = avg_epochs(scores_sample[task][i], **options)
+            sample_avg.append(sample_epoch.mean(0))
+            sample_ci.append(get_bootstrap_ci(sample_epoch))
 
-  fig, ax = plt.subplots(3, 3, figsize= [2.5 * width, 2.5*height])
+        sample_avg = np.array(sample_avg)
+        sample_ci = np.array(sample_ci).T
 
-  for task in range(3):
-    for i in range(options['n_days']):
-        size = overlaps_sample.shape[2] // 2
+        plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
+        plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color=colors[task], alpha=0.1)
 
-        ax[task][0].plot(time, circcvl(overlaps_sample[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
-        ax[task][1].plot(time, circcvl(overlaps_dist[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+    plt.axhline(y=0.5, color='k', linestyle='--')
 
-        ax[task][0].plot(time, circcvl(overlaps_sample[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-        ax[task][1].plot(time, circcvl(overlaps_dist[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-
-        options['day'] = i+1
-        X, y = get_X_y_S1_S2(X_days, y_days, **options)
-        size = np.sum(y==-1)
-
-        ax[task][2].plot(time, circcvl(overlaps_choice[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-        ax[task][2].plot(time, circcvl(overlaps_choice[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
-
-    # ax[task][2].legend(fontsize=10)
-    ax[task][0].set_xlabel('Time (s)')
-    ax[task][1].set_xlabel('Time (s)')
-    ax[task][2].set_xlabel('Time (s)')
-    ax[task][0].set_ylabel('Sample Overlap')
-    ax[task][1].set_ylabel('Distractor Overlap')
-    ax[task][2].set_ylabel('Choice Overlap')
-
-    for i in range(3):
-        ax[task][i].set_xticks(np.arange(0, 16, 2))
-        ax[task][i].set_xlim([0, 14])
-        add_vlines(ax[task][i])
-        # ax[task][i].set_ylim([-20, 20])
-
-  plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
-  plt.show()
+    plt.legend(fontsize=10)
+    plt.xticks(np.arange(1, options['n_days']+1))
+    plt.yticks([0.4, 0.6, 0.8, 1.0])
+    plt.xlabel('Day')
+    plt.ylabel('Sample Score')
+    plt.savefig('%s_scores_avg.svg' % options['mouse'], dpi=300)
+    plt.show()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-[[file:./.ob-jupyter/59ef0cadf6c00122f2f2ea4cb33b947f0878096b.png]]
-:END:
-:RESULTS:
+[[file:./.ob-jupyter/ee5388d44da15d5395826758fe0ca636453fd100.png]]
 
 #+begin_src ipython
   options['epochs'] = ['LD']
-  size = overlaps_sample.shape[2] // 2
-  colors = ['r', 'b', 'g']
-  for task in range(len(tasks)):
-      sample_avg = []
-      sample_ci = []
-      for i in range(options['n_days']):
-          sample_epoch = avg_epochs(-overlaps_sample[task][i][size:] + overlaps_sample[task][i][:size], **options) / 2.0
-          sample_avg.append(sample_epoch.mean(0))
-          sample_ci.append(get_bootstrap_ci(sample_epoch))
-
-      sample_avg = np.array(sample_avg)
-      sample_ci = np.array(sample_ci).T
-
-      plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
-      plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color=colors[task], alpha=0.1)
-
-  plt.axhline(y=0.5, color='k', linestyle='--')
-
-  plt.legend(fontsize=10)
-  plt.xticks(np.arange(1, options['n_days']+1))
-  # plt.yticks([0.4, 0.6, 0.8, 1.0])
-  plt.xlabel('Day')
-  plt.ylabel('Sample. Overlap')
-  plt.savefig('%s_overlaps_sample_day.svg' % options['mouse'], dpi=300)
-  plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./.ob-jupyter/5588ccf79b06483a51f6f6a9f1f7dbd997c75938.png]]
-
-#+begin_src ipython
-  options['epochs'] = ['ED']
-  size = overlaps_dist.shape[2] // 2
-  colors = ['r', 'b', 'g']
-  for task in range(len(tasks)):
-      dist_avg = []
-      dist_ci = []
-      for i in range(options['n_days']):
-          dist_epoch = avg_epochs(overlaps_dist[task][i][size:] + overlaps_dist[task][i][:size], **options) / 2.0
-          dist_avg.append(dist_epoch.mean(0))
-          dist_ci.append(get_bootstrap_ci(dist_epoch))
-
-      dist_avg = np.array(dist_avg)
-      dist_ci = np.array(dist_ci).T
-
-      plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
-      plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color=colors[task], alpha=0.1)
-
-  plt.axhline(y=0.5, color='k', linestyle='--')
-
-  plt.legend(fontsize=10)
-  plt.xticks(np.arange(1, options['n_days']+1))
-  # plt.yticks([0.4, 0.6, 0.8, 1.0])
-  plt.xlabel('Day')
-  plt.ylabel('Dist. Overlap')
-  plt.savefig('%s_overlaps_dist_day.svg' % options['mouse'], dpi=300)
-  plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./.ob-jupyter/af7ac8a3480bb25c2776e5f8a36d775957f11b4f.png]]
-
-#+begin_src ipython
-  colors = ['r', 'b', 'g']
-  options['epochs'] = ['LD']
-  options['features'] = 'choice'
-  options['preprocess'] = False
-  options['verbose'] = 0
-  X_days, y_days = get_X_y_days(**options)
-
   for task in range(len(tasks)):
       choice_avg = []
       choice_ci = []
-      options['task'] = options['tasks'][task]
-
       for i in range(options['n_days']):
-          options['day'] = i+1
-          X, y = get_X_y_S1_S2(X_days, y_days, **options)
-          size = np.sum(y==-1)
-          # print(y.shape, size, overlaps_choice[task][i].shape)
-
-          choice_epoch = np.nanmean(avg_epochs(-overlaps_choice[task][i][size:], **options)) + np.nanmean(avg_epochs(overlaps_choice[task][i][:size], **options))
-          choice_avg.append(choice_epoch)
-
-          choice_epoch = np.hstack((avg_epochs(-overlaps_choice[task][i][size:], **options), avg_epochs(overlaps_choice[task][i][:size], **options)))
+          choice_epoch = avg_epochs(scores_choice[task][i], **options)
+          choice_avg.append(np.nanmean(choice_epoch, axis=0))
           choice_ci.append(get_bootstrap_ci(choice_epoch))
 
-      choice_avg = np.array(choice_avg) / 2
+      choice_avg = np.array(choice_avg)
       choice_ci = np.array(choice_ci).T
 
       plt.plot(np.arange(1, options['n_days']+1), choice_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
       plt.fill_between(np.arange(1, options['n_days']+1), choice_ci[0], choice_ci[1], color=colors[task], alpha=0.1)
-
   plt.axhline(y=0.5, color='k', linestyle='--')
 
   plt.legend(fontsize=10)
   plt.xticks(np.arange(1, options['n_days']+1))
-  # plt.yticks([0.4, 0.6, 0.8, 1.0])
+  plt.yticks([0.4, 0.6, 0.8, 1.0])
   plt.xlabel('Day')
-  plt.ylabel('Choice Overlap')
-  plt.savefig('%s_overlaps_choice_day.svg' % options['mouse'], dpi=300)
+  plt.ylabel('Choice Score')
+  plt.savefig('%s_scores_avg.svg' % options['mouse'], dpi=300)
   plt.show()
+
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/d29ecd1532c50263cbc47beb49300cd2746e31d4.png]]
+[[file:./.ob-jupyter/71f0fc96c880eac83f75dbd92c66994ea0e5cb2b.png]]
 
-* Overlaps mice
+* Scores mice
 
 #+begin_src ipython
   mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
@@ -745,31 +805,31 @@ from src.preprocess.helpers import avg_epochs
 : _tasks
 
 #+begin_src ipython
-  overlaps_mice = []
+  scores_mice = []
 
   for mouse in mice:
-      filename = '%s_overlaps_tasks_%.2f_l1_ratio%s.pkl' % (mouse, l1_ratio, fname)
+      filename = '%s_scores_tasks_%.2f_l1_ratio%s.pkl' % (mouse, l1_ratio, fname)
       print(filename)
       try:
-          overlaps = pkl_load(filename, path="../data/%s/" % mouse)
-          print('overlaps', overlaps.shape)
-          overlaps_mice.append(overlaps)
+          scores = pkl_load(filename, path="../data/%s/" % mouse)
+          print('scores', scores.shape)
+          scores_mice.append(scores)
       except:
           print('file not found')
-          overlaps_mice.append(np.nan * np.ones((3, 6, 2, 84)))
+          scores_mice.append(np.nan * np.ones((3, 6, 2, 84)))
 #+end_src
 
 #+RESULTS:
-: ChRM04_overlaps_tasks_0.95_l1_ratio_tasks.pkl
-: overlaps (2, 3, 6, 30, 84)
-: JawsM15_overlaps_tasks_0.95_l1_ratio_tasks.pkl
-: overlaps (2, 3, 6, 30, 84)
-: JawsM18_overlaps_tasks_0.95_l1_ratio_tasks.pkl
-: overlaps (2, 3, 6, 30, 84)
-: ACCM03_overlaps_tasks_0.95_l1_ratio_tasks.pkl
-: overlaps (2, 3, 5, 30, 84)
-: ACCM04_overlaps_tasks_0.95_l1_ratio_tasks.pkl
-: overlaps (2, 3, 5, 30, 84)
+: ChRM04_scores_tasks_0.95_l1_ratio_tasks.pkl
+: scores (2, 3, 6, 30, 84)
+: JawsM15_scores_tasks_0.95_l1_ratio_tasks.pkl
+: scores (2, 3, 6, 30, 84)
+: JawsM18_scores_tasks_0.95_l1_ratio_tasks.pkl
+: scores (2, 3, 6, 30, 84)
+: ACCM03_scores_tasks_0.95_l1_ratio_tasks.pkl
+: scores (2, 3, 5, 30, 84)
+: ACCM04_scores_tasks_0.95_l1_ratio_tasks.pkl
+: scores (2, 3, 5, 30, 84)
 
 #+begin_src ipython
   colors = ['r', 'b', 'g']
@@ -780,11 +840,11 @@ from src.preprocess.helpers import avg_epochs
   for task in range(3):
     sample_mice = []
     for i in range(len(mice)):
-        overlaps_sample = overlaps_mice[i][0][task]
+        scores_sample = scores_mice[i][0][task]
         sample_avg = []
         # sample_ci = []
-        for j in range(overlaps_sample.shape[0]):
-            sample_epoch = avg_epochs(overlaps_sample[j], **options)
+        for j in range(scores_sample.shape[0]):
+            sample_epoch = avg_epochs(scores_sample[j], **options)
             sample_avg.append(sample_epoch.mean(0))
             # sample_ci.append(get_bootstrap_ci(sample_epoch))
 
@@ -805,10 +865,10 @@ from src.preprocess.helpers import avg_epochs
     plt.axhline(y=0.5, color='k', linestyle='--')
   plt.legend(fontsize=16, frameon=0)
   plt.xlabel('Day')
-  plt.ylabel('Sample Overlap')
+  plt.ylabel('Sample Score')
   plt.xticks(np.arange(1,7))
   plt.yticks([0.5, 0.6, 0.7, 0.8])
-  plt.savefig('./figs/mice_overlaps_tasks_sample%s.svg' % fname, dpi=300)
+  plt.savefig('./figs/mice_scores_tasks_sample%s.svg' % fname, dpi=300)
 
   plt.show()
 #+end_src
@@ -825,10 +885,10 @@ from src.preprocess.helpers import avg_epochs
   for task in range(3):
     choice_mice = []
     for i in range(len(mice)):
-        overlaps_choice = overlaps_mice[i][1][task]
+        scores_choice = scores_mice[i][1][task]
         choice_avg = []
-        for j in range(overlaps_choice.shape[0]):
-            choice_epoch = avg_epochs(overlaps_choice[j], **options)
+        for j in range(scores_choice.shape[0]):
+            choice_epoch = avg_epochs(scores_choice[j], **options)
             choice_avg.append(choice_epoch.mean(0))
 
         choice_avg = np.array(choice_avg)
@@ -847,10 +907,10 @@ from src.preprocess.helpers import avg_epochs
     plt.axhline(y=0.5, color='k', linestyle='--')
   plt.legend(fontsize=16, frameon=0)
   plt.xlabel('Day')
-  plt.ylabel('Choice Overlap')
+  plt.ylabel('Choice Score')
   plt.xticks(np.arange(1,7))
   plt.yticks([0.5, 0.6, 0.7, 0.8])
-  plt.savefig('./figs/mice_overlaps_tasks_choice%s.svg' % fname, dpi=300)
+  plt.savefig('./figs/mice_scores_tasks_choice%s.svg' % fname, dpi=300)
 
   plt.show()
 #+end_src

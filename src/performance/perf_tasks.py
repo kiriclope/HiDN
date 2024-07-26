@@ -81,6 +81,47 @@ def perf_tasks_days(tasks, y_days, perf_type="correct_hit", SAMPLE="all", IF_LAS
 
     return perf_task, ci_task
 
+def df_perf_tasks_days(tasks, y_days, perf_type="correct_hit", SAMPLE="all", IF_LASER=0):
+    perf_task = []
+    ci_task = []
+
+    n_days = len(y_days.day.unique())
+    # print(y_days.head())
+
+    for task in tasks:
+        perf_day = []
+        ci_day = []
+
+        idx = get_labels_task(y_days, task, perf_type, SAMPLE, IF_LASER)
+        y_task = y_days[idx]
+
+        print(task, len(idx), y_days.shape, y_task.shape)
+
+        for i_day in range(1, n_days + 1):
+            y_day = y_task[y_task.day == i_day]
+
+            if perf_type == "correct":
+                idx = ~y_day.response.str.contains("incorrect")
+            else:
+                idx = y_day.response.str.contains(perf_type)
+
+            perf_day.append(np.mean(idx))
+            _, ci = my_boots_ci(idx, np.mean, verbose=0, n_samples=1000)
+
+            # perf_day.append(np.sum(idx))
+            # _, ci = my_boots_ci(idx, np.sum, verbose=0, n_samples=1000)
+
+            ci_day.append(ci[0])
+            # ci_day.append(0)
+
+        perf_task.append(perf_day)
+        ci_task.append(ci_day)
+
+    perf_task = np.array(perf_task)
+    ci_task = np.array(ci_task)
+
+    return perf_task, ci_task
+
 
 def run_perf_tasks(**kwargs):
     options = set_options(**kwargs)

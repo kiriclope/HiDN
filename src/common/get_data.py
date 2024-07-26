@@ -247,14 +247,16 @@ def get_X_y_days(**kwargs):
 
     if kwargs["reload"] == 0:
         try:
-            print("Loading files from", path + mouse)
+            if kwargs['verbose']:
+                print("Loading files from", path + mouse)
             X_days = pickle.load(open(path + mouse + "/X_days.pkl", "rb"))
             y_days = pd.read_pickle(path + mouse + "/y_days.pkl")
         except:
             kwargs["reload"] = 1
 
     if kwargs["reload"] == 1:
-        print("Reading data from source file")
+        if kwargs['verbose']:
+            print("Reading data from source file")
 
         if ("AP" in mouse):
             X_days, y_days = get_X_y_days_multi(mouse)
@@ -283,17 +285,18 @@ def get_X_y_days(**kwargs):
         # print("X_days", X_days.shape, "y_days", y_days.shape)
 
     if kwargs["preprocess"]:
-        print(
-            "PREPROCESSING:",
-            "SCALER",
-            kwargs["scaler_BL"],
-            "AVG MEAN",
-            kwargs["avg_mean_BL"],
-            "AVG NOISE",
-            kwargs["avg_noise_BL"],
-            "UNIT VAR",
-            kwargs["unit_var_BL"],
-        )
+        if kwargs['verbose']:
+            print(
+                "PREPROCESSING:",
+                "SCALER",
+                kwargs["scaler_BL"],
+                "AVG MEAN",
+                kwargs["avg_mean_BL"],
+                "AVG NOISE",
+                kwargs["avg_noise_BL"],
+                "UNIT VAR",
+                kwargs["unit_var_BL"],
+            )
 
         X_days = preprocess_df(X_days, y_days, **kwargs)
 
