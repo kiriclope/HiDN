@@ -419,10 +419,10 @@ def get_X_y_S1_S2(X, y, **kwargs):
             # lick
             idx_S1 = y.response == "correct_hit"
             # no lick
-            idx_S2 = y.response == "incorrect_fa"
+            idx_S2 = y.response == "correct_rej"
         elif kwargs["trials"] == "incorect" :
             # lick
-            idx_S1 = y.response == "correct_rej"
+            idx_S1 = y.response == "incorrect_fa"
             # no lick
             idx_S2 = y.response == "incorrect_miss"
         else:

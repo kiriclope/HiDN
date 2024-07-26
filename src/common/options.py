@@ -139,6 +139,8 @@ def set_options(**kwargs):
     opts["corr"] = False
     opts["threshold"] = 0.25
 
+    opts["compo"] = 0
+    opts["compo_task"] = 'DPA'
     ################################
     # fit
     ################################
@@ -177,8 +179,8 @@ def set_options(**kwargs):
 
     opts["n_days"] = 6  # PrL,ACC 6 or multi 10 this is updated later
     opts["n_discard"] = 0
-    opts["n_first"] = 3  # 3 or 2
-    opts["n_middle"] = 0  # 0 or 2
+    opts["n_first"] = 2  # 3 or 2
+    opts["n_middle"] = 2  # 0 or 2
 
     if "P" in opts["mouse"]:
         opts["n_days"] = 10  # PrL 6, ACC 5 or multi 10

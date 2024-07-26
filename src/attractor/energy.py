@@ -242,8 +242,8 @@ def plot_energy(energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
         fig, ax = plt.subplots()
 
     theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
-    energy = energy[1:]
-    theta = theta[1:]
+    # energy = energy[1:]
+    # theta = theta[1:]
 
     windowSize = int(window * energy.shape[0])
     if SMOOTH:
