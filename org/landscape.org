@@ -1,5 +1,42 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session landscape :kernel dual_data
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session landscape :kernel dual_data :exports results :output-dir ./figures
+
+#+begin_src emacs-lisp
+(defun my/org-babel-tangle-figure-filename ()
+  "Generate a comprehensive figure filename based on org entry name and block position."
+  (let* ((name (or (org-entry-get nil "name") "figure"))
+         (block-counter (let ((counter 1))
+                          (save-excursion
+                            (goto-char (point-min))
+                            (while (re-search-forward "^[ \t]*#\\+begin_src" (point-max) t)
+                              (when (< (point) (point-marker))
+                                (setq counter (1+ counter)))))
+                          counter))
+         (filename (concat name "_" (number-to-string block-counter) ".png")))
+    filename))
+#+end_src
+
+#+RESULTS:
+: my/org-babel-tangle-figure-filename
+
+
+#+BEGIN_SRC ipython :file (my/org-babel-tangle-figure-filename)
+    x = np.linspace(-1, 1, 100)
+    plt.plot(x, np.cos(x))
+    plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/figure_1.png]]
+
+#+BEGIN_SRC ipython :file (my/org-babel-tangle-figure-filename)
+    x = np.linspace(-1, 1, 100)
+    plt.plot(x, np.cos(x))
+    plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/figure_1.png]]
 
 * Notebook Settings
 
@@ -22,8 +59,16 @@
 * Imports
 
 #+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
   import sys
   sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
 
   import pickle as pkl
   import numpy as np
@@ -44,7 +89,6 @@
   from sklearn.decomposition import PCA
 
   from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
-  from src.decode.my_mne import my_cross_val_multiscore
 
   from src.attractor.energy import run_energy, plot_energy
   from src.common.plot_utils import add_vlines, add_vdashed
@@ -119,7 +163,7 @@
 
   early_stopping = EarlyStopping(
       monitor='train_loss',    # Metric to monitor
-      patience=5,              # Number of epochs to wait for improvement
+      patience=10,              # Number of epochs to wait for improvement
       threshold=0.001,       # Minimum change to qualify as an improvement
       threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
       lower_is_better=True     # Set to True if lower metric values are better
@@ -152,234 +196,240 @@
 #+RESULTS:
 
 ** Model
-
-#+begin_src ipython :tangle ../src/torch/classificationCV.py
-  from time import perf_counter
-  from sklearn.ensemble import BaggingClassifier
-  from sklearn.preprocessing import StandardScaler
-  from sklearn.pipeline import Pipeline
-  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
-  from sklearn.decomposition import PCA
-
-  from mne.decoding import SlidingEstimator, cross_val_multiscore
-
-  class ClassificationCV():
-      def __init__(self, net, params, **kwargs):
-
-          pipe = []
-          self.scaler = kwargs['scaler']
-          if self.scaler is not None and self.scaler !=0 :
-              pipe.append(("scaler", StandardScaler()))
-
-          self.n_comp = kwargs['n_comp']
-          if kwargs['n_comp'] is not None:
-              self.n_comp = kwargs['n_comp']
-              pipe.append(("pca", PCA(n_components=self.n_comp)))
-
-          pipe.append(("net", net))
-          self.model = Pipeline(pipe)
-
-          self.num_features = kwargs['num_features']
-          self.scoring =  kwargs['scoring']
-
-          if  kwargs['n_splits']==-1:
-              self.cv = LeaveOneOut()
-          else:
-              self.cv = RepeatedStratifiedKFold(n_splits=kwargs['n_splits'], n_repeats=kwargs['n_repeats'])
-
-          self.params = params
-          self.verbose =  kwargs['verbose']
-          self.n_jobs =  kwargs['n_jobs']
-
-      def fit(self, X, y):
-          start = perf_counter()
-          if self.verbose:
-              print('Fitting hyperparameters ...')
-
-          self.model['net'].module__num_features = self.num_features
-          grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
-          grid.fit(X.astype('float32'), y.astype('float32'))
-          end = perf_counter()
-          if self.verbose:
-              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-          self.best_model = grid.best_estimator_
-          self.best_params = grid.best_params_
-
-          if self.verbose:
-              print(self.best_params)
-
-          self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-          self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
-
-      def get_bagged_coefs(self, clf, n_estimators):
-          coefs_list = []
-          bias_list = []
-          for i in range(n_estimators):
-              model = clf.estimators_[i]
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs_list = []
+      bias_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          try:
               coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
               bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+          except:
+              coefs = model.named_steps['net'].coef_[0]
+              bias = model.named_steps['net'].intercept_[0]
 
-              # coefs, bias = rescale_coefs(model, coefs, bias)
+          # coefs, bias = rescale_coefs(model, coefs, bias)
 
           coefs_list.append(coefs)
           bias_list.append(bias)
 
-          return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
-
-
-      def get_bootstrap_coefs(self, X, y, n_boots=10):
-          start = perf_counter()
-          if self.verbose:
-              print('Bootstrapping coefficients ...')
-
-          self.bagging_clf = BaggingClassifier(base_estimator=self.best_model, n_estimators=n_boots)
-          self.bagging_clf.fit(X.astype('float32'), y.astype('float32'))
-          end = perf_counter()
-
-          if self.verbose:
-              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-          self.coefs, self.bias = self.get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
-
-          return self.coefs, self.bias
-
-      def get_overlap(self, model, X):
-          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
-
-          if self.scaler is not None and self.scaler!=0:
-              scaler = model.named_steps['scaler']
-              for i in range(X.shape[-1]):
-                  X[..., i] = scaler.transform(X[..., i])
-
-          if self.n_comp is not None:
-              pca = model.named_steps['pca']
-              X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
-
-              for i in range(X.shape[-1]):
-                  X_pca[..., i] = pca.transform(X[..., i])
-
-              self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
-          else:
-              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
-
-          return self.overlaps
-
-      def get_bootstrap_overlaps(self, X):
-          start = perf_counter()
-          if self.verbose:
-              print('Getting bootstrapped overlaps ...')
-
-          X_copy = np.copy(X)
-          overlaps_list = []
-          n_boots = len(self.bagging_clf.estimators_)
-
-          for i in range(n_boots):
-              model = self.bagging_clf.estimators_[i]
-              overlaps = self.get_overlap(model, X_copy)
-              overlaps_list.append(overlaps)
-
-          end = perf_counter()
-          if self.verbose:
-              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-          return np.array(overlaps_list).mean(0)
-
-      def get_cv_scores(self, X, y, scoring, cv=None, X_test=None, y_test=None):
-          if cv is None:
-              cv = self.cv
-          if X_test is None:
-              X_test = X
-              y_test = y
-
-          start = perf_counter()
-          if self.verbose:
-              print('Computing cv scores ...')
-
-          estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
-                                       scoring=scoring, verbose=False)
-
-          # self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
-          #                                    cv=cv, n_jobs=-1, verbose=False)
-
-          self.scores = my_cross_val_multiscore(estimator, X.astype('float32'), X_test.astype('float32'),
-                                           y.astype('float32'), y_test.astype('float32'), cv=cv, n_jobs=-1, verbose=False)
-
-          end = perf_counter()
-          if self.verbose:
-              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-          return self.scores
+      return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
 #+end_src
 
 #+RESULTS:
 
-  #+begin_src ipython :tangle ../src/torch/main.py
-    from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-    from src.preprocess.helpers import avg_epochs
+#+begin_src ipython :tangle ../src/torch/classificationCV.py
+    from time import perf_counter
+    from sklearn.ensemble import BaggingClassifier
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+    from sklearn.decomposition import PCA
 
-    def get_classification(model, RETURN='overlaps', **options):
-            start = perf_counter()
+    from mne.decoding import SlidingEstimator, cross_val_multiscore
 
-            dum = 0
-            if options['features'] == 'distractor':
-                    if options['task'] != 'Dual':
-                            task = options['task']
-                            options['task'] = 'Dual'
-                            dum = 1
+    class ClassificationCV():
+        def __init__(self, net, params, **kwargs):
 
-            X_days, y_days = get_X_y_days(**options)
-            X, y = get_X_y_S1_S2(X_days, y_days, **options)
-            y[y==-1] = 0
+            pipe = []
+            self.scaler = kwargs['scaler']
+            if self.scaler is not None and self.scaler !=0 :
+                pipe.append(("scaler", StandardScaler()))
 
-            X_avg = avg_epochs(X, **options).astype('float32')
+            self.n_comp = kwargs['n_comp']
+            if kwargs['n_comp'] is not None:
+                self.n_comp = kwargs['n_comp']
+                pipe.append(("pca", PCA(n_components=self.n_comp)))
 
-            index = mice.index(options['mouse'])
-            model.num_features = N_NEURONS[index]
+            pipe.append(("net", net))
+            self.model = Pipeline(pipe)
 
-            if options['class_weight']:
-                    pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
-                    print('imbalance', pos_weight)
-                    model.criterion__pos_weight = pos_weight
+            self.num_features = kwargs['num_features']
+            self.scoring =  kwargs['scoring']
 
-            model.fit(X_avg, y)
-
-            if dum:
-                    options['task'] = task
-                    if 'scores' in RETURN:
-                            options['features'] = 'distractor'
-                            X, y = get_X_y_S1_S2(X_days, y_days, **options)
-                    else:
-                            options['features'] = 'sample'
-                            X, _ = get_X_y_S1_S2(X_days, y_days, **options)
-
-            if options['compo']:
-                    print('composition DPA vs', options['compo_task'])
-                    options['task'] = options['compo_task']
-                    X_test, y_test = get_X_y_S1_S2(X_days, y_days, **options)
+            if  kwargs['n_splits']==-1:
+                self.cv = LeaveOneOut()
             else:
-                    X_test, y_test = None, None
+                self.cv = RepeatedStratifiedKFold(n_splits=kwargs['n_splits'], n_repeats=kwargs['n_repeats'])
 
-            if options['verbose']:
-                    print('X', X.shape, 'y', y.shape)
+            self.params = params
+            self.verbose =  kwargs['verbose']
+            self.n_jobs =  kwargs['n_jobs']
 
-            if 'scores' in RETURN:
-                scores = model.get_cv_scores(X, y, options['scoring'], cv=None, X_test=X_test, y_test=y_test)
-                end = perf_counter()
+        def fit(self, X, y):
+            start = perf_counter()
+            if self.verbose:
+                print('Fitting hyperparameters ...')
+
+            try:
+                self.model['net'].module__num_features = self.num_features
+            except:
+                pass
+
+            grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
+            grid.fit(X.astype('float32'), y.astype('float32'))
+            end = perf_counter()
+            if self.verbose:
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return scores
-            if 'overlaps' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
-                overlaps = model.get_bootstrap_overlaps(X)
-                end = perf_counter()
+
+            self.best_model = grid.best_estimator_
+            self.best_params = grid.best_params_
+
+            if self.verbose:
+                print(self.best_params)
+
+            try:
+                self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+                self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+            except:
+                self.coefs = self.best_model.named_steps['net'].coef_[0]
+                self.bias = self.best_model.named_steps['net'].intercept_[0]
+
+        def get_bootstrap_coefs(self, X, y, n_boots=10):
+            start = perf_counter()
+            if self.verbose:
+                print('Bootstrapping coefficients ...')
+
+            self.bagging_clf = BaggingClassifier(base_estimator=self.best_model, n_estimators=n_boots)
+            self.bagging_clf.fit(X.astype('float32'), y.astype('float32'))
+            end = perf_counter()
+
+            if self.verbose:
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return overlaps
-            if 'coefs' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
-                end = perf_counter()
+
+            self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
+
+            return self.coefs, self.bias
+
+        def get_overlap(self, model, X):
+            try:
+                coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+                bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+            except:
+                coefs = model.named_steps['net'].coef_[0]
+                bias = model.named_steps['net'].intercept_[0]
+
+            if self.scaler is not None and self.scaler!=0:
+                scaler = model.named_steps['scaler']
+                for i in range(X.shape[-1]):
+                    X[..., i] = scaler.transform(X[..., i])
+
+            if self.n_comp is not None:
+                pca = model.named_steps['pca']
+                X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
+
+                for i in range(X.shape[-1]):
+                    X_pca[..., i] = pca.transform(X[..., i])
+
+                self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+            else:
+                self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+            return self.overlaps
+
+        def get_bootstrap_overlaps(self, X):
+            start = perf_counter()
+            if self.verbose:
+                print('Getting bootstrapped overlaps ...')
+
+            X_copy = np.copy(X)
+            overlaps_list = []
+            n_boots = len(self.bagging_clf.estimators_)
+
+            for i in range(n_boots):
+                model = self.bagging_clf.estimators_[i]
+                overlaps = self.get_overlap(model, X_copy)
+                overlaps_list.append(overlaps)
+
+            end = perf_counter()
+            if self.verbose:
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return coefs, bias
+
+            return np.array(overlaps_list).mean(0)
+
+        def get_cv_scores(self, X, y, scoring):
+            start = perf_counter()
+            if self.verbose:
+                print('Computing cv scores ...')
+
+            estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
+                                         scoring=scoring, verbose=False)
+
+            self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
+                                               cv=self.cv, n_jobs=-1, verbose=False)
+            end = perf_counter()
+            if self.verbose:
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+            return self.scores
+#+end_src
+
+#+RESULTS:
+
+
+  #+begin_src ipython :tangle ../src/torch/main.py
+      from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+      from src.preprocess.helpers import avg_epochs
+
+      def get_classification(model, RETURN='overlaps', **options):
+              start = perf_counter()
+
+              dum = 0
+              if options['features'] == 'distractor':
+                      if options['task'] != 'Dual':
+                              task = options['task']
+                              options['task'] = 'Dual'
+                              dum = 1
+
+              X_days, y_days = get_X_y_days(**options)
+              X, y = get_X_y_S1_S2(X_days, y_days, **options)
+              y[y==-1] = 0
+              if options['verbose']:
+                  print('X', X.shape, 'y', y.shape)
+
+              X_avg = avg_epochs(X, **options).astype('float32')
+              if dum:
+                      options['features'] = 'sample'
+                      options['task'] = task
+                      X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+              index = mice.index(options['mouse'])
+              model.num_features = N_NEURONS[index]
+
+              if options['class_weight']:
+                      pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
+                      print('imbalance', pos_weight)
+                      model.criterion__pos_weight = pos_weight
+
+              model.fit(X_avg, y)
+
+              if 'scores' in RETURN:
+                  scores = model.get_cv_scores(X, y, options['scoring'])
+                  end = perf_counter()
+                  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                  return scores
+              if 'overlaps' in RETURN:
+                  if options['n_boots']>1:
+                          coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+                          overlaps = model.get_bootstrap_overlaps(X)
+                  else:
+                          coefs = model.coefs
+                          bias = model.bias
+                          overlaps = model.get_overlap(model, X)
+
+                  end = perf_counter()
+                  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                  return overlaps
+              if 'coefs' in RETURN:
+                  if options['n_boots']>1:
+                          coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+                  else:
+                          coefs = model.coefs
+                          bias = model.bias
+                  end = perf_counter()
+                  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                  return coefs, bias
 #+end_src
 
 #+RESULTS:
@@ -446,22 +496,15 @@
   def pkl_save(obj, name, path="."):
       pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
 
+
   def pkl_load(name, path="."):
       return pkl.load(open(path + "/" + name, "rb"))
+
 #+end_src
 
 #+RESULTS:
 
-#+begin_src ipython
-  def angle_AB(A, B):
-      A_norm = A / (np.linalg.norm(A) + 1e-5)
-      B_norm = B / (np.linalg.norm(B) + 1e-5)
-
-      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
-#+end_src
-
-#+RESULTS:
-
+** Plots
 #+begin_src ipython
   def get_theta(a, b, GM=0, IF_NORM=0):
 
@@ -479,40 +522,6 @@
 
 #+RESULTS:
 
-#+begin_src ipython
-  def get_idx(model, rank=2):
-      ksi = torch.hstack((model.low_rank.U, model.low_rank.V)).T
-      ksi = ksi[:, :model.Na[0]]
-
-      readout = model.low_rank.linear.weight.data
-      ksi = torch.vstack((ksi, readout))
-
-      print('ksi', ksi.shape)
-
-      ksi = ksi.cpu().detach().numpy()
-      theta = get_theta(ksi[0], ksi[rank])
-
-      return theta.argsort()
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  import scipy.stats as stats
-
-  def plot_smooth(data, ax, color):
-      mean = data.mean(axis=0)
-      ci = smooth.std(axis=0, ddof=1) * 1.96
-
-      # Plot
-      ax.plot(mean, color=color)
-      ax.fill_between(range(data.shape[1]), mean - ci, mean + ci, alpha=0.25, color=color)
-
-#+end_src
-
-#+RESULTS:
-
-** Plots
 
 #+begin_src ipython
   def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
@@ -658,38 +667,32 @@
 * Parameters
 
 #+begin_src ipython
-  DEVICE = 'cuda:1'
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  N_NEURONS = [668, 693, 444, 361, 113]
+    DEVICE = 'cuda:0'
+    mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+    N_NEURONS = [668, 693, 444, 361, 113]
 
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  params = { 'net__alpha': np.logspace(-4, 4, 10),
-             # 'net__l1_ratio': np.linspace(0, 1, 10),
-             # 'net__module__dropout_rate': np.linspace(0, 1, 10),
-            }
+    tasks = ['DPA', 'DualGo', 'DualNoGo']
 
-  kwargs = {
-      'mouse': 'JawsM15',
-      'trials': '', 'reload': 0, 'data_type': 'dF',
-      'preprocess': True, 'scaler_BL': 'robust',
-      'avg_noise':True, 'unit_var_BL':False,
-      'random_state': None, 'T_WINDOW': 0.0,
-      'l1_ratio': 0.95,
-      'n_comp': None, 'scaler': None,
-      'bootstrap': 1, 'n_boots': 32,
-      'n_splits': 3, 'n_repeats': 16,
-      'class_weight': 0,
-      'compo':0, 'compo_task': 'DPA',
-  }
+    kwargs = {
+        'mouse': 'JawsM15',
+        'trials': '', 'reload': 0, 'data_type': 'dF',
+        'preprocess': True, 'scaler_BL': 'robust',
+        'avg_noise':True, 'unit_var_BL': False,
+        'random_state': None, 'T_WINDOW': 0.0,
+        'l1_ratio': 0.95,
+        'n_comp': None, 'scaler': None,
+        'bootstrap': 1, 'n_boots': 1024,
+        'n_splits': 5, 'n_repeats': 32,
+        'class_weight': 1
+    }
 
-  options = set_options(**kwargs)
-  days = ['first', 'last']
-  days = ['first', 'middle', 'last']
-  # days = np.arange(1,  options['n_days']+1)
+    options = set_options(**kwargs)
+    days = np.arange(1, options['n_days']+1)
+    days = ['first', 'last']
 
-  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
-  options['scoring'] = safe_roc_auc
-  options['n_jobs'] = 30
+    safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+    options['scoring'] = safe_roc_auc
+    options['n_jobs'] = 30
 #+end_src
 
 #+RESULTS:
@@ -697,143 +700,131 @@
 * Decoding vs days
 
 #+begin_src ipython
-  net = RegularizedNet(
-      module=Perceptron,
-      module__num_features=693,
-      module__dropout_rate=0.0,
-      alpha=0.01,
-      l1_ratio=options['l1_ratio'],
-      criterion=CustomBCEWithLogitsLoss,
-      criterion__pos_weight=torch.tensor(1.0, device=DEVICE).to(torch.float32),
-      optimizer=optim.Adam,
-      optimizer__lr=0.1,
-      max_epochs=1000,
-      callbacks=[early_stopping],
-      train_split=None,
-      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
-      verbose=0,
-      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
-      compile=False,
-      warm_start=True,
-  )
+    net = RegularizedNet(
+        module=Perceptron,
+        module__num_features=693,
+        module__dropout_rate=0.0,
+        alpha=0.01,
+        l1_ratio=options['l1_ratio'],
+        criterion=CustomBCEWithLogitsLoss,
+        criterion__pos_weight=torch.tensor(1.0, device=DEVICE).to(torch.float32),
+        optimizer=optim.Adam,
+        optimizer__lr=0.1,
+        max_epochs=1000,
+        callbacks=[early_stopping],
+        train_split=None,
+        iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+        verbose=0,
+        device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+        compile=True,
+        warm_start=True,
+    )
 
-  options['verbose'] = 0
-  model = ClassificationCV(net, params, **options)
-  options['verbose'] = 1
+    params = { 'net__alpha': np.logspace(-4, 4, 10),
+               # 'net__l1_ratio': np.linspace(0, 1, 10),
+               # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+              }
+
+    options['verbose'] = 0
+    model = ClassificationCV(net, params, **options)
+    options['verbose'] = 1
   #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  coefs_sample = []
-  coefs_dist = []
-  coefs_choice = []
+    from sklearn.linear_model import LogisticRegression
+    net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+    # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
 
-  bias_sample = []
-  bias_dist = []
-  bias_choice = []
+    params = {'net__C': np.logspace(-4, 4, 10)}
 
-  theta_day = []
-  index_day = []
+    options['n_jobs'] = -1
+    options['verbose'] = 0
+    model = ClassificationCV(net, params, **options)
+    options['verbose'] = 1
 
-  for day in days:
-      options['day'] = day
+#+end_src
 
-      options['class_weight'] = 0
-      options['task'] = 'all'
-      options['features'] = 'sample'
-      options['epochs'] = ['ED']
-      coefs, bias = get_classification(model, RETURN='coefs', **options)
+#+RESULTS:
 
-      coefs_sample.append(coefs)
-      bias_sample.append(bias)
+#+begin_src ipython
+    coefs_sample = []
+    coefs_dist = []
+    coefs_choice = []
 
-      options['task'] = 'Dual'
-      options['features'] = 'distractor'
-      options['epochs'] = ['MD']
-      coefs, bias = get_classification(model, RETURN='coefs', **options)
+    bias_sample = []
+    bias_dist = []
+    bias_choice = []
 
-      coefs_dist.append(coefs)
-      bias_dist.append(bias)
+    theta_day = []
+    index_day = []
 
-      options['class_weight'] = 1
-      options['task'] = 'all'
-      options['features'] = 'choice'
-      options['epochs'] = ['CHOICE']
-      coefs, bias = get_classification(model, RETURN='coefs', **options)
+    for day in days:
+        options['day'] = day
 
-      coefs_choice.append(coefs)
-      bias_choice.append(bias)
+        options['class_weight'] = 0
+        options['task'] = 'all'
+        options['features'] = 'sample'
+        options['epochs'] = ['ED']
+        coefs, bias = get_classification(model, RETURN='coefs', **options)
 
-      theta = get_theta(-coefs_sample[-1], -coefs_dist[-1], IF_NORM=0, GM=0)
-      theta_day.append(theta)
-      index_day.append(theta.argsort())
+        coefs_sample.append(coefs)
+        bias_sample.append(bias)
 
-  coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
-  print(coefs_save.shape)
-  pkl_save(coefs_sample, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+        options['task'] = 'Dual'
+        options['features'] = 'distractor'
+        options['epochs'] = ['MD']
+        coefs, bias = get_classification(model, RETURN='coefs', **options)
+
+        coefs_dist.append(coefs)
+        bias_dist.append(bias)
+
+        # options['class_weight'] = 1
+        # options['task'] = 'all'
+        # options['features'] = 'choice'
+        # options['epochs'] = ['CHOICE']
+        # coefs, bias = get_classification(model, RETURN='coefs', **options)
+
+        # # coefs_choice.append(coefs)
+        # bias_choice.append(bias)
+
+        theta = get_theta(-coefs_sample[-1], -coefs_dist[-1], IF_NORM=0, GM=0)
+        theta_day.append(theta)
+        index_day.append(theta.argsort())
+
+    coefs_save = np.stack((coefs_sample, coefs_dist))
+    print(coefs_save.shape)
+    pkl_save(coefs_sample, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
     #+end_src
 
 #+RESULTS:
 #+begin_example
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-  multiple days 0 2 2
-  X (192, 693, 84) y (192,)
-  Elapsed (with compilation) = 0h 0m 30s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-  multiple days 0 2 2
-  X (128, 693, 84) y (128,)
-  Elapsed (with compilation) = 0h 0m 5s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-  multiple days 0 2 2
-  imbalance tensor(1.0870, device='cuda:1')
-  X (192, 693, 84) y (192,)
-  Elapsed (with compilation) = 0h 0m 10s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-  multiple days 0 2 2
-  X (192, 693, 84) y (192,)
-  Elapsed (with compilation) = 0h 0m 6s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-  multiple days 0 2 2
-  X (128, 693, 84) y (128,)
-  Elapsed (with compilation) = 0h 0m 5s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES choice TASK all TRIALS  DAYS middle LASER 0
-  multiple days 0 2 2
-  imbalance tensor(0.9592, device='cuda:1')
-  X (192, 693, 84) y (192,)
-  Elapsed (with compilation) = 0h 0m 11s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-  multiple days 0 2 2
-  X (192, 693, 84) y (192,)
-  Elapsed (with compilation) = 0h 0m 6s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-  multiple days 0 2 2
-  X (128, 693, 84) y (128,)
-  Elapsed (with compilation) = 0h 0m 5s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-  multiple days 0 2 2
-  imbalance tensor(0.5738, device='cuda:1')
-  X (192, 693, 84) y (192,)
-  Elapsed (with compilation) = 0h 0m 6s
-  (3, 3, 693)
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
+    multiple days 0 3 0
+    X (288, 693, 84) y (288,)
+    Elapsed (with compilation) = 0h 0m 28s
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+    multiple days 0 3 0
+    X (192, 693, 84) y (192,)
+    Elapsed (with compilation) = 0h 0m 20s
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
+    multiple days 0 3 0
+    X (288, 693, 84) y (288,)
+    Elapsed (with compilation) = 0h 0m 27s
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+    multiple days 0 3 0
+    X (192, 693, 84) y (192,)
+    Elapsed (with compilation) = 0h 0m 19s
+    (2, 2, 693)
 #+end_example
 
 * Landscape vs days
@@ -875,66 +866,51 @@
 
 #+RESULTS:
 #+begin_example
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-  multiple days 0 2 2
-  (64, 693, 84)
-  (3, 3, 64, 693, 84) (3, 3, 64)
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+    multiple days 0 3 0
+    (96, 693, 84)
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
+    multiple days 0 3 0
+    (96, 693, 84)
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
+    multiple days 0 3 0
+    (96, 693, 84)
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+    multiple days 0 3 0
+    (96, 693, 84)
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+    multiple days 0 3 0
+    (96, 693, 84)
+    Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+    PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
+    DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+    multiple days 0 3 0
+    (96, 693, 84)
+    (2, 3, 96, 693, 84) (2, 3, 96)
 #+end_example
 
 ** Energy
 
 #+begin_src ipython
-  opts = set_options(T_WINDOW=0.0)
-  bins = None
-  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
-  bins = opts['bins_ED']
-  # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
-  # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-  # bins = opts['bins_PRE_DIST']
-  # bins = opts['bins_DELAY']
+    opts = set_options(T_WINDOW=0.0)
+    bins = None
+    # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+    # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
+    # bins = opts['bins_ED']
+    # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
+    # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+    # bins = opts['bins_PRE_DIST']
+    bins = opts['bins_DELAY']
 #+end_src
 
 #+RESULTS:
@@ -964,7 +940,7 @@
 #+end_src
 
 #+RESULTS:
-: (64, 693, 84)
+: (96, 693, 84)
 
 #+begin_src ipython
   energy_day = []
@@ -980,11 +956,9 @@
 
 #+RESULTS:
 :RESULTS:
-: bootstrap: 100% 1000/1000 [00:18<00:00, 53.84it/s]
+: bootstrap: 100% 1000/1000 [00:12<00:00, 77.68it/s]
 :
-: bootstrap: 100% 1000/1000 [00:04<00:00, 204.53it/s]
-:
-: bootstrap: 100% 1000/1000 [00:05<00:00, 189.32it/s]
+: bootstrap: 100% 1000/1000 [00:12<00:00, 77.87it/s]
 :
 :END:
 
@@ -1041,7 +1015,7 @@
 #+begin_src ipython
   cmap = plt.get_cmap('Blues')
   colors = [cmap((i+1)/len(days)) for i in range(len(days))]
-  window = .1
+  window = .05
 
   min_angles, min_energies = [], []
   theta = np.linspace(0, 360, energy_day[0].shape[0]-1, endpoint=False)
@@ -1067,7 +1041,7 @@
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/02cee72893cc3329bba353a3ed43c6ccd2d07b37.png]]
+[[./.ob-jupyter/675367f884555932c358d791acfa00a61a9b8c47.png]]
 
 #+begin_src ipython
   min_angles = np.array(min_angles).T
@@ -1075,8 +1049,8 @@
 #+end_src
 
 #+RESULTS:
-: [[311.]
-:  [244.]]
+: [[326.]
+:  [204.]]
 
 #+begin_src ipython
   distance = np.abs(min_angles[0] - min_angles[1])
@@ -1100,64 +1074,64 @@
 
 #+RESULTS:
 :RESULTS:
-: [67.01464803]
-: [67.]
+: [122.71386448]
+: [123.]
 # [goto error]
 #+begin_example
-  ---------------------------------------------------------------------------
-  ValueError                                Traceback (most recent call last)
-  Cell In[223], line 10
-        6         distance[i] *= -1
-        8 print(np.round(distance))
-  ---> 10 plt.plot(np.arange(1, len(days)+1), distance, '-o')
-       11 # plt.ylim(0, 45)
-       12 plt.xticks(np.arange(1, len(days)+1))
+    ---------------------------------------------------------------------------
+    ValueError                                Traceback (most recent call last)
+    Cell In[140], line 10
+          6         distance[i] *= -1
+          8 print(np.round(distance))
+    ---> 10 plt.plot(np.arange(1, len(days)+1), distance, '-o')
+         11 # plt.ylim(0, 45)
+         12 plt.xticks(np.arange(1, len(days)+1))
 
-  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/pyplot.py:3575, in plot(scalex, scaley, data, *args, **kwargs)
-     3567 @_copy_docstring_and_deprecators(Axes.plot)
-     3568 def plot(
-     3569     *args: float | ArrayLike | str,
-     (...)
-     3573     **kwargs,
-     3574 ) -> list[Line2D]:
-  -> 3575     return gca().plot(
-     3576         *args,
-     3577         scalex=scalex,
-     3578         scaley=scaley,
-     3579         **({"data": data} if data is not None else {}),
-     3580         **kwargs,
-     3581     )
+    File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/pyplot.py:3575, in plot(scalex, scaley, data, *args, **kwargs)
+       3567 @_copy_docstring_and_deprecators(Axes.plot)
+       3568 def plot(
+       3569     *args: float | ArrayLike | str,
+       (...)
+       3573     **kwargs,
+       3574 ) -> list[Line2D]:
+    -> 3575     return gca().plot(
+       3576         *args,
+       3577         scalex=scalex,
+       3578         scaley=scaley,
+       3579         **({"data": data} if data is not None else {}),
+       3580         **kwargs,
+       3581     )
 
-  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_axes.py:1721, in Axes.plot(self, scalex, scaley, data, *args, **kwargs)
-     1478 """
-     1479 Plot y versus x as lines and/or markers.
-     1480
-     (...)
-     1718 (``'green'``) or hex strings (``'#008000'``).
-     1719 """
-     1720 kwargs = cbook.normalize_kwargs(kwargs, mlines.Line2D)
-  -> 1721 lines = [*self._get_lines(self, *args, data=data, **kwargs)]
-     1722 for line in lines:
-     1723     self.add_line(line)
+    File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_axes.py:1721, in Axes.plot(self, scalex, scaley, data, *args, **kwargs)
+       1478 """
+       1479 Plot y versus x as lines and/or markers.
+       1480
+       (...)
+       1718 (``'green'``) or hex strings (``'#008000'``).
+       1719 """
+       1720 kwargs = cbook.normalize_kwargs(kwargs, mlines.Line2D)
+    -> 1721 lines = [*self._get_lines(self, *args, data=data, **kwargs)]
+       1722 for line in lines:
+       1723     self.add_line(line)
 
-  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:303, in _process_plot_var_args.__call__(self, axes, data, *args, **kwargs)
-      301     this += args[0],
-      302     args = args[1:]
-  --> 303 yield from self._plot_args(
-      304     axes, this, kwargs, ambiguous_fmt_datakey=ambiguous_fmt_datakey)
+    File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:303, in _process_plot_var_args.__call__(self, axes, data, *args, **kwargs)
+        301     this += args[0],
+        302     args = args[1:]
+    --> 303 yield from self._plot_args(
+        304     axes, this, kwargs, ambiguous_fmt_datakey=ambiguous_fmt_datakey)
 
-  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:499, in _process_plot_var_args._plot_args(self, axes, tup, kwargs, return_kwargs, ambiguous_fmt_datakey)
-      496     axes.yaxis.update_units(y)
-      498 if x.shape[0] != y.shape[0]:
-  --> 499     raise ValueError(f"x and y must have same first dimension, but "
-      500                      f"have shapes {x.shape} and {y.shape}")
-      501 if x.ndim > 2 or y.ndim > 2:
-      502     raise ValueError(f"x and y can be no greater than 2D, but have "
-      503                      f"shapes {x.shape} and {y.shape}")
+    File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:499, in _process_plot_var_args._plot_args(self, axes, tup, kwargs, return_kwargs, ambiguous_fmt_datakey)
+        496     axes.yaxis.update_units(y)
+        498 if x.shape[0] != y.shape[0]:
+    --> 499     raise ValueError(f"x and y must have same first dimension, but "
+        500                      f"have shapes {x.shape} and {y.shape}")
+        501 if x.ndim > 2 or y.ndim > 2:
+        502     raise ValueError(f"x and y can be no greater than 2D, but have "
+        503                      f"shapes {x.shape} and {y.shape}")
 
-  ValueError: x and y must have same first dimension, but have shapes (3,) and (1,)
+    ValueError: x and y must have same first dimension, but have shapes (2,) and (1,)
 #+end_example
-[[file:./.ob-jupyter/c23235fbf6ba6084d6d11d02b24f786b35477adb.png]]
+[[./.ob-jupyter/c23235fbf6ba6084d6d11d02b24f786b35477adb.png]]
 :END:
 
 #+begin_src ipython

@@ -241,6 +241,14 @@ def get_fluo_data(idx_day, **kwargs):
 def get_X_y_days(**kwargs):
     path = kwargs["data_path"]
     mouse = kwargs["mouse"]
+
+    if "P" in kwargs["mouse"]:
+        kwargs["n_days"] = 10  # PrL 6, ACC 5 or multi 10
+    if "ACC" in kwargs["mouse"]:
+        kwargs["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+    if "17" in kwargs["mouse"]:
+        kwargs["n_days"] = 8  # PrL 6, ACC 5 or multi 10
+
     n_days = kwargs["n_days"]
     days = np.arange(1, n_days + 1)
     # print(days)
@@ -303,7 +311,11 @@ def get_X_y_days(**kwargs):
     return X_days, y_days
 
 
-def get_X_y_mice(mice=gv.mice, days=gv.days, path=gv.filedir, IF_RELOAD=0):
+def get_X_y_mice(**kwargs):
+    mice = kwargs["mice"]
+    path = kwargs["data_path"]
+    IF_RELOAD = kwargs['reload']
+
     if IF_RELOAD == 0:
         print("Loading files from", path + "mice")
         X_mice = pickle.load(open(path + "mice" + "/X_mice.pkl", "rb"))
@@ -312,7 +324,8 @@ def get_X_y_mice(mice=gv.mice, days=gv.days, path=gv.filedir, IF_RELOAD=0):
         X_mice = []
         y_mice = []
         for mouse in mice:
-            X_days, y_days = get_X_y_days(mouse, days, path, IF_RELOAD)
+            kwargs['mouse'] = mouse
+            X_days, y_days = get_X_y_days(**kwargs)
 
             X_mice.append(X_days)
             y_days["mouse"] = mouse

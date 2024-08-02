@@ -338,8 +338,49 @@
 #+RESULTS:
 [[file:./.ob-jupyter/787a9e749f7a13f92b5debe46f50ddbe719d8363.png]]
 
+* GLM
 
-** GLM
+#+begin_src ipython
+  options = set_options()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from src.common.get_data import get_X_y_mice
+  options['reload']=0
+  X, y = get_X_y_mice(**options)
+#+end_src
+
+#+RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/mice
+
+#+begin_src ipython
+  print(y.keys())
+  print(y['mouse'].unique())
+  print(y['response'].unique())
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
+:        'mouse'],
+:       dtype='object')
+: ['ChRM04' 'JawsM15' 'JawsM18' 'ACCM03' 'ACCM04']
+: ['incorrect_fa' 'correct_hit' 'correct_rej' 'incorrect_miss']
+
+#+begin_src ipython
+  df = y[y['laser']==0].copy()
+  df['behavior'] = df['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+  df['learning'] = df['day'].apply(lambda x: 0 if x<4 else 1)
+  print(df.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
+:        'mouse', 'behavior', 'learning'],
+:       dtype='object')
+
+
 #+begin_src ipython
   import statsmodels.api as sm
   import statsmodels.formula.api as smf
@@ -349,33 +390,153 @@
 #+RESULTS:
 
 #+begin_src ipython
-
-# Initialize an empty list to store rows
-data = []
-
-# Iterate over the 3D numpy array and collect data
-for i in range(perfs.shape[0]):
-    for j in range(perfs.shape[1]):
-        for k in range(perfs.shape[2]):
-            # Append a dictionary for each row
-            data.append({
-                'mouse': i,
-                'task': j,
-                'day': k,
-                'perf': perfs[i, j, k]
-            })
-
-# Convert list of dictionaries into a DataFrame
-df = pd.DataFrame(data)
-
-print(df.shape)
+  print(df.keys())
 #+end_src
 
 #+RESULTS:
-: (90, 4)
+: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
+:        'mouse', 'behavior', 'learning'],
+:       dtype='object')
 
 #+begin_src ipython
-    formula = 'perf ~ task * day'
+  df['response'] = df['response'].astype('category')
+  df['mouse'] = df['mouse'].astype('category')
+  # df['tasks'] = df['tasks'].astype('category')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print(df['tasks'].unique())
+#+end_src
+
+#+RESULTS:
+: ['DualNoGo' 'DualGo' 'DPA']
+
+#+begin_src ipython
+  from statsmodels.stats.anova import anova_lm
+  formula = 'behavior ~ tasks * tasks'
+  results = []
+  anovas = []
+  df2 = df[df['tasks']!='DualNoGo'].copy()
+  df2['tasks'] = df2['tasks'].astype('category')
+  print(df2['tasks'].unique())
+
+  df2 = df2[(df2['response']=='incorrect_fa') | (df2['response'] == 'correct_rej')].copy()
+  for i in range(5):
+      df3 = df2[df2['day']==i+1].copy()
+      model = smf.glm(formula=formula, data=df3, family=sm.families.Gaussian())
+      results.append(model.fit())
+#+end_src
+
+#+RESULTS:
+: ['DualGo', 'DPA']
+: Categories (2, object): ['DPA', 'DualGo']
+
+#+begin_src ipython
+  colors = ['r', 'b', 'g']
+  fig, ax = plt.subplots(1, 1)
+  for j in range(5):
+
+      model = results[j]
+      params = model.params
+      # print(params)
+      conf = model.conf_int()
+      # print(conf)
+      for i in range(2):
+          yerr = np.array([params[i] - conf[0][i], conf[1][i] - params[i]])[:, np.newaxis]
+          ax.errorbar(x=j, y=params[i], yerr=yerr, fmt='o', color=colors[i])
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/32c2e647671c6483785a872dd2db54bd0f5f87d8.png]]
+
+#+begin_src ipython
+      model = results[3]
+      print(model.summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                   Generalized Linear Model Regression Results
+  ==============================================================================
+  Dep. Variable:               behavior   No. Observations:                  224
+  Model:                            GLM   Df Residuals:                      222
+  Model Family:                Gaussian   Df Model:                            1
+  Link Function:               Identity   Scale:                         0.20463
+  Method:                          IRLS   Log-Likelihood:                -139.15
+  Date:                Mon, 29 Jul 2024   Deviance:                       45.429
+  Time:                        16:16:06   Pearson chi2:                     45.4
+  No. Iterations:                     3   Pseudo R-squ. (CS):           0.006254
+  Covariance Type:            nonrobust
+  ===================================================================================
+                        coef    std err          z      P>|z|      [0.025      0.975]
+  -----------------------------------------------------------------------------------
+  Intercept           0.7500      0.043     17.546      0.000       0.666       0.834
+  tasks[T.DualGo]    -0.0714      0.060     -1.182      0.237      -0.190       0.047
+  ===================================================================================
+#+end_example
+
+
+#+begin_src ipython
+  df2 = df[(df['response']=='incorrect_fa') | (df['response'] == 'correct_rej')].copy()
+  formula = 'behavior ~ tasks * day'
+  glm_gauss = smf.glm(formula=formula, data=df2, family=sm.families.Gaussian())
+  result = glm_gauss.fit()
+  print(result.summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                   Generalized Linear Model Regression Results
+  ==============================================================================
+  Dep. Variable:               behavior   No. Observations:                 1824
+  Model:                            GLM   Df Residuals:                     1818
+  Model Family:                Gaussian   Df Model:                            5
+  Link Function:               Identity   Scale:                         0.19642
+  Method:                          IRLS   Log-Likelihood:                -1100.8
+  Date:                Mon, 29 Jul 2024   Deviance:                       357.08
+  Time:                        15:37:03   Pearson chi2:                     357.
+  No. Iterations:                     3   Pseudo R-squ. (CS):             0.1755
+  Covariance Type:            nonrobust
+  =========================================================================================
+                              coef    std err          z      P>|z|      [0.025      0.975]
+  -----------------------------------------------------------------------------------------
+  Intercept                 0.2671      0.041      6.520      0.000       0.187       0.347
+  tasks[T.DualGo]          -0.0991      0.058     -1.710      0.087      -0.213       0.014
+  tasks[T.DualNoGo]         0.0127      0.058      0.219      0.827      -0.101       0.126
+  day                       0.1222      0.011     10.746      0.000       0.100       0.145
+  tasks[T.DualGo]:day       0.0016      0.016      0.102      0.918      -0.030       0.033
+  tasks[T.DualNoGo]:day    -0.0075      0.016     -0.464      0.642      -0.039       0.024
+  =========================================================================================
+#+end_example
+
+#+begin_src ipython
+  params = model.params
+  conf = model.conf_int()
+  print(conf[1])
+#+end_src
+
+#+RESULTS:
+: Intercept                0.599949
+: tasks[T.DualGo]          0.015597
+: tasks[T.DualNoGo]        0.082136
+: day                      0.088624
+: tasks[T.DualGo]:day      0.022168
+: tasks[T.DualNoGo]:day    0.014315
+: Name: 1, dtype: float64
+
+#+begin_src ipython
+  fig, ax = plt.subplots(1, 1)
+  for i in range(3):
+      ax.errorbar(x=days, y=params[i], yerr=[params[i] - conf[0][i], conf[1][i] - params[i]], fmt='o')
+
+#+end_src
+
+#+begin_src ipython
+    formula = 'behavior ~ tasks * learning'
     glm_gauss = smf.glm(formula=formula, data=df, family=sm.families.Gaussian())
     result = glm_gauss.fit()
     print(result.summary())
@@ -385,38 +546,180 @@ print(df.shape)
 #+begin_example
                    Generalized Linear Model Regression Results
   ==============================================================================
-  Dep. Variable:                   perf   No. Observations:                   84
-  Model:                            GLM   Df Residuals:                       80
-  Model Family:                Gaussian   Df Model:                            3
-  Link Function:               Identity   Scale:                        0.015267
-  Method:                          IRLS   Log-Likelihood:                 58.505
-  Date:                Thu, 25 Jul 2024   Deviance:                       1.2214
-  Time:                        17:16:35   Pearson chi2:                     1.22
-  No. Iterations:                     3   Pseudo R-squ. (CS):             0.5338
+  Dep. Variable:               behavior   No. Observations:                 3648
+  Model:                            GLM   Df Residuals:                     3642
+  Model Family:                Gaussian   Df Model:                            5
+  Link Function:               Identity   Scale:                         0.16913
+  Method:                          IRLS   Log-Likelihood:                -1931.8
+  Date:                Mon, 29 Jul 2024   Deviance:                       615.96
+  Time:                        13:26:18   Pearson chi2:                     616.
+  No. Iterations:                     3   Pseudo R-squ. (CS):            0.05829
   Covariance Type:            nonrobust
-  ==============================================================================
-                   coef    std err          z      P>|z|      [0.025      0.975]
-  ------------------------------------------------------------------------------
-  Intercept      0.6402      0.037     17.236      0.000       0.567       0.713
-  task          -0.0021      0.029     -0.071      0.943      -0.058       0.054
-  day            0.0687      0.013      5.246      0.000       0.043       0.094
-  task:day      -0.0026      0.010     -0.256      0.798      -0.022       0.017
-  ==============================================================================
+  ==============================================================================================
+                                   coef    std err          z      P>|z|      [0.025      0.975]
+  ----------------------------------------------------------------------------------------------
+  Intercept                      0.7009      0.016     44.181      0.000       0.670       0.732
+  tasks[T.DualGo]               -0.0655      0.022     -2.918      0.004      -0.109      -0.022
+  tasks[T.DualNoGo]             -0.0015      0.022     -0.066      0.947      -0.045       0.042
+  learning                       0.1943      0.024      8.193      0.000       0.148       0.241
+  tasks[T.DualGo]:learning       0.0287      0.034      0.856      0.392      -0.037       0.094
+  tasks[T.DualNoGo]:learning    -0.0224      0.034     -0.668      0.504      -0.088       0.043
+  ==============================================================================================
 #+end_example
 
 #+begin_src ipython
-  print(glm_gauss.summary())
+    formula = 'behavior ~ tasks'
+    glm_gauss = smf.glm(formula=formula, data=df, family=sm.families.Gaussian())
+    result = glm_gauss.fit()
+    print(result.summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                   Generalized Linear Model Regression Results
+  ==============================================================================
+  Dep. Variable:               behavior   No. Observations:                 3648
+  Model:                            GLM   Df Residuals:                     3645
+  Model Family:                Gaussian   Df Model:                            2
+  Link Function:               Identity   Scale:                         0.17864
+  Method:                          IRLS   Log-Likelihood:                -2033.2
+  Date:                Mon, 29 Jul 2024   Deviance:                       651.15
+  Time:                        13:23:04   Pearson chi2:                     651.
+  No. Iterations:                     3   Pseudo R-squ. (CS):           0.002853
+  Covariance Type:            nonrobust
+  =====================================================================================
+                          coef    std err          z      P>|z|      [0.025      0.975]
+  -------------------------------------------------------------------------------------
+  Intercept             0.7878      0.012     64.999      0.000       0.764       0.812
+  tasks[T.DualGo]      -0.0526      0.017     -3.070      0.002      -0.086      -0.019
+  tasks[T.DualNoGo]    -0.0115      0.017     -0.672      0.502      -0.045       0.022
+  =====================================================================================
+#+end_example
+
+#+begin_src ipython
+  import statsmodels.formula.api as smf
+  import matplotlib.pyplot as plt
+  import pandas as pd
+  import numpy as np
+
+  # Assuming you have a DataFrame named df containing your data
+  # and the formula you mentioned.
+  model = smf.glm(formula='behavior ~ tasks * day', data=df).fit()
+
+  # Extract the parameters (weights) and standard errors
+  params = model.params
+  conf = model.conf_int()
+  conf['mean'] = params
+  conf.columns = ['2.5%', '97.5%', 'mean']
+
+  # Create a plot for each task
+  tasks = df['tasks'].unique()
+  days = df['day'].unique()
+  n_tasks = len(tasks)
+  n_days = len(days)
+
+  fig, ax = plt.subplots(n_tasks, 1, figsize=(8, n_tasks * 4))
+
+  if n_tasks == 1:
+      ax = [ax]  # Ensure ax is iterable when there's only one task
+
+  for i, task in enumerate(tasks):
+      task_params = conf.loc[[f'tasks[T.{task}]:day[T.{day}]' for day in days], :]
+
+      # If any main effects exist, add them too
+      if f'tasks[T.{task}]' in conf.index:
+          task_main = conf.loc[f'tasks[T.{task}]']
+          task_params.loc[:, 'mean'] += task_main['mean']
+          task_params.loc[:, '2.5%'] += task_main['2.5%']
+          task_params.loc[:, '97.5%'] += task_main['97.5%']
+      if 'Intercept' in conf.index:
+          intercept = conf.loc['Intercept']
+          task_params.loc[:, 'mean'] += intercept['mean']
+          task_params.loc[:, '2.5%'] += intercept['2.5%']
+          task_params.loc[:, '97.5%'] += intercept['97.5%']
+
+      ax[i].errorbar(x=days, y=task_params['mean'], yerr=[task_params['mean'] - task_params['2.5%'], task_params['97.5%'] - task_params['mean']], fmt='o')
+      ax[i].set_title(f'Task: {task}')
+      ax[i].set_xlabel('Day')
+      ax[i].set_ylabel('Weight')
+
+  plt.tight_layout()
+  plt.show()
 #+end_src
 
 #+RESULTS:
 :RESULTS:
 # [goto error]
-: ---------------------------------------------------------------------------
-: AttributeError                            Traceback (most recent call last)
-: Cell In[30], line 1
-: ----> 1 print(glm_gauss.summary())
-:
-: AttributeError: 'GLM' object has no attribute 'summary'
+#+begin_example
+  ---------------------------------------------------------------------------
+  KeyError                                  Traceback (most recent call last)
+  Cell In[74], line 28
+       25     ax = [ax]  # Ensure ax is iterable when there's only one task
+       27 for i, task in enumerate(tasks):
+  ---> 28     task_params = conf.loc[[f'tasks[T.{task}]:day[T.{day}]' for day in days], :]
+       30     # If any main effects exist, add them too
+       31     if f'tasks[T.{task}]' in conf.index:
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexing.py:1147, in _LocationIndexer.__getitem__(self, key)
+     1145     if self._is_scalar_access(key):
+     1146         return self.obj._get_value(*key, takeable=self._takeable)
+  -> 1147     return self._getitem_tuple(key)
+     1148 else:
+     1149     # we by definition only have the 0th axis
+     1150     axis = self.axis or 0
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexing.py:1339, in _LocIndexer._getitem_tuple(self, tup)
+     1336 if self._multi_take_opportunity(tup):
+     1337     return self._multi_take(tup)
+  -> 1339 return self._getitem_tuple_same_dim(tup)
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexing.py:994, in _LocationIndexer._getitem_tuple_same_dim(self, tup)
+      991 if com.is_null_slice(key):
+      992     continue
+  --> 994 retval = getattr(retval, self.name)._getitem_axis(key, axis=i)
+      995 # We should never have retval.ndim < self.ndim, as that should
+      996 #  be handled by the _getitem_lowerdim call above.
+      997 assert retval.ndim == self.ndim
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexing.py:1382, in _LocIndexer._getitem_axis(self, key, axis)
+     1379     if hasattr(key, "ndim") and key.ndim > 1:
+     1380         raise ValueError("Cannot index with multidimensional key")
+  -> 1382     return self._getitem_iterable(key, axis=axis)
+     1384 # nested tuple slicing
+     1385 if is_nested_tuple(key, labels):
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexing.py:1322, in _LocIndexer._getitem_iterable(self, key, axis)
+     1319 self._validate_key(key, axis)
+     1321 # A collection of keys
+  -> 1322 keyarr, indexer = self._get_listlike_indexer(key, axis)
+     1323 return self.obj._reindex_with_indexers(
+     1324     {axis: [keyarr, indexer]}, copy=True, allow_dups=True
+     1325 )
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexing.py:1520, in _LocIndexer._get_listlike_indexer(self, key, axis)
+     1517 ax = self.obj._get_axis(axis)
+     1518 axis_name = self.obj._get_axis_name(axis)
+  -> 1520 keyarr, indexer = ax._get_indexer_strict(key, axis_name)
+     1522 return keyarr, indexer
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:6114, in Index._get_indexer_strict(self, key, axis_name)
+     6111 else:
+     6112     keyarr, indexer, new_indexer = self._reindex_non_unique(keyarr)
+  -> 6114 self._raise_if_missing(keyarr, indexer, axis_name)
+     6116 keyarr = self.take(indexer)
+     6117 if isinstance(key, Index):
+     6118     # GH 42790 - Preserve name from an Index
+
+  File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:6175, in Index._raise_if_missing(self, key, indexer, axis_name)
+     6173     if use_interval_msg:
+     6174         key = list(key)
+  -> 6175     raise KeyError(f"None of [{key}] are in the [{axis_name}]")
+     6177 not_found = list(ensure_index(key)[missing_mask.nonzero()[0]].unique())
+     6178 raise KeyError(f"{not_found} not in index")
+
+  KeyError: "None of [Index(['tasks[T.DualNoGo]:day[T.1.0]', 'tasks[T.DualNoGo]:day[T.2.0]',\n       'tasks[T.DualNoGo]:day[T.3.0]', 'tasks[T.DualNoGo]:day[T.4.0]',\n       'tasks[T.DualNoGo]:day[T.5.0]', 'tasks[T.DualNoGo]:day[T.6.0]'],\n      dtype='object')] are in the [index]"
+#+end_example
+[[file:./.ob-jupyter/951b7b0122a7f374ae7d3e4592b43147403faf38.png]]
 :END:
 
 * Summary

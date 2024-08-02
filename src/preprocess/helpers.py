@@ -271,63 +271,62 @@ def preprocess_df(X, y, **kwargs):
     return X_scaled
 
 
-def avg_epochs(X, **kwargs):
-    X_avg = np.nanmean(X, axis=-1)
+def avg_epochs(X, axis=-1, **kwargs):
+    X_avg = np.nanmean(X, axis=axis)
 
     X_epochs = np.empty(tuple([len(kwargs["epochs"])]) + X_avg.shape)
 
     for i_epoch, epoch in enumerate(kwargs["epochs"]):
         if epoch == "BL":
-            X_BL = np.nanmean(X[..., kwargs["bins_BL"]], axis=-1)
+            X_BL = np.nanmean(X[..., kwargs["bins_BL"]], axis=axis)
             X_epochs[i_epoch] = X_BL
         elif epoch == "STIM":
-            X_STIM = np.nanmean(X[..., kwargs["bins_STIM"]], axis=-1)
+            X_STIM = np.nanmean(X[..., kwargs["bins_STIM"]], axis=axis)
             X_epochs[i_epoch] = X_STIM
         elif epoch == "STIM_ED":
-            X_STIM = np.nanmean(X[..., kwargs["bins_STIM_ED"]], axis=-1)
+            X_STIM = np.nanmean(X[..., kwargs["bins_STIM_ED"]], axis=axis)
             X_epochs[i_epoch] = X_STIM
         elif epoch == "ED":
-            X_ED = np.nanmean(X[..., kwargs["bins_ED"]], axis=-1)
+            X_ED = np.nanmean(X[..., kwargs["bins_ED"]], axis=axis)
             X_epochs[i_epoch] = X_ED
         elif epoch == "STIM_ED":
-            X_STIM = np.nanmean(X[..., kwargs["bins_STIM_ED"]], axis=-1)
+            X_STIM = np.nanmean(X[..., kwargs["bins_STIM_ED"]], axis=axis)
             X_epochs[i_epoch] = X_STIM
         elif epoch == "DIST":
-            X_DIST = np.nanmean(X[..., kwargs["bins_DIST"]], axis=-1)
+            X_DIST = np.nanmean(X[..., kwargs["bins_DIST"]], axis=axis)
             X_epochs[i_epoch] = X_DIST
         elif epoch == "PRE_DIST":
-            X_DIST = np.nanmean(X[..., kwargs["bins_PRE_DIST"]], axis=-1)
+            X_DIST = np.nanmean(X[..., kwargs["bins_PRE_DIST"]], axis=axis)
             X_epochs[i_epoch] = X_DIST
         elif epoch == "POST_DIST":
-            X_DIST = np.nanmean(X[..., kwargs["bins_POST_DIST"]], axis=-1)
+            X_DIST = np.nanmean(X[..., kwargs["bins_POST_DIST"]], axis=axis)
             X_epochs[i_epoch] = X_DIST
         elif epoch == "MD":
-            X_MD = np.nanmean(X[..., kwargs["bins_MD"]], axis=-1)
+            X_MD = np.nanmean(X[..., kwargs["bins_MD"]], axis=axis)
             X_epochs[i_epoch] = X_MD
         elif epoch == "CUE":
-            X_CUE = np.nanmean(X[..., kwargs["bins_CUE"]], axis=-1)
+            X_CUE = np.nanmean(X[..., kwargs["bins_CUE"]], axis=axis)
             X_epochs[i_epoch] = X_CUE
         elif epoch == "RWD":
-            X_RWD = np.nanmean(X[..., kwargs["bins_RWD"]], axis=-1)
+            X_RWD = np.nanmean(X[..., kwargs["bins_RWD"]], axis=axis)
             X_epochs[i_epoch] = X_RWD
         elif epoch == "LD":
-            X_LD = np.nanmean(X[..., kwargs["bins_LD"]], axis=-1)
+            X_LD = np.nanmean(X[..., kwargs["bins_LD"]], axis=axis)
             X_epochs[i_epoch] = X_LD
         elif epoch == "TEST":
-            X_TEST = np.nanmean(X[..., kwargs["bins_TEST"]], axis=-1)
+            X_TEST = np.nanmean(X[..., kwargs["bins_TEST"]], axis=axis)
             X_epochs[i_epoch] = X_TEST
         elif epoch == "CHOICE":
-            X_RWD = np.nanmean(X[..., kwargs["bins_CHOICE"]], axis=-1)
+            X_RWD = np.nanmean(X[..., kwargs["bins_CHOICE"]], axis=axis)
             X_epochs[i_epoch] = X_RWD
         elif epoch == "RWD2":
-            X_RWD = np.nanmean(X[..., kwargs["bins_RWD2"]], axis=-1)
+            X_RWD = np.nanmean(X[..., kwargs["bins_RWD2"]], axis=axis)
             X_epochs[i_epoch] = X_RWD
         elif epoch == "DELAY":
-            X_DELAY = np.nanmean(X[..., kwargs["bins_DELAY"]], axis=-1)
+            X_DELAY = np.nanmean(X[..., kwargs["bins_DELAY"]], axis=axis)
             X_epochs[i_epoch] = X_DELAY
 
-    X_epochs = np.moveaxis(X_epochs, 0, -1)
-    # print("X_epochs", X_epochs.shape, epochs)
+    X_epochs = np.moveaxis(X_epochs, 0, axis)
 
     if X_epochs.shape[-1] == 1:
         X_epochs = X_epochs[..., 0]

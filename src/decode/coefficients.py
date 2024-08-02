@@ -22,7 +22,7 @@ def bagged_coefs(model, X, **options):
         coefs = np.zeros((options["n_boots"], 4, X.shape[1]))
     else:
         coefs = np.zeros((options["n_boots"], X.shape[1]))
-
+<
     # print("coefs", coefs.shape)
 
     for i_boot in range(options["n_boots"]):
@@ -32,10 +32,10 @@ def bagged_coefs(model, X, **options):
 
             mask = model_boot.named_steps["filter"]._get_support_mask()
             # print("coef", coef.shape, "idx", np.sum(idx))
-            
+
             # pval = model_boot.named_steps["filter"].pvalues_
             # idx = pval <= options["pval"]
-            
+
             # print("pval", pval.shape)
 
             if options["multilabel"] or options["multiclass"]:

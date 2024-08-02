@@ -1,0 +1,901 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session multiscores_task_copy :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from time import perf_counter
+
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+  from sklearn.decomposition import PCA
+
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+  from src.decode.my_mne import my_cross_val_multiscore
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.decode.classifiers import safeSelector
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Perceptron
+
+#+begin_src ipython :tangle ../src/torch/percetron.py
+  import torch
+  import torch.nn as nn
+
+  class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+      def __init__(self, pos_weight=None, weight=None, reduction='mean'):
+          super(CustomBCEWithLogitsLoss, self).__init__(weight=weight, reduction=reduction, pos_weight=pos_weight)
+
+      def forward(self, input, target):
+          target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+          return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/perceptron.py
+  class Perceptron(nn.Module):
+      def __init__(self, num_features, dropout_rate=0.0):
+          super(Perceptron, self).__init__()
+          self.linear = nn.Linear(num_features, 1)
+          self.dropout = nn.Dropout(dropout_rate)
+
+      def forward(self, X):
+          weight_size = self.linear.weight.size()[-1]
+
+          if weight_size != X.shape[1]:
+              self.linear = nn.Linear(X.shape[1], 1).to(X.device)
+
+          hidden = self.linear(self.dropout(X))
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/perceptron.py
+  class MLP(nn.Module):
+      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
+          super(MLP, self).__init__()
+          self.linear = nn.Linear(num_features, hidden_units)
+          self.dropout = nn.Dropout(dropout_rate)
+          self.relu = nn.ReLU()
+          self.linear2 = nn.Linear(hidden_units, 1)
+
+      def forward(self, x):
+          x = self.dropout(x)
+          x = self.relu(self.linear(x))
+          x = self.dropout(x)
+          hidden = self.linear2(x)
+          return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/skorch.py
+  import torch
+  from skorch import NeuralNetClassifier
+  from skorch.callbacks import Callback
+  from skorch.callbacks import EarlyStopping
+
+  early_stopping = EarlyStopping(
+      monitor='train_loss',    # Metric to monitor
+      patience=5,              # Number of epochs to wait for improvement
+      threshold=0.001,       # Minimum change to qualify as an improvement
+      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+      lower_is_better=True     # Set to True if lower metric values are better
+  )
+
+  class RegularizedNet(NeuralNetClassifier):
+      def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
+          self.alpha = alpha  # Regularization strength
+          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+          super().__init__(module, **kwargs)
+
+      def get_loss(self, y_pred, y_true, X=None, training=False):
+          # Call super method to compute primary loss
+          if y_pred.shape != y_true.shape:
+              y_true = y_true.unsqueeze(-1)
+
+          loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+          if self.alpha>0:
+              elastic_net_reg = 0
+              for param in self.module_.parameters():
+                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+          # Add the elastic net regularization term to the primary loss
+          return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+** Model
+
+#+begin_src ipython :tangle ../src/torch/classificationCV.py
+  from time import perf_counter
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+  from sklearn.decomposition import PCA
+
+  from mne.decoding import SlidingEstimator, GeneralizingEstimator, cross_val_multiscore
+
+  class ClassificationCV():
+      def __init__(self, net, params, **kwargs):
+
+          pipe = []
+          self.scaler = kwargs['scaler']
+          if self.scaler is not None and self.scaler !=0 :
+              pipe.append(("scaler", StandardScaler()))
+
+          self.n_comp = kwargs['n_comp']
+          if kwargs['n_comp'] is not None:
+              self.n_comp = kwargs['n_comp']
+              pipe.append(("pca", PCA(n_components=self.n_comp)))
+
+          self.prescreen = kwargs["prescreen"]
+          if self.prescreen is not None and self.prescreen!=0:
+              pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
+
+          pipe.append(("net", net))
+          self.model = Pipeline(pipe)
+
+          self.num_features = kwargs['num_features']
+          self.scoring =  kwargs['scoring']
+
+          if  kwargs['n_splits']==-1:
+              self.cv = LeaveOneOut()
+          else:
+              self.cv = RepeatedStratifiedKFold(n_splits=kwargs['n_splits'], n_repeats=kwargs['n_repeats'])
+
+          self.params = params
+          self.verbose =  kwargs['verbose']
+          self.n_jobs =  kwargs['n_jobs']
+
+      def fit(self, X, y):
+          start = perf_counter()
+          if self.verbose:
+              print('Fitting hyperparameters ...')
+
+          grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
+          grid.fit(X.astype('float32'), y.astype('float32'))
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          self.best_model = grid.best_estimator_
+          self.best_params = grid.best_params_
+
+          if self.verbose:
+              print(self.best_params)
+
+          # self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          # self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+      def get_bootstrap_coefs(self, X, y, n_boots=10):
+          start = perf_counter()
+          if self.verbose:
+              print('Bootstrapping coefficients ...')
+
+          self.bagging_clf = BaggingClassifier(base_estimator=self.best_model, n_estimators=n_boots)
+          self.bagging_clf.fit(X.astype('float32'), y.astype('float32'))
+          end = perf_counter()
+
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
+
+          return self.coefs, self.bias
+
+      def get_overlap(self, model, X):
+          coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+          bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+
+          if self.scaler is not None and self.scaler!=0:
+              scaler = model.named_steps['scaler']
+              for i in range(X.shape[-1]):
+                  X[..., i] = scaler.transform(X[..., i])
+
+          if self.n_comp is not None:
+              pca = model.named_steps['pca']
+              X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
+
+              for i in range(X.shape[-1]):
+                  X_pca[..., i] = pca.transform(X[..., i])
+
+              self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+          else:
+              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+          return self.overlaps
+
+      def get_bootstrap_overlaps(self, X):
+          start = perf_counter()
+          if self.verbose:
+              print('Getting bootstrapped overlaps ...')
+
+          X_copy = np.copy(X)
+          overlaps_list = []
+          n_boots = len(self.bagging_clf.estimators_)
+
+          for i in range(n_boots):
+              model = self.bagging_clf.estimators_[i]
+              overlaps = self.get_overlap(model, X_copy)
+              overlaps_list.append(overlaps)
+
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          return np.array(overlaps_list).mean(0)
+
+      def get_cv_scores(self, X, y, scoring, cv=None, X_test=None, y_test=None):
+          if cv is None:
+              cv = self.cv
+          if X_test is None:
+              X_test = X
+              y_test = y
+
+          start = perf_counter()
+          if self.verbose:
+              print('Computing cv scores ...')
+
+          # estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
+          #                              scoring=scoring, verbose=False)
+
+          estimator = GeneralizingEstimator(clone(self.best_model), n_jobs=1, scoring=scoring, verbose=False)
+
+          self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
+                                             cv=cv, n_jobs=-1, verbose=False)
+
+          # self.scores = my_cross_val_multiscore(estimator, X.astype('float32'), X_test.astype('float32'),
+          #                                  y.astype('float32'), y_test.astype('float32'), cv=cv, n_jobs=-1, verbose=False)
+
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          return self.scores
+#+end_src
+
+
+#+RESULTS:
+
+  #+begin_src ipython :tangle ../src/torch/main.py
+    from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+    from src.preprocess.helpers import avg_epochs
+
+    def get_classification(model, RETURN='overlaps', **options):
+            start = perf_counter()
+
+            dum = 0
+            if options['features'] == 'distractor':
+                    if options['task'] != 'Dual':
+                            task = options['task']
+                            options['task'] = 'Dual'
+                            dum = 1
+
+            X_days, y_days = get_X_y_days(**options)
+            X, y = get_X_y_S1_S2(X_days, y_days, **options)
+            y[y==-1] = 0
+
+            X_avg = avg_epochs(X, **options).astype('float32')
+
+            index = mice.index(options['mouse'])
+            model.num_features = N_NEURONS[index]
+
+            # pipe['net'].module__num_features = options['n_comp']
+
+
+            if options['class_weight']:
+                    try:
+                            pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
+                            print('imbalance', pos_weight)
+                            model.criterion__pos_weight = pos_weight
+                    except:
+                            pass
+
+            model.fit(X_avg, y)
+
+            if dum:
+                    options['features'] = 'distractor'
+                    options['task'] = task
+                    if 'scores' in RETURN:
+                            X_test, y_test = get_X_y_S1_S2(X_days, y_days, **options)
+                    else:
+                            X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+            if options['compo']:
+                    print('composition DPA vs', options['compo_task'])
+                    options['task'] = options['compo_task']
+                    X_test, y_test = get_X_y_S1_S2(X_days, y_days, **options)
+            else:
+                    X_test, y_test = None, None
+
+            if options['verbose']:
+                    print('X', X.shape, 'y', y.shape)
+
+            if 'scores' in RETURN:
+                scores = model.get_cv_scores(X, y, options['scoring'], cv=None, X_test=X_test, y_test=y_test)
+                end = perf_counter()
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                return scores
+            if 'overlaps' in RETURN:
+                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+                overlaps = model.get_bootstrap_overlaps(X)
+                end = perf_counter()
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                return overlaps
+            if 'coefs' in RETURN:
+                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+                end = perf_counter()
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                return coefs, bias
+#+end_src
+
+#+RESULTS:
+
+** Other
+#+begin_src ipython
+  def plot_mat(X, ax, axis=0):
+    im = ax.imshow(
+        X,
+        interpolation="lanczos",
+        origin="lower",
+        cmap="jet",
+        extent=[0, 14, 0, 14],
+        vmin=0.5,
+        vmax=1.0,
+    )
+
+    add_vdashed(ax)
+    ax.set_xlim([2, 12])
+    ax.set_xticks([2, 4, 6, 8, 10, 12])
+    ax.set_ylim([2, 12])
+    ax.set_yticks([2, 4, 6, 8, 10, 12])
+
+    # ax.set_xlabel("Testing Time (s)")
+    # ax.set_ylabel("Training Time (s)")
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:1'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  params = { 'net__alpha': np.logspace(-4, 4, 10),
+             # 'net__l1_ratio': np.linspace(0, 1, 10),
+             # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+            }
+
+  kwargs = {
+      'mouse': 'JawsM15',
+      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'preprocess': True, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 0, 'n_boots': 32,
+      'n_splits': 5, 'n_repeats': 32,
+      'class_weight': 0,
+      'prescreen':0,
+  }
+
+  options = set_options(**kwargs)
+  days = np.arange(1,  options['n_days']+1)
+  # days = np.arange(1,  2)
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  options['scoring'] = safe_roc_auc
+  options['n_jobs'] = 30
+#+end_src
+
+#+RESULTS:
+
+* Decoding vs days
+
+#+begin_src ipython
+  net = RegularizedNet(
+      module=Perceptron,
+      module__num_features=693,
+      module__dropout_rate=0.0,
+      alpha=0.01,
+      l1_ratio=options['l1_ratio'],
+      criterion=CustomBCEWithLogitsLoss,
+      criterion__pos_weight=torch.tensor(1.0, device=DEVICE).to(torch.float32),
+      optimizer=optim.Adam,
+      optimizer__lr=0.1,
+      max_epochs=100,
+      callbacks=[early_stopping],
+      train_split=None,
+      iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
+      verbose=0,
+      device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
+      compile=False,
+      warm_start=True,
+  )
+
+  options['verbose'] = 0
+  model = ClassificationCV(net, params, **options)
+  options['verbose'] = 1
+  #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  from sklearn.linear_model import LogisticRegression
+  # net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+  net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
+
+  params = {'net__C': np.logspace(-4, 4, 10)}
+
+  options['n_jobs'] = -1
+  options['verbose'] = 0
+  model = ClassificationCV(net, params, **options)
+  options['verbose'] = 1
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+  scores_sample = []
+  scores_dist = []
+  scores_choice = []
+
+  for task in tasks:
+    options['task'] = task
+
+    scores_sample_task = []
+    scores_dist_task = []
+    scores_choice_task = []
+
+    for day in days:
+        options['day'] = day
+
+        options['class_weight'] = 1
+        options['features'] = 'sample'
+        options['epochs'] = ['ED']
+        scores = get_classification(model, RETURN='scores', **options)
+
+        scores_sample_task.append(scores)
+
+        # options['features'] = 'distractor'
+        # options['epochs'] = ['MD']
+        # scores = get_classification(model, RETURN='scores', **options)
+        # scores_dist_task.append(scores)
+
+        # options['class_weight'] = 1
+        # options['features'] = 'choice'
+        # options['epochs'] = ['CHOICE']
+        # scores = get_classification(model, RETURN='scores', **options)
+        # scores_choice_task.append(scores)
+
+    scores_sample.append(scores_sample_task)
+    # scores_dist.append(scores_dist_task)
+    # scores_choice.append(scores_choice_task)
+
+    # scores_save = np.stack((scores_sample, scores_dist, scores_choice))
+    scores_save = np.array(scores_sample)
+    print(scores_save.shape)
+    pkl_save(scores_save, '%s_multiscores_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 1 LASER 0
+  imbalance tensor(0.9000, device='cuda:1')
+  X (19, 693, 84) y (19,)
+  Elapsed (with compilation) = 0h 0m 50s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 2 LASER 0
+  imbalance tensor(1.1818, device='cuda:1')
+  X (24, 693, 84) y (24,)
+  Elapsed (with compilation) = 0h 0m 52s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 3 LASER 0
+  imbalance tensor(0.9286, device='cuda:1')
+  X (27, 693, 84) y (27,)
+  Elapsed (with compilation) = 0h 0m 52s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 4 LASER 0
+  imbalance tensor(1., device='cuda:1')
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 53s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 5 LASER 0
+  imbalance tensor(1.0833, device='cuda:1')
+  X (25, 693, 84) y (25,)
+  Elapsed (with compilation) = 0h 0m 52s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 6 LASER 0
+  imbalance tensor(1., device='cuda:1')
+  X (32, 693, 84) y (32,)
+  Elapsed (with compilation) = 0h 0m 53s
+  (1, 6, 160, 84, 84)
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 1 LASER 0
+  imbalance tensor(1., device='cuda:1')
+  X (20, 693, 84) y (20,)
+  Elapsed (with compilation) = 0h 0m 52s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 2 LASER 0
+  imbalance tensor(0.8750, device='cuda:1')
+  X (15, 693, 84) y (15,)
+  Elapsed (with compilation) = 0h 0m 49s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 3 LASER 0
+  imbalance tensor(1., device='cuda:1')
+  X (20, 693, 84) y (20,)
+  Elapsed (with compilation) = 0h 0m 51s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 4 LASER 0
+  imbalance tensor(0.9286, device='cuda:1')
+  X (27, 693, 84) y (27,)
+  Elapsed (with compilation) = 0h 0m 53s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 5 LASER 0
+  imbalance tensor(1.1818, device='cuda:1')
+  X (24, 693, 84) y (24,)
+  Elapsed (with compilation) = 0h 0m 51s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 6 LASER 0
+  imbalance tensor(0.8000, device='cuda:1')
+  X (27, 693, 84) y (27,)
+  Elapsed (with compilation) = 0h 0m 53s
+  (2, 6, 160, 84, 84)
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 1 LASER 0
+  imbalance tensor(1.2222, device='cuda:1')
+  X (20, 693, 84) y (20,)
+  Elapsed (with compilation) = 0h 0m 51s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 2 LASER 0
+  imbalance tensor(0.7143, device='cuda:1')
+  X (24, 693, 84) y (24,)
+  Elapsed (with compilation) = 0h 0m 51s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 3 LASER 0
+  imbalance tensor(0.8571, device='cuda:1')
+  X (26, 693, 84) y (26,)
+  Elapsed (with compilation) = 0h 0m 52s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 4 LASER 0
+  imbalance tensor(1.1429, device='cuda:1')
+  X (30, 693, 84) y (30,)
+  Elapsed (with compilation) = 0h 0m 53s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 5 LASER 0
+  imbalance tensor(0.9091, device='cuda:1')
+  X (21, 693, 84) y (21,)
+  Elapsed (with compilation) = 0h 0m 51s
+  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 6 LASER 0
+  imbalance tensor(0.9375, device='cuda:1')
+  X (31, 693, 84) y (31,)
+  Elapsed (with compilation) = 0h 0m 54s
+  (3, 6, 160, 84, 84)
+#+end_example
+
+* Scores
+
+ #+begin_src ipython
+  filename = '%s_multiscores_tasks_%.2f_l1_ratio%s.pkl' % (options['mouse'], options['l1_ratio'], options['fname'])
+  print(filename)
+  try:
+      scores = pkl_load(filename, path="../data/%s/" % options['mouse'])
+      print('scores', scores.shape)
+  except:
+      print('file not found')
+#+end_src
+
+#+RESULTS:
+: JawsM15_multiscores_tasks_0.95_l1_ratio.pkl
+: scores (3, 6, 160, 84, 84)
+
+#+begin_src ipython
+  options['T_WINDOW'] = 0.25
+  options = set_options(**options)
+  print('ED', options['bins_ED'])
+  print('LD', options['bins_LD'])
+#+end_src
+
+#+RESULTS:
+: ED [19 20 21 22 23 24 25 26]
+: LD [46 47 48 49 50 51 52 53]
+
+#+begin_src ipython
+
+  scores_sample = scores
+
+  sample_diag = np.diagonal(scores_sample, axis1=-2, axis2=-1)
+
+  options['epochs'] = ['ED']
+  sample_ED = avg_epochs(np.swapaxes(scores_sample, -2, -1), **options)
+
+  options['epochs'] = ['LD']
+  sample_LD = avg_epochs(np.swapaxes(scores_sample, -2, -1), **options)
+
+  print(scores_sample.shape, sample_ED.shape, sample_LD.shape)
+    #+end_src
+
+#+RESULTS:
+: (3, 6, 160, 84, 84) (3, 6, 160, 84) (3, 6, 160, 84)
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+
+  # print(scores_day.shape)
+
+  task = 1
+
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+  for day in range(3):
+      scores_day = scores_sample[task, day].mean(0)
+      plot_mat(scores_day, ax[day])
+      ax[day].set_title('Day %d' % (day+1))
+
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+  for day in range(3, options['n_days']):
+      scores_day = scores_sample[task, day].mean(0)
+      plot_mat(scores_day, ax[day-3])
+      ax[day-3].set_title('Day %d' % (day+1))
+
+  # plt.savefig('%s_scores.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/6dbb329ed371e45c559de93180c0ca642755c5a3.png]]
+[[file:./.ob-jupyter/8a0359063938dff18efb4bbc762321cbd59c644b.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1)/ (options['n_days'])) for i in range(options['n_days'])]
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
+
+  time = np.linspace(0, 14, 84)
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, height])
+
+  task = 1
+  for i in range(options['n_days']):
+
+      ax[0].plot(time, circcvl(sample_diag[task][i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[1].plot(time, circcvl(sample_ED[task][i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+      ax[2].plot(time, circcvl(sample_LD[task][i].mean(0), windowSize=2), label=i+1, color = colors[i]);
+
+  ax[0].axhline(y=0.5, color='k', linestyle='--')
+  ax[1].axhline(y=0.5, color='k', linestyle='--')
+  ax[2].axhline(y=0.5, color='k', linestyle='--')
+
+
+  ax[0].set_xlabel('Time (s)')
+  ax[1].set_xlabel('Time (s)')
+  ax[2].set_xlabel('Time (s)')
+
+  ax[0].set_ylabel('Diag. Score')
+  ax[1].set_ylabel('ED Score')
+  ax[2].set_ylabel('LD Score')
+
+  add_vlines(ax[0])
+  add_vlines(ax[1])
+  add_vlines(ax[2])
+
+  plt.savefig('%s_scores.svg' % options['mouse'], dpi=300)
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/cc7a787842c7ea99283953008a001d0b0545bb67.png]]
+
+#+begin_src ipython
+  print(sample_ED.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 160, 84)
+
+  #+begin_src ipython
+    options['epochs'] = ['TEST']
+
+    colors = ['r', 'b', 'g']
+    for task in range(len(tasks)):
+        sample_avg = []
+        sample_ci = []
+        for i in range(options['n_days']):
+            sample_epoch = avg_epochs(sample_ED[task][i], **options)
+            # sample_epoch += avg_epochs(sample_LD[task][i], **options)
+
+            sample_avg.append(sample_epoch.mean(0))
+            sample_ci.append(get_bootstrap_ci(sample_epoch))
+
+        sample_avg = np.array(sample_avg)
+        sample_ci = np.array(sample_ci).T
+
+        plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
+        plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color=colors[task], alpha=0.1)
+
+    plt.axhline(y=0.5, color='k', linestyle='--')
+
+    plt.legend(fontsize=10)
+    plt.xticks(np.arange(1, options['n_days']+1))
+    plt.yticks([0.4, 0.6, 0.8, 1.0])
+    plt.xlabel('Day')
+    plt.ylabel('Sample Score')
+    plt.savefig('%s_scores_avg.svg' % options['mouse'], dpi=300)
+    plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/b9f0cbdf3947e06010d293cd75e3ce5deb2b8b41.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
