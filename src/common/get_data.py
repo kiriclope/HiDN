@@ -518,22 +518,12 @@ def get_X_y_S1_S2(X, y, **kwargs):
     X_S3 = X[idx_S3 & idx_trials & idx_days & idx_laser & idx_tasks]
     X_S4 = X[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
 
-    # print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
+    print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
     if X_S3.shape[0] > 0:
         print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
 
-    # if kwargs["balance"]:
-    #     n_max = np.min((X_S1.shape[0], X_S2.shape[0]))
-    #     print("n_max", n_max)
-
-    #     if X_S1.shape[0] > X_S2.shape[0]:
-    #         n_x = np.random.choice(X_S1.shape[0], n_max, replace=False)
-    #         X_S1 = X_S1[n_x]
-    #     else:
-    #         n_x = np.random.choice(X_S2.shape[0], n_max, replace=False)
-    #         X_S2 = X_S2[n_x]
-
     X_S1_S2 = np.vstack((X_S1, X_S2, X_S3, X_S4))
+
 
     if kwargs["multilabel"]:
         # This is the multiclass version of the problem
@@ -560,8 +550,14 @@ def get_X_y_S1_S2(X, y, **kwargs):
             )
         )
     else:
-        y_S1_S2 = np.hstack((-np.ones(X_S1.shape[0]), np.ones(X_S2.shape[0])))
+        y_S1_S2 = np.hstack((np.zeros(X_S1.shape[0]), np.ones(X_S2.shape[0])))
 
-    y_S1_S2 = np.float32(y_S1_S2)
+        y_S1 = y[idx_S1 & idx_trials & idx_days & idx_laser & idx_tasks]
+        y_S2 = y[idx_S2 & idx_trials & idx_days & idx_laser & idx_tasks]
+        y_S3 = y[idx_S3 & idx_trials & idx_days & idx_laser & idx_tasks]
+        y_S4 = y[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
+
+        y_S1_S2 = pd.concat((y_S1, y_S2, y_S3, y_S4))
+    # y_S1_S2 = np.float32(y_S1_S2)
 
     return X_S1_S2, y_S1_S2

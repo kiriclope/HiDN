@@ -22,8 +22,17 @@
 * Imports
 
 #+begin_src ipython
+  import warnings
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
   import sys
   sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
 
   import pickle as pkl
   import numpy as np
@@ -57,337 +66,25 @@
 
 #+RESULTS:
 
+#+begin_src ipython
+from src.torch.perceptron import CustomBCEWithLogitsLoss, Perceptron, MLP
+from src.torch.skorch import early_stopping, RegularizedNet
+from src.torch.classificationCV import ClassificationCV
+from src.torch.main import get_classification
+#+end_src
+
+#+RESULTS:
+
 * Helpers
-** Perceptron
-
-#+begin_src ipython :tangle ../src/torch/percetron.py
-  import torch
-  import torch.nn as nn
-
-  class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
-      def __init__(self, pos_weight=None, weight=None, reduction='mean'):
-          super(CustomBCEWithLogitsLoss, self).__init__(weight=weight, reduction=reduction, pos_weight=pos_weight)
-
-      def forward(self, input, target):
-          target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
-          return super().forward(input.to(torch.float32), target.to(torch.float32))
-#+end_src
-
-#+RESULTS:
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/perceptron.py
-  class Perceptron(nn.Module):
-      def __init__(self, num_features, dropout_rate=0.0):
-          super(Perceptron, self).__init__()
-          self.linear = nn.Linear(num_features, 1)
-          self.dropout = nn.Dropout(dropout_rate)
-
-      def forward(self, X):
-          weight_size = self.linear.weight.size()[-1]
-
-          if weight_size != X.shape[1]:
-              self.linear = nn.Linear(X.shape[1], 1).to(X.device)
-
-          hidden = self.linear(self.dropout(X))
-          return hidden
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/perceptron.py
-  class MLP(nn.Module):
-      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
-          super(MLP, self).__init__()
-          self.linear = nn.Linear(num_features, hidden_units)
-          self.dropout = nn.Dropout(dropout_rate)
-          self.relu = nn.ReLU()
-          self.linear2 = nn.Linear(hidden_units, 1)
-
-      def forward(self, x):
-          x = self.dropout(x)
-          x = self.relu(self.linear(x))
-          x = self.dropout(x)
-          hidden = self.linear2(x)
-          return hidden
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/skorch.py
-  import torch
-  from skorch import NeuralNetClassifier
-  from skorch.callbacks import Callback
-  from skorch.callbacks import EarlyStopping
-
-  early_stopping = EarlyStopping(
-      monitor='train_loss',    # Metric to monitor
-      patience=5,              # Number of epochs to wait for improvement
-      threshold=0.001,       # Minimum change to qualify as an improvement
-      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
-      lower_is_better=True     # Set to True if lower metric values are better
-  )
-
-  class RegularizedNet(NeuralNetClassifier):
-      def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
-          self.alpha = alpha  # Regularization strength
-          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
-
-          super().__init__(module, **kwargs)
-
-      def get_loss(self, y_pred, y_true, X=None, training=False):
-          # Call super method to compute primary loss
-          if y_pred.shape != y_true.shape:
-              y_true = y_true.unsqueeze(-1)
-
-          loss = super().get_loss(y_pred, y_true, X=X, training=training)
-
-          if self.alpha>0:
-              elastic_net_reg = 0
-              for param in self.module_.parameters():
-                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
-                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
-
-          # Add the elastic net regularization term to the primary loss
-          return loss + elastic_net_reg
-#+end_src
-
-#+RESULTS:
-
-** Model
-
-#+begin_src ipython :tangle ../src/torch/classificationCV.py
-    from time import perf_counter
-    from sklearn.ensemble import BaggingClassifier
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.pipeline import Pipeline
-    from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
-    from sklearn.decomposition import PCA
-
-    from mne.decoding import SlidingEstimator, cross_val_multiscore
-
-    class ClassificationCV():
-        def __init__(self, net, params, **kwargs):
-
-            pipe = []
-            self.scaler = kwargs['scaler']
-            if self.scaler is not None and self.scaler !=0 :
-                pipe.append(("scaler", StandardScaler()))
-
-            self.n_comp = kwargs['n_comp']
-            if kwargs['n_comp'] is not None:
-                self.n_comp = kwargs['n_comp']
-                pipe.append(("pca", PCA(n_components=self.n_comp)))
-
-            self.prescreen = kwargs["prescreen"]
-            if self.prescreen is not None:
-                pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
-
-            pipe.append(("net", net))
-            self.model = Pipeline(pipe)
-
-            self.num_features = kwargs['num_features']
-            self.scoring =  kwargs['scoring']
-
-            if  kwargs['n_splits']==-1:
-                self.cv = LeaveOneOut()
-            else:
-                self.cv = RepeatedStratifiedKFold(n_splits=kwargs['n_splits'], n_repeats=kwargs['n_repeats'])
-
-            self.params = params
-            self.verbose =  kwargs['verbose']
-            self.n_jobs =  kwargs['n_jobs']
-
-        def fit(self, X, y):
-            start = perf_counter()
-            if self.verbose:
-                print('Fitting hyperparameters ...')
-
-            grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
-            grid.fit(X.astype('float32'), y.astype('float32'))
-            end = perf_counter()
-            if self.verbose:
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-            self.best_model = grid.best_estimator_
-            self.best_params = grid.best_params_
-
-            if self.verbose:
-                print(self.best_params)
-
-            self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-            self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
-
-        def get_bootstrap_coefs(self, X, y, n_boots=10):
-            start = perf_counter()
-            if self.verbose:
-                print('Bootstrapping coefficients ...')
-
-            self.bagging_clf = BaggingClassifier(base_estimator=self.best_model, n_estimators=n_boots)
-            self.bagging_clf.fit(X.astype('float32'), y.astype('float32'))
-            end = perf_counter()
-
-            if self.verbose:
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-            self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
-
-            return self.coefs, self.bias
-
-        def get_overlap(self, model, X):
-            coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
-            bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
-
-            if self.scaler is not None and self.scaler!=0:
-                scaler = model.named_steps['scaler']
-                for i in range(X.shape[-1]):
-                    X[..., i] = scaler.transform(X[..., i])
-
-            if self.n_comp is not None:
-                pca = model.named_steps['pca']
-                X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
-
-                for i in range(X.shape[-1]):
-                    X_pca[..., i] = pca.transform(X[..., i])
-
-                self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
-            else:
-                self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
-
-            return self.overlaps
-
-        def get_bootstrap_overlaps(self, X):
-            start = perf_counter()
-            if self.verbose:
-                print('Getting bootstrapped overlaps ...')
-
-            X_copy = np.copy(X)
-            overlaps_list = []
-            n_boots = len(self.bagging_clf.estimators_)
-
-            for i in range(n_boots):
-                model = self.bagging_clf.estimators_[i]
-                overlaps = self.get_overlap(model, X_copy)
-                overlaps_list.append(overlaps)
-
-            end = perf_counter()
-            if self.verbose:
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-            return np.array(overlaps_list).mean(0)
-
-        def get_cv_scores(self, X, y, scoring, cv=None, X_test=None, y_test=None):
-            if cv is None:
-                cv = self.cv
-            if X_test is None:
-                X_test = X
-                y_test = y
-
-            start = perf_counter()
-            if self.verbose:
-                print('Computing cv scores ...')
-
-            estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
-                                         scoring=scoring, verbose=False)
-
-            # self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
-            #                                    cv=cv, n_jobs=-1, verbose=False)
-
-            self.scores = my_cross_val_multiscore(estimator, X.astype('float32'), X_test.astype('float32'),
-                                             y.astype('float32'), y_test.astype('float32'), cv=cv, n_jobs=-1, verbose=False)
-
-            end = perf_counter()
-            if self.verbose:
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-            return self.scores
-#+end_src
-
-
-#+RESULTS:
-
-  #+begin_src ipython :tangle ../src/torch/main.py
-    from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-    from src.preprocess.helpers import avg_epochs
-
-    def get_classification(model, RETURN='overlaps', **options):
-            start = perf_counter()
-
-            dum = 0
-            if options['features'] == 'distractor':
-                    if options['task'] != 'Dual':
-                            task = options['task']
-                            options['task'] = 'Dual'
-                            dum = 1
-
-            X_days, y_days = get_X_y_days(**options)
-            X, y = get_X_y_S1_S2(X_days, y_days, **options)
-            y[y==-1] = 0
-
-            X_avg = avg_epochs(X, **options).astype('float32')
-
-            index = mice.index(options['mouse'])
-            model.num_features = N_NEURONS[index]
-
-            # pipe['net'].module__num_features = options['n_comp']
-
-
-            if options['class_weight']:
-                    pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
-                    print('imbalance', pos_weight)
-                    model.criterion__pos_weight = pos_weight
-
-            model.fit(X_avg, y)
-
-            if dum:
-                    options['features'] = 'distractor'
-                    options['task'] = task
-                    if 'scores' in RETURN:
-                            X_test, y_test = get_X_y_S1_S2(X_days, y_days, **options)
-                    else:
-                            X, _ = get_X_y_S1_S2(X_days, y_days, **options)
-
-            if options['compo']:
-                    print('composition DPA vs', options['compo_task'])
-                    options['task'] = options['compo_task']
-                    X_test, y_test = get_X_y_S1_S2(X_days, y_days, **options)
-            else:
-                    X_test, y_test = None, None
-
-            if options['verbose']:
-                    print('X', X.shape, 'y', y.shape)
-
-            if 'scores' in RETURN:
-                scores = model.get_cv_scores(X, y, options['scoring'], cv=None, X_test=X_test, y_test=y_test)
-                end = perf_counter()
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return scores
-            if 'overlaps' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
-                overlaps = model.get_bootstrap_overlaps(X)
-                end = perf_counter()
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return overlaps
-            if 'coefs' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
-                end = perf_counter()
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return coefs, bias
-#+end_src
-
-#+RESULTS:
-
-** Other
 
 #+begin_src ipython :tangle ../src/torch/utils.py
-  import numpy as np
+import numpy as np
 
-  def safe_roc_auc_score(y_true, y_score):
+def safe_roc_auc_score(y_true, y_score, multi_class='ovr'):
       y_true = np.asarray(y_true)
       if len(np.unique(y_true)) == 1:
           return np.nan  # return np.nan where the score cannot be calculated
-      return roc_auc_score(y_true, y_score)
+      return roc_auc_score(y_true, y_score, multi_class=multi_class)
 #+end_src
 
 #+RESULTS:
@@ -462,8 +159,8 @@
             }
 
   kwargs = {
-      'mouse': 'JawsM15',
-      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'mouse': 'AP02',
+      'trials': '', 'reload': 0, 'data_type': 'dF',
       'preprocess': True, 'scaler_BL': 'robust',
       'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
@@ -471,7 +168,8 @@
       'n_comp': None, 'scaler': None,
       'bootstrap': 0, 'n_boots': 32,
       'n_splits': 3, 'n_repeats': 1,
-      'class_weight': 0
+      'class_weight': 0,
+      'multilabel': 1,
   }
 
   options = set_options(**kwargs)
@@ -479,6 +177,7 @@
   # days = np.arange(1,  2)
 
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+
   options['scoring'] = safe_roc_auc
   options['n_jobs'] = 30
 #+end_src
@@ -516,12 +215,27 @@
 #+RESULTS:
 
 #+begin_src ipython
+  from sklearn.linear_model import LogisticRegression
+  # net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+  net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001, multi_class='multinomial')
 
-  scores_sample = []
-  scores_dist = []
-  scores_choice = []
+  params = {'net__C': np.logspace(-4, 4, 10)}
 
-  for task in tasks:
+  options['n_jobs'] = -1
+  options['verbose'] = 0
+  model = ClassificationCV(net, params, **options)
+  options['verbose'] = 1
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+scores_sample = []
+scores_dist = []
+scores_choice = []
+
+for task in tasks:
     options['task'] = task
 
     scores_sample_task = []
@@ -537,302 +251,250 @@
         scores = get_classification(model, RETURN='scores', **options)
         scores_sample_task.append(scores)
 
-        options['features'] = 'distractor'
-        options['epochs'] = ['MD']
-        scores = get_classification(model, RETURN='scores', **options)
-        scores_dist_task.append(scores)
+        # options['features'] = 'distractor'
+        # options['epochs'] = ['MD']
+        # scores = get_classification(model, RETURN='scores', **options)
+        # scores_dist_task.append(scores)
 
-        options['class_weight'] = 1
-        options['features'] = 'choice'
-        options['epochs'] = ['CHOICE']
-        scores = get_classification(model, RETURN='scores', **options)
-        scores_choice_task.append(scores)
+        # options['class_weight'] = 1
+        # options['features'] = 'choice'
+        # options['epochs'] = ['CHOICE']
+        # scores = get_classification(model, RETURN='scores', **options)
+        # scores_choice_task.append(scores)
 
     scores_sample.append(scores_sample_task)
-    scores_dist.append(scores_dist_task)
-    scores_choice.append(scores_choice_task)
+    # scores_dist.append(scores_dist_task)
+    # scores_choice.append(scores_choice_task)
 
-    scores_save = np.stack((scores_sample, scores_dist, scores_choice))
-    print(scores_save.shape)
-    pkl_save(scores_save, '%s_scores_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+scores_save = np.array(scores_sample)
+# scores_save = np.stack((scores_sample, scores_dist))
+# scores_save = np.stack((scores_sample, scores_dist, scores_choice))
+print(scores_save.shape)
+pkl_save(scores_save, '%s_scores_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
     #+end_src
 
 #+RESULTS:
 #+begin_example
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(0.9000, device='cuda:0')
-  X (19, 693, 84) y (19,)
-  Elapsed (with compilation) = 0h 0m 30s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 1 LASER 0
-  X (40, 693, 84) y (40,)
-  Elapsed (with compilation) = 0h 0m 30s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DPA TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1.3750, device='cuda:0')
-  X (19, 693, 84) y (19,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(1.1818, device='cuda:0')
-  X (24, 693, 84) y (24,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(0.6250, device='cuda:0')
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 2 LASER 0
-  X (39, 693, 84) y (39,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DPA TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (24, 693, 84) y (24,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 3 LASER 0
-  imbalance tensor(0.9286, device='cuda:0')
-  X (27, 693, 84) y (27,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 3 LASER 0
-  imbalance tensor(0.7692, device='cuda:0')
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 3 LASER 0
-  X (46, 693, 84) y (46,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DPA TRIALS correct DAYS 3 LASER 0
-  imbalance tensor(1.0769, device='cuda:0')
-  X (27, 693, 84) y (27,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 4 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (32, 693, 84) y (32,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 4 LASER 0
-  imbalance tensor(0.9000, device='cuda:0')
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 4 LASER 0
-  X (57, 693, 84) y (57,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DPA TRIALS correct DAYS 4 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (32, 693, 84) y (32,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 5 LASER 0
-  imbalance tensor(1.0833, device='cuda:0')
-  X (25, 693, 84) y (25,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 5 LASER 0
-  imbalance tensor(1.1429, device='cuda:0')
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 5 LASER 0
-  X (45, 693, 84) y (45,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DPA TRIALS correct DAYS 5 LASER 0
-  imbalance tensor(0.5625, device='cuda:0')
-  X (25, 693, 84) y (25,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS correct DAYS 6 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (32, 693, 84) y (32,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 6 LASER 0
-  imbalance tensor(0.8710, device='cuda:0')
-  DATA: FEATURES distractor TASK DPA TRIALS correct DAYS 6 LASER 0
-  X (58, 693, 84) y (58,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DPA TRIALS correct DAYS 6 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (32, 693, 84) y (32,)
-  Elapsed (with compilation) = 0h 0m 29s
-  (3, 1, 6, 3, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (20, 693, 84) y (20,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 1 LASER 0
-  X (40, 693, 84) y (40,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualGo TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (20, 693, 84) y (20,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(0.8750, device='cuda:0')
-  X (15, 693, 84) y (15,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(0.6250, device='cuda:0')
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 2 LASER 0
-  X (39, 693, 84) y (39,)
-  Elapsed (with compilation) = 0h 0m 30s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualGo TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(0.3636, device='cuda:0')
-  X (15, 693, 84) y (15,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 3 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  X (20, 693, 84) y (20,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 3 LASER 0
-  imbalance tensor(0.7692, device='cuda:0')
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 3 LASER 0
-  X (46, 693, 84) y (46,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualGo TRIALS correct DAYS 3 LASER 0
-  imbalance tensor(0.8182, device='cuda:0')
-  X (20, 693, 84) y (20,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 4 LASER 0
-  imbalance tensor(0.9286, device='cuda:0')
-  X (27, 693, 84) y (27,)
-  Elapsed (with compilation) = 0h 0m 30s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 4 LASER 0
-  imbalance tensor(0.9000, device='cuda:0')
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 4 LASER 0
-  X (57, 693, 84) y (57,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualGo TRIALS correct DAYS 4 LASER 0
-  imbalance tensor(1.0769, device='cuda:0')
-  X (27, 693, 84) y (27,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 5 LASER 0
-  imbalance tensor(1.1818, device='cuda:0')
-  X (24, 693, 84) y (24,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 5 LASER 0
-  imbalance tensor(1.1429, device='cuda:0')
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 5 LASER 0
-  X (45, 693, 84) y (45,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualGo TRIALS correct DAYS 5 LASER 0
-  imbalance tensor(0.5000, device='cuda:0')
-  X (24, 693, 84) y (24,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS correct DAYS 6 LASER 0
-  imbalance tensor(0.8000, device='cuda:0')
-  X (27, 693, 84) y (27,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 6 LASER 0
-  imbalance tensor(0.8710, device='cuda:0')
-  DATA: FEATURES distractor TASK DualGo TRIALS correct DAYS 6 LASER 0
-  X (58, 693, 84) y (58,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualGo TRIALS correct DAYS 6 LASER 0
-  imbalance tensor(0.9286, device='cuda:0')
-  X (27, 693, 84) y (27,)
-  Elapsed (with compilation) = 0h 0m 29s
-  (3, 2, 6, 3, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1.2222, device='cuda:0')
-  X (20, 693, 84) y (20,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 1 LASER 0
-  X (40, 693, 84) y (40,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualNoGo TRIALS correct DAYS 1 LASER 0
-  imbalance tensor(1.8571, device='cuda:0')
-  X (20, 693, 84) y (20,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(0.7143, device='cuda:0')
-  X (24, 693, 84) y (24,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(0.6250, device='cuda:0')
-  DATA: FEATURES distractor TASK DualNoGo TRIALS correct DAYS 2 LASER 0
-  X (39, 693, 84) y (39,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES choice TASK DualNoGo TRIALS correct DAYS 2 LASER 0
-  imbalance tensor(1.1818, device='cuda:0')
-  X (24, 693, 84) y (24,)
-  Elapsed (with compilation) = 0h 0m 29s
-  Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS correct DAYS 3 LASER 0
-  imbalance tensor(0.8571, device='cuda:0')
-  X (26, 693, 84) y (26,)
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+X_S1 (12, 702, 115) X_S2 (12, 702, 115)
+X_S3 (12, 702, 115) X_S4 (12, 702, 115)
+X (48, 702, 115) y (48,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 22s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 18s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 22s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 20s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 22s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 7 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 20s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 8 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 20s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 9 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 20s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 10 LASER 0
+X_S1 (8, 702, 115) X_S2 (8, 702, 115)
+X_S3 (8, 702, 115) X_S4 (8, 702, 115)
+X (32, 702, 115) y (32,)
+Elapsed (with compilation) = 0h 0m 21s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+X_S1 (24, 702, 115) X_S2 (24, 702, 115)
+X_S3 (24, 702, 115) X_S4 (24, 702, 115)
+X (96, 702, 115) y (96,)
+Elapsed (with compilation) = 0h 0m 35s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 28s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 29s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 31s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 7 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 8 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 9 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 10 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+X_S1 (24, 702, 115) X_S2 (24, 702, 115)
+X_S3 (24, 702, 115) X_S4 (24, 702, 115)
+X (96, 702, 115) y (96,)
+Elapsed (with compilation) = 0h 0m 35s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 31s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 30s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 24s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 7 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 8 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 24s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 9 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 29s
+Loading files from /home/leon/dual_task/dual_data/data/AP02
+PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 10 LASER 0
+X_S1 (16, 702, 115) X_S2 (16, 702, 115)
+X_S3 (16, 702, 115) X_S4 (16, 702, 115)
+X (64, 702, 115) y (64,)
+Elapsed (with compilation) = 0h 0m 27s
+(3, 10, 3, 115)
 #+end_example
+
+    #+begin_src ipython
+scores_sample = np.array(scores_sample)
+print(scores_sample.shape)
+    #+end_src
+
+#+RESULTS:
+: (3, 10, 3, 115)
 
 * Scores
 
@@ -888,7 +550,7 @@
 #+end_src
 
 #+RESULTS:
-: 8eb33c22-ed29-4d20-891c-e9f654f9b844
+[[./.ob-jupyter/c235122dfdf2db929a5b6f8cb619100b2f1d4f91.png]]
 
 #+begin_src ipython
   options['epochs'] = ['LD']

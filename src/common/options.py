@@ -15,11 +15,13 @@ def set_options(**kwargs):
     opts["path"] = "/home/leon/dual_task/dual_data/"
     opts["fname"] =''
 
-    opts["mice"] = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+    opts["mice"] = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']    # ['AP02', 'AP12', 'PP09', 'PP17', 'RP13']
+
     opts["mouse"] = "JawsM15"
     opts["data_type"] = "dF"  # "raw" or "dF"
 
     opts["n_days"] = 6  # PrL,ACC 6 or multi 10 this is updated later
+    opts["days"] = ['first', 'last']
 
     opts["reload"] = False
     opts["n_jobs"] = int(0.90 * multiprocessing.cpu_count())
@@ -180,14 +182,23 @@ def set_options(**kwargs):
 
     opts["n_days"] = 6  # PrL,ACC 6 or multi 10 this is updated later
     opts["n_discard"] = 0
-    opts["n_first"] = 3  # 3 or 2
-    opts["n_middle"] = 0  # 0 or 2
+    if len(opts["days"])==2:
+        opts["n_first"] = 3  # 3 or 2
+        opts["n_middle"] = 0  # 0 or 2
+    else:
+        opts["n_first"] = 2  # 3 or 2
+        opts["n_middle"] = 2  # 0 or 2
 
     if "P" in opts["mouse"]:
         opts["n_days"] = 10  # PrL 6, ACC 5 or multi 10
-        opts["n_discard"] = 1
-        opts["n_first"] = 3  # 3 or 2
-        opts["n_middle"] = 3 # 0 or 2
+        opts["n_discard"] = 4
+        # opts["n_first"] = 3  # 3 or 2
+        # opts["n_middle"] = 3 # 0 or 2
+    if "PP" in opts["mouse"]:
+        opts["n_days"] = 10  # PrL 6, ACC 5 or multi 10
+        opts["n_discard"] = 4
+        # opts["n_first"] = 3  # 3 or 2
+        # opts["n_middle"] = 0 # 0 or 2
     if "ACC" in opts["mouse"]:
         opts["n_days"] = 5  # PrL 6, ACC 5 or multi 10
     if "17" in opts["mouse"]:

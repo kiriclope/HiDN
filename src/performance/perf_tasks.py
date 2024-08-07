@@ -125,6 +125,7 @@ def df_perf_tasks_days(tasks, y_days, perf_type="correct_hit", SAMPLE="all", IF_
 
 def run_perf_tasks(**kwargs):
     options = set_options(**kwargs)
+
     if options["mouse"] == "all":
         _, y_days = get_X_y_mice(IF_RELOAD=options["reload"])
     else:

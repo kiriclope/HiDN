@@ -1,5 +1,7 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+Look at incorrect trials vs correct trials, trial by trial
 
 * Notebook Settings
 
@@ -69,7 +71,7 @@
 * Helpers
 ** Perceptron
 
-#+begin_src ipython :tangle ../src/torch/percetron.py
+#+begin_src ipython :tangle ../src/torch/perceptron.py
   import torch
   import torch.nn as nn
 
@@ -171,8 +173,8 @@
               coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
               bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
           except:
-              coefs = model.named_steps['net'].coef_[0]
-              bias = model.named_steps['net'].intercept_[0]
+              coefs = model.named_steps['net'].coef_.T
+              bias = model.named_steps['net'].intercept_.T
 
           # coefs, bias = rescale_coefs(model, coefs, bias)
 
@@ -248,8 +250,8 @@
               self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
               self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
           except:
-              self.coefs = self.best_model.named_steps['net'].coef_[0]
-              self.bias = self.best_model.named_steps['net'].intercept_[0]
+              self.coefs = self.best_model.named_steps['net'].coef_.T
+              self.bias = self.best_model.named_steps['net'].intercept_.T
 
       def get_bootstrap_coefs(self, X, y, n_boots=10):
           start = perf_counter()
@@ -273,8 +275,8 @@
               coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
               bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
           except:
-              coefs = model.named_steps['net'].coef_[0]
-              bias = model.named_steps['net'].intercept_[0]
+              coefs = model.named_steps['net'].coef_.T
+              bias = model.named_steps['net'].intercept_.T
 
           if self.scaler is not None and self.scaler!=0:
               scaler = model.named_steps['scaler']
@@ -288,9 +290,10 @@
               for i in range(X.shape[-1]):
                   X_pca[..., i] = pca.transform(X[..., i])
 
-              self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+              self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) # / np.linalg.norm(coefs, axis=0)
           else:
-              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs) # / np.linalg.norm(coefs, axis=0)
+              # self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) # / np.linalg.norm(coefs, axis=0)
 
           return self.overlaps
 
@@ -350,42 +353,56 @@
 
             X_days, y_days = get_X_y_days(**options)
             X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
             y[y==-1] = 0
+
             if options['verbose']:
                 print('X', X.shape, 'y', y.shape)
 
             X_avg = avg_epochs(X, **options).astype('float32')
+            y_avg = y
+
+            options['trials'] = 'incorrect'
+            X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
             if dum:
                     options['features'] = 'sample'
                     options['task'] = task
                     X, _ = get_X_y_S1_S2(X_days, y_days, **options)
 
-            index = mice.index(options['mouse'])
-            model.num_features = N_NEURONS[index]
+            options['trials'] = ''
+
+            # index = mice.index(options['mouse'])
+            # model.num_features = N_NEURONS[index]
 
             if options['class_weight']:
                     pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
                     print('imbalance', pos_weight)
                     model.criterion__pos_weight = pos_weight
 
-            model.fit(X_avg, y)
+            if RETURN is None:
+                return None
+            else:
+                model.fit(X_avg, y_avg)
 
             if 'scores' in RETURN:
                 scores = model.get_cv_scores(X, y, options['scoring'])
                 end = perf_counter()
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
                 return scores
-            if 'overlaps' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+            elif 'overlaps' in RETURN:
+                coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
                 overlaps = model.get_bootstrap_overlaps(X)
                 end = perf_counter()
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
                 return overlaps
-            if 'coefs' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+            elif 'coefs' in RETURN:
+                coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
                 end = perf_counter()
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
                 return coefs, bias
+            else:
+                return None
 #+end_src
 
 #+RESULTS:
@@ -473,21 +490,27 @@
              # 'net__module__dropout_rate': np.linspace(0, 1, 10),
             }
 
+  # ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
+
   kwargs = {
-      'mouse': 'ACCM03',
+      'mouse': 'JawsM15', 'laser': 0,
       'trials': '', 'reload': 0, 'data_type': 'dF',
-      'preprocess': True, 'scaler_BL': 'robust',
+      'preprocess': False, 'scaler_BL': 'robust',
       'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
-      'bootstrap': 1, 'n_boots': 32,
+      'bootstrap': 1, 'n_boots': 128,
       'n_splits': 3, 'n_repeats': 32,
-      'class_weight': 1
+      'class_weight': 1,
+      'multilabel':0,
   }
 
+  kwargs['days'] = ['first', 'middle', 'last']
   options = set_options(**kwargs)
+
   days = np.arange(1, options['n_days']+1)
+  days = ['first', 'middle', 'last']
 
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
   options['scoring'] = safe_roc_auc
@@ -530,6 +553,7 @@
   from sklearn.linear_model import LogisticRegression
   # net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
   net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
+  # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001, multi_class='multinomial')
 
   params = {'net__C': np.logspace(-4, 4, 10)}
 
@@ -537,11 +561,9 @@
   options['verbose'] = 0
   model = ClassificationCV(net, params, **options)
   options['verbose'] = 1
-
 #+end_src
 
 #+RESULTS:
-
 
 #+begin_src ipython
   overlaps_sample = []
@@ -576,253 +598,291 @@
     overlaps_sample.append(overlaps_sample_task)
     overlaps_dist.append(overlaps_dist_task)
     # overlaps_choice.append(overlaps_choice_task)
-
-    overlaps_save = np.stack((overlaps_sample, overlaps_dist))
-    # overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
-    print(overlaps_save.shape)
-    pkl_save(overlaps_save, '%s_overlaps_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
-
     #+end_src
 
 #+RESULTS:
 #+begin_example
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 10s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 5s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 5s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  (2, 1, 5, 64, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  (2, 2, 5, 64, 84)
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 5s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
-  X (64, 361, 84) y (64,)
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 3s
-  Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-  PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-  DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-  X (128, 361, 84) y (128,)
-  DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
-  imbalance tensor(1., device='cuda:0')
-  Elapsed (with compilation) = 0h 0m 4s
-  (2, 3, 5, 64, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DPA TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (10, 693, 84) X_S2 (11, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 17s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES distractor TASK Dual TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (29, 693, 84) X_S2 (20, 693, 84)
+DATA: FEATURES sample TASK DPA TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (10, 693, 84) X_S2 (11, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 18s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DPA TRIALS incorrect DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (3, 693, 84) X_S2 (2, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES distractor TASK Dual TRIALS incorrect DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (17, 693, 84) X_S2 (8, 693, 84)
+DATA: FEATURES sample TASK DPA TRIALS incorrect DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (3, 693, 84) X_S2 (2, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 17s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DPA TRIALS incorrect DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (3, 693, 84) X_S2 (4, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES distractor TASK Dual TRIALS incorrect DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (13, 693, 84) X_S2 (12, 693, 84)
+DATA: FEATURES sample TASK DPA TRIALS incorrect DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (3, 693, 84) X_S2 (4, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 19s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualGo TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (15, 693, 84) X_S2 (14, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES distractor TASK Dual TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (29, 693, 84) X_S2 (20, 693, 84)
+DATA: FEATURES sample TASK DualGo TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (15, 693, 84) X_S2 (14, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 18s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualGo TRIALS incorrect DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (9, 693, 84) X_S2 (8, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES distractor TASK Dual TRIALS incorrect DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (17, 693, 84) X_S2 (8, 693, 84)
+DATA: FEATURES sample TASK DualGo TRIALS incorrect DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (9, 693, 84) X_S2 (8, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 18s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualGo TRIALS incorrect DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (7, 693, 84) X_S2 (6, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 9s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES distractor TASK Dual TRIALS incorrect DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (13, 693, 84) X_S2 (12, 693, 84)
+DATA: FEATURES sample TASK DualGo TRIALS incorrect DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (7, 693, 84) X_S2 (6, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 19s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualNoGo TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (11, 693, 84) X_S2 (9, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES distractor TASK Dual TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (29, 693, 84) X_S2 (20, 693, 84)
+DATA: FEATURES sample TASK DualNoGo TRIALS incorrect DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (11, 693, 84) X_S2 (9, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 17s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualNoGo TRIALS incorrect DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (4, 693, 84) X_S2 (4, 693, 84)
+imbalance tensor(0., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 9s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 #+end_example
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+overlaps_save = np.stack((overlaps_sample, overlaps_dist))
+# overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
+print(overlaps_save.shape)
+pkl_save(overlaps_save, '%s_overlaps_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[72], line 1
+----> 1 overlaps_save = np.stack((overlaps_sample, overlaps_dist))
+      2 # overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
+      3 print(overlaps_save.shape)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/shape_base.py:443, in stack(arrays, axis, out, dtype, casting)
+    372 @array_function_dispatch(_stack_dispatcher)
+    373 def stack(arrays, axis=0, out=None, *, dtype=None, casting="same_kind"):
+    374     """
+    375     Join a sequence of arrays along a new axis.
+    376
+   (...)
+    441
+    442     """
+--> 443     arrays = [asanyarray(arr) for arr in arrays]
+    444     if not arrays:
+    445         raise ValueError('need at least one array to stack')
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/shape_base.py:443, in <listcomp>(.0)
+    372 @array_function_dispatch(_stack_dispatcher)
+    373 def stack(arrays, axis=0, out=None, *, dtype=None, casting="same_kind"):
+    374     """
+    375     Join a sequence of arrays along a new axis.
+    376
+   (...)
+    441
+    442     """
+--> 443     arrays = [asanyarray(arr) for arr in arrays]
+    444     if not arrays:
+    445         raise ValueError('need at least one array to stack')
+
+ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 2 dimensions. The detected shape was (3, 3) + inhomogeneous part.
+#+end_example
+:END:
 
 * Overlaps
 
 #+begin_src ipython
-  filename = '%s_overlaps_tasks_%.2f_l1_ratio%s.pkl' % (options['mouse'], options['l1_ratio'], options['fname'])
-  print(filename)
-  try:
+filename = '%s_overlaps_tasks_%.2f_l1_ratio%s.pkl' % (options['mouse'], options['l1_ratio'], options['fname'])
+print(filename)
+try:
       overlaps = pkl_load(filename, path="../data/%s/" % options['mouse'])
       print('overlaps', overlaps.shape)
-  except:
+except:
       print('file not found')
 #+end_src
 
 #+RESULTS:
-: ACCM03_overlaps_tasks_0.95_l1_ratio.pkl
-: overlaps (2, 3, 5, 64, 84)
+: JawsM15_overlaps_tasks_0.95_l1_ratio.pkl
+: overlaps (2, 3, 3, 64, 84, 1)
 
 #+begin_src ipython
-  overlaps_sample = overlaps[0]
-  overlaps_dist = overlaps[1]
-  overlaps_choice = overlaps[2]
+overlaps_sample = overlaps[0]
+overlaps_dist = overlaps[1]
+# overlaps_choice = overlaps[2]
+print(overlaps_sample.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 3, 64, 84, 1)
+
+#+begin_src ipython
+options['n_days'] = 3
+
+overlaps_sample = np.array(overlaps_sample)
+print(overlaps_sample.shape)
+
+overlaps_dist = np.array(overlaps_dist)
+print(overlaps_dist.shape)
 #+end_src
 
 #+RESULTS:
 :RESULTS:
 # [goto error]
 : ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[155], line 3
-:       1 overlaps_sample = overlaps[0]
-:       2 overlaps_dist = overlaps[1]
-: ----> 3 overlaps_choice = overlaps[2]
+: ValueError                                Traceback (most recent call last)
+: Cell In[73], line 3
+:       1 options['n_days'] = 3
+: ----> 3 overlaps_sample = np.array(overlaps_sample)
+:       4 print(overlaps_sample.shape)
+:       6 overlaps_dist = np.array(overlaps_dist)
 :
-: IndexError: index 2 is out of bounds for axis 0 with size 2
+: ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 2 dimensions. The detected shape was (3, 3) + inhomogeneous part.
 :END:
 
 #+begin_src ipython
-  time = np.linspace(0, 14, 84)
+  options['n_days'] = 3
   cmap = plt.get_cmap('Blues')
   colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
   cmap = plt.get_cmap('Reds')
@@ -837,26 +897,45 @@
   options['preprocess'] = False
   X_days, y_days = get_X_y_days(**options)
 
+  time = np.linspace(0, 14, X_days.shape[-1])
+
   fig, ax = plt.subplots(3, 3, figsize= [2.5 * width, 2.5*height])
 
   for task in range(3):
     for i in range(options['n_days']):
-        size = overlaps_sample.shape[2] // 2
+        overlap = overlaps_sample[task][i]
+        size = overlap.shape[0] // 2
 
-        ax[task][0].plot(time, circcvl(overlaps_sample[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
-        ax[task][1].plot(time, circcvl(overlaps_dist[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        sample = overlap[:size].mean(0)
+        ax[task][0].plot(time, sample, label=i+1, color = colors[i]);
 
-        ax[task][0].plot(time, circcvl(overlaps_sample[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-        ax[task][1].plot(time, circcvl(overlaps_dist[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+        sample = overlap[size:].mean(0)
+        ax[task][0].plot(time, sample, label=i+1, color = colors[i]);
+
+        # ax[task][0].plot(time, circcvl(overlaps_sample[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        # ax[task][0].plot(time, circcvl(overlaps_sample[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+
+        # size = overlaps_dist[task][i].shape[0] // 2
+        overlap = overlaps_dist[task][i]
+        size = overlap.shape[0] // 2
+        dist = overlap[:size].mean(0)
+        ax[task][1].plot(time, dist, label=i+1, color = colors[i]);
+
+        dist = overlap[size:].mean(0)
+        ax[task][1].plot(time, dist, label=i+1, color = colors2[i]);
+
+        # ax[task][1].plot(overlaps_dist[task][i][:size].mean(0), label=i+1, color = colors[i]);
+        # ax[task][1].plot(time, circcvl(overlaps_dist[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        # ax[task][1].plot(time, circcvl(overlaps_dist[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
 
         options['day'] = i+1
-        X, y = get_X_y_S1_S2(X_days, y_days, **options)
-        size = np.sum(y==-1)
+        # X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        # size = np.sum(y==-1)
 
-        ax[task][2].plot(time, circcvl(overlaps_choice[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-        ax[task][2].plot(time, circcvl(overlaps_choice[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        # ax[task][2].plot(time, circcvl(overlaps_choice[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+        # ax[task][2].plot(time, circcvl(overlaps_choice[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
 
-    # ax[task][2].legend(fontsize=10)
+    ax[task][2].legend(fontsize=10)
     ax[task][0].set_xlabel('Time (s)')
     ax[task][1].set_xlabel('Time (s)')
     ax[task][2].set_xlabel('Time (s)')
@@ -870,59 +949,105 @@
         add_vlines(ax[task][i])
         # ax[task][i].set_ylim([-20, 20])
 
-  plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
-  plt.show()
+  # plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
+  # plt.show()
 #+end_src
 
 #+RESULTS:
 :RESULTS:
 : Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-: DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 1 LASER 0
-# [goto error]
-: ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[156], line 32
-:      29     X, y = get_X_y_S1_S2(X_days, y_days, **options)
-:      30     size = np.sum(y==-1)
-: ---> 32     ax[task][2].plot(time, circcvl(overlaps_choice[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
-:      33     ax[task][2].plot(time, circcvl(overlaps_choice[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
-:      35 # ax[task][2].legend(fontsize=10)
-:
-: IndexError: list index out of range
-[[file:./.ob-jupyter/87f439388e49abffcf40b330baeca42b08cc03e3.png]]
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+[[./figures/landscape/figure_23.png]]
 :END:
 
 #+begin_src ipython
-  options['epochs'] = ['ED']
-  size = overlaps_dist.shape[2] // 2
-  colors = ['r', 'b', 'g']
-  for task in range(len(tasks)):
-      dist_avg = []
-      dist_ci = []
-      for i in range(options['n_days']):
-          dist_epoch = avg_epochs(overlaps_dist[task][i][size:] + overlaps_dist[task][i][:size], **options) / 2.0
-          dist_avg.append(dist_epoch.mean(0))
-          dist_ci.append(get_bootstrap_ci(dist_epoch))
-
-      dist_avg = np.array(dist_avg)
-      dist_ci = np.array(dist_ci).T
-
-      plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
-      plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color=colors[task], alpha=0.1)
-
-  plt.axhline(y=0.5, color='k', linestyle='--')
-
-  plt.legend(fontsize=10)
-  plt.xticks(np.arange(1, options['n_days']+1))
-  # plt.yticks([0.4, 0.6, 0.8, 1.0])
-  plt.xlabel('Day')
-  plt.ylabel('Dist. Overlap')
-  plt.savefig('%s_overlaps_dist_day.svg' % options['mouse'], dpi=300)
-  plt.show()
+overlaps_sample = overlaps_sample[..., 0]
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/0ad906773fa3f3b98296edac52f8108fb2664c6b.png]]
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+size = overlaps_sample.shape[2] // 2
+colors = ['r', 'b', 'g']
+for task in range(len(tasks)):
+    sample_avg = []
+    sample_ci = []
+    for i in range(options['n_days']):
+        sample_epoch = avg_epochs(-overlaps_sample[task][i][size:] + overlaps_sample[task][i][:size], **options) / 2.0
+        sample_avg.append(sample_epoch.mean(0))
+        sample_ci.append(get_bootstrap_ci(sample_epoch))
+
+    sample_avg = np.array(sample_avg)
+    sample_ci = np.array(sample_ci).T
+
+    plt.plot(np.arange(1, options['n_days']+1), sample_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
+    plt.fill_between(np.arange(1, options['n_days']+1), sample_ci[0], sample_ci[1], color=colors[task], alpha=0.1)
+
+plt.axhline(y=0.5, color='k', linestyle='--')
+
+plt.legend(fontsize=10)
+plt.xticks(np.arange(1, options['n_days']+1))
+# plt.yticks([0.4, 0.6, 0.8, 1.0])
+plt.xlabel('Day')
+plt.ylabel('Sample. Overlap')
+plt.savefig('%s_overlaps_sample_day.svg' % options['mouse'], dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: AttributeError                            Traceback (most recent call last)
+: Cell In[75], line 2
+:       1 options['epochs'] = ['ED']
+: ----> 2 size = overlaps_sample.shape[2] // 2
+:       3 colors = ['r', 'b', 'g']
+:       4 for task in range(len(tasks)):
+:
+: AttributeError: 'list' object has no attribute 'shape'
+:END:
+
+#+begin_src ipython
+overlaps_dist = overlaps_dist[..., 0]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['epochs'] = ['STIM']
+size = overlaps_dist.shape[2] // 2
+colors = ['r', 'b', 'g']
+for task in range(len(tasks)):
+    dist_avg = []
+    dist_ci = []
+    for i in range(options['n_days']):
+        dist_epoch = avg_epochs(overlaps_dist[task][i][size:] + overlaps_dist[task][i][:size], **options) / 2.0
+        dist_avg.append(dist_epoch.mean(0))
+        dist_ci.append(get_bootstrap_ci(dist_epoch))
+
+    dist_avg = np.array(dist_avg)
+    dist_ci = np.array(dist_ci).T
+
+    plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
+    plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color=colors[task], alpha=0.1)
+
+plt.axhline(y=0.0, color='k', linestyle='--')
+
+plt.legend(fontsize=10)
+plt.xticks(np.arange(1, options['n_days']+1))
+# plt.yticks([0.4, 0.6, 0.8, 1.0])
+plt.xlabel('Day')
+plt.ylabel('Dist. Overlap')
+plt.savefig('%s_overlaps_dist_day.svg' % options['mouse'], dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_27.png]]
 
 #+begin_src ipython
   colors = ['r', 'b', 'g']
@@ -968,10 +1093,11 @@
 
 #+RESULTS:
 :RESULTS:
+: X_S1 (19, 693, 84) X_S2 (13, 693, 84)
 # [goto error]
 : ---------------------------------------------------------------------------
 : IndexError                                Traceback (most recent call last)
-: Cell In[158], line 19
+: Cell In[54], line 19
 :      16 size = np.sum(y==-1)
 :      17 # print(y.shape, size, overlaps_choice[task][i].shape)
 : ---> 19 choice_epoch = np.nanmean(avg_epochs(-overlaps_choice[task][i][size:], **options)) + np.nanmean(avg_epochs(overlaps_choice[task][i][:size], **options))
@@ -1028,9 +1154,9 @@
 : ChRM04_overlaps_tasks_0.95_l1_ratio.pkl
 : overlaps (3, 1, 6, 32, 84)
 : JawsM15_overlaps_tasks_0.95_l1_ratio.pkl
-: overlaps (3, 3, 6, 32, 84)
+: overlaps (2, 3, 3, 64, 84)
 : JawsM18_overlaps_tasks_0.95_l1_ratio.pkl
-: file not found
+: overlaps (2, 3, 3, 64, 84)
 : ACCM03_overlaps_tasks_0.95_l1_ratio.pkl
 : overlaps (2, 3, 5, 64, 84)
 : ACCM04_overlaps_tasks_0.95_l1_ratio.pkl
@@ -1082,34 +1208,34 @@
 :RESULTS:
 # [goto error]
 #+begin_example
-  [0;31m---------------------------------------------------------------------------[0m
-  [0;31mAxisError[0m                                 Traceback (most recent call last)
-  Cell [0;32mIn[161], line 14[0m
-  [1;32m     12[0m [38;5;28;01mfor[39;00m j [38;5;129;01min[39;00m [38;5;28mrange[39m(overlaps_sample[38;5;241m.[39mshape[[38;5;241m0[39m]):
-  [1;32m     13[0m     sample_epoch [38;5;241m=[39m avg_epochs(overlaps_sample[j], [38;5;241m*[39m[38;5;241m*[39moptions)
-  [0;32m---> 14[0m     sample_avg[38;5;241m.[39mappend([41msample_epoch[49m[38;5;241;41m.[39;49m[41mmean[49m[41m([49m[38;5;241;41m0[39;49m[41m)[49m)
-  [1;32m     15[0m     [38;5;66;03m# sample_ci.append(get_bootstrap_ci(sample_epoch))[39;00m
-  [1;32m     17[0m sample_avg [38;5;241m=[39m np[38;5;241m.[39marray(sample_avg)
+---------------------------------------------------------------------------
+AxisError                                 Traceback (most recent call last)
+Cell In[83], line 14
+     12 for j in range(overlaps_sample.shape[0]):
+     13     sample_epoch = avg_epochs(overlaps_sample[j], **options)
+---> 14     sample_avg.append(sample_epoch.mean(0))
+     15     # sample_ci.append(get_bootstrap_ci(sample_epoch))
+     17 sample_avg = np.array(sample_avg)
 
-  File [0;32m~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:106[0m, in [0;36m_mean[0;34m(a, axis, dtype, out, keepdims, where)[0m
-  [1;32m    102[0m arr [38;5;241m=[39m asanyarray(a)
-  [1;32m    104[0m is_float16_result [38;5;241m=[39m [38;5;28;01mFalse[39;00m
-  [0;32m--> 106[0m rcount [38;5;241m=[39m [41m_count_reduce_items[49m[41m([49m[41marr[49m[41m,[49m[41m [49m[41maxis[49m[41m,[49m[41m [49m[41mkeepdims[49m[38;5;241;41m=[39;49m[41mkeepdims[49m[41m,[49m[41m [49m[41mwhere[49m[38;5;241;41m=[39;49m[41mwhere[49m[41m)[49m
-  [1;32m    107[0m [38;5;28;01mif[39;00m rcount [38;5;241m==[39m [38;5;241m0[39m [38;5;28;01mif[39;00m where [38;5;129;01mis[39;00m [38;5;28;01mTrue[39;00m [38;5;28;01melse[39;00m umr_any(rcount [38;5;241m==[39m [38;5;241m0[39m, axis[38;5;241m=[39m[38;5;28;01mNone[39;00m):
-  [1;32m    108[0m     warnings[38;5;241m.[39mwarn([38;5;124m"[39m[38;5;124mMean of empty slice.[39m[38;5;124m"[39m, [38;5;167;01mRuntimeWarning[39;00m, stacklevel[38;5;241m=[39m[38;5;241m2[39m)
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:106, in _mean(a, axis, dtype, out, keepdims, where)
+    102 arr = asanyarray(a)
+    104 is_float16_result = False
+--> 106 rcount = _count_reduce_items(arr, axis, keepdims=keepdims, where=where)
+    107 if rcount == 0 if where is True else umr_any(rcount == 0, axis=None):
+    108     warnings.warn("Mean of empty slice.", RuntimeWarning, stacklevel=2)
 
-  File [0;32m~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:77[0m, in [0;36m_count_reduce_items[0;34m(arr, axis, keepdims, where)[0m
-  [1;32m     75[0m     items [38;5;241m=[39m [38;5;241m1[39m
-  [1;32m     76[0m     [38;5;28;01mfor[39;00m ax [38;5;129;01min[39;00m axis:
-  [0;32m---> 77[0m         items [38;5;241m*[39m[38;5;241m=[39m arr[38;5;241m.[39mshape[mu[38;5;241m.[39mnormalize_axis_index(ax, arr[38;5;241m.[39mndim)]
-  [1;32m     78[0m     items [38;5;241m=[39m nt[38;5;241m.[39mintp(items)
-  [1;32m     79[0m [38;5;28;01melse[39;00m:
-  [1;32m     80[0m     [38;5;66;03m# TODO: Optimize case when `where` is broadcast along a non-reduction[39;00m
-  [1;32m     81[0m     [38;5;66;03m# axis and full sum is more excessive than needed.[39;00m
-  [1;32m     82[0m
-  [1;32m     83[0m     [38;5;66;03m# guarded to protect circular imports[39;00m
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:77, in _count_reduce_items(arr, axis, keepdims, where)
+     75     items = 1
+     76     for ax in axis:
+---> 77         items *= arr.shape[mu.normalize_axis_index(ax, arr.ndim)]
+     78     items = nt.intp(items)
+     79 else:
+     80     # TODO: Optimize case when `where` is broadcast along a non-reduction
+     81     # axis and full sum is more excessive than needed.
+     82
+     83     # guarded to protect circular imports
 
-  [0;31mAxisError[0m: axis 0 is out of bounds for array of dimension 0
+AxisError: axis 0 is out of bounds for array of dimension 0
 #+end_example
 :END:
 
@@ -1156,34 +1282,34 @@
 :RESULTS:
 # [goto error]
 #+begin_example
-  [0;31m---------------------------------------------------------------------------[0m
-  [0;31mAxisError[0m                                 Traceback (most recent call last)
-  Cell [0;32mIn[162], line 13[0m
-  [1;32m     11[0m [38;5;28;01mfor[39;00m j [38;5;129;01min[39;00m [38;5;28mrange[39m(overlaps_choice[38;5;241m.[39mshape[[38;5;241m0[39m]):
-  [1;32m     12[0m     choice_epoch [38;5;241m=[39m avg_epochs(overlaps_choice[j], [38;5;241m*[39m[38;5;241m*[39moptions)
-  [0;32m---> 13[0m     choice_avg[38;5;241m.[39mappend([41mchoice_epoch[49m[38;5;241;41m.[39;49m[41mmean[49m[41m([49m[38;5;241;41m0[39;49m[41m)[49m)
-  [1;32m     15[0m choice_avg [38;5;241m=[39m np[38;5;241m.[39marray(choice_avg)
-  [1;32m     16[0m [38;5;28;01mwhile[39;00m choice_avg[38;5;241m.[39mshape[[38;5;241m0[39m] [38;5;241m!=[39m[38;5;241m6[39m:
+---------------------------------------------------------------------------
+AxisError                                 Traceback (most recent call last)
+Cell In[84], line 13
+     11 for j in range(overlaps_choice.shape[0]):
+     12     choice_epoch = avg_epochs(overlaps_choice[j], **options)
+---> 13     choice_avg.append(choice_epoch.mean(0))
+     15 choice_avg = np.array(choice_avg)
+     16 while choice_avg.shape[0] !=6:
 
-  File [0;32m~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:106[0m, in [0;36m_mean[0;34m(a, axis, dtype, out, keepdims, where)[0m
-  [1;32m    102[0m arr [38;5;241m=[39m asanyarray(a)
-  [1;32m    104[0m is_float16_result [38;5;241m=[39m [38;5;28;01mFalse[39;00m
-  [0;32m--> 106[0m rcount [38;5;241m=[39m [41m_count_reduce_items[49m[41m([49m[41marr[49m[41m,[49m[41m [49m[41maxis[49m[41m,[49m[41m [49m[41mkeepdims[49m[38;5;241;41m=[39;49m[41mkeepdims[49m[41m,[49m[41m [49m[41mwhere[49m[38;5;241;41m=[39;49m[41mwhere[49m[41m)[49m
-  [1;32m    107[0m [38;5;28;01mif[39;00m rcount [38;5;241m==[39m [38;5;241m0[39m [38;5;28;01mif[39;00m where [38;5;129;01mis[39;00m [38;5;28;01mTrue[39;00m [38;5;28;01melse[39;00m umr_any(rcount [38;5;241m==[39m [38;5;241m0[39m, axis[38;5;241m=[39m[38;5;28;01mNone[39;00m):
-  [1;32m    108[0m     warnings[38;5;241m.[39mwarn([38;5;124m"[39m[38;5;124mMean of empty slice.[39m[38;5;124m"[39m, [38;5;167;01mRuntimeWarning[39;00m, stacklevel[38;5;241m=[39m[38;5;241m2[39m)
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:106, in _mean(a, axis, dtype, out, keepdims, where)
+    102 arr = asanyarray(a)
+    104 is_float16_result = False
+--> 106 rcount = _count_reduce_items(arr, axis, keepdims=keepdims, where=where)
+    107 if rcount == 0 if where is True else umr_any(rcount == 0, axis=None):
+    108     warnings.warn("Mean of empty slice.", RuntimeWarning, stacklevel=2)
 
-  File [0;32m~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:77[0m, in [0;36m_count_reduce_items[0;34m(arr, axis, keepdims, where)[0m
-  [1;32m     75[0m     items [38;5;241m=[39m [38;5;241m1[39m
-  [1;32m     76[0m     [38;5;28;01mfor[39;00m ax [38;5;129;01min[39;00m axis:
-  [0;32m---> 77[0m         items [38;5;241m*[39m[38;5;241m=[39m arr[38;5;241m.[39mshape[mu[38;5;241m.[39mnormalize_axis_index(ax, arr[38;5;241m.[39mndim)]
-  [1;32m     78[0m     items [38;5;241m=[39m nt[38;5;241m.[39mintp(items)
-  [1;32m     79[0m [38;5;28;01melse[39;00m:
-  [1;32m     80[0m     [38;5;66;03m# TODO: Optimize case when `where` is broadcast along a non-reduction[39;00m
-  [1;32m     81[0m     [38;5;66;03m# axis and full sum is more excessive than needed.[39;00m
-  [1;32m     82[0m
-  [1;32m     83[0m     [38;5;66;03m# guarded to protect circular imports[39;00m
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:77, in _count_reduce_items(arr, axis, keepdims, where)
+     75     items = 1
+     76     for ax in axis:
+---> 77         items *= arr.shape[mu.normalize_axis_index(ax, arr.ndim)]
+     78     items = nt.intp(items)
+     79 else:
+     80     # TODO: Optimize case when `where` is broadcast along a non-reduction
+     81     # axis and full sum is more excessive than needed.
+     82
+     83     # guarded to protect circular imports
 
-  [0;31mAxisError[0m: axis 0 is out of bounds for array of dimension 0
+AxisError: axis 0 is out of bounds for array of dimension 0
 #+end_example
 :END:
 
