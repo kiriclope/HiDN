@@ -155,6 +155,15 @@ def create_df(y_raw, day=None):
     y_df.loc[y_df.test_odor == 11, "test_odor"] = 0
     y_df.loc[y_df.test_odor == 12, "test_odor"] = 1
 
+    y_df.loc[y_df.tasks == 0, "dist_odor"] = np.nan
+    y_df.loc[y_df.tasks == 13, "dist_odor"] = 0
+    y_df.loc[y_df.tasks == 14, "dist_odor"] = 1
+
+    y_df.loc[y_df.response == 1, "choice"] = 0
+    y_df.loc[y_df.response == 2, "choice"] = 1
+    y_df.loc[y_df.response == 3, "choice"] = 0
+    y_df.loc[y_df.response == 4, "choice"] = 1
+
     y_df.loc[y_df.response == 1, "response"] = "correct_hit"
     y_df.loc[y_df.response == 2, "response"] = "incorrect_miss"
     y_df.loc[y_df.response == 3, "response"] = "incorrect_fa"
@@ -498,9 +507,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             )
         if kwargs["day"] == "last":
             idx_days = y.day > (kwargs["n_first"] + kwargs["n_middle"] + kwargs["n_discard"])
-            # idx_days = (y.day == 4) | (y.day == 6)
     else:
-        # print("single day")
         idx_days = y.day == kwargs["day"]
 
     idx_laser = True
@@ -523,7 +530,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
         print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
 
     X_S1_S2 = np.vstack((X_S1, X_S2, X_S3, X_S4))
-
 
     if kwargs["multilabel"]:
         # This is the multiclass version of the problem
@@ -550,7 +556,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             )
         )
     else:
-        y_S1_S2 = np.hstack((np.zeros(X_S1.shape[0]), np.ones(X_S2.shape[0])))
+        # y_S1_S2 = np.hstack((np.zeros(X_S1.shape[0]), np.ones(X_S2.shape[0])))
 
         y_S1 = y[idx_S1 & idx_trials & idx_days & idx_laser & idx_tasks]
         y_S2 = y[idx_S2 & idx_trials & idx_days & idx_laser & idx_tasks]
