@@ -60,6 +60,7 @@ Look at incorrect trials vs correct trials, trial by trial
   from src.stats.bootstrap import my_boots_ci
   from src.decode.bump import decode_bump, circcvl
   from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.decode.classifiers import safeSelector
   from src.preprocess.helpers import avg_epochs
 #+end_src
 
@@ -206,6 +207,11 @@ Look at incorrect trials vs correct trials, trial by trial
               self.n_comp = kwargs['n_comp']
               pipe.append(("pca", PCA(n_components=self.n_comp)))
 
+          self.prescreen = kwargs['prescreen']
+          self.alpha = kwargs['pval']
+          if kwargs["prescreen"] is not None:
+              pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
+
           pipe.append(("net", net))
           self.model = Pipeline(pipe)
 
@@ -280,7 +286,12 @@ Look at incorrect trials vs correct trials, trial by trial
               for i in range(X.shape[-1]):
                   X[..., i] = scaler.transform(X[..., i])
 
-          if self.n_comp is not None:
+          if (self.prescreen is not None) and (self.prescreen != 0):
+              filter = model.named_steps['filter']
+              idx = filter.selector.get_support(indices=True)
+              self.overlaps = (np.swapaxes(X[:, idx], 1, -1) @ coefs) / np.linalg.norm(coefs, axis=0)
+
+          elif (self.n_comp is not None) and (self.n_comp != 0):
               pca = model.named_steps['pca']
               X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
 
@@ -289,8 +300,8 @@ Look at incorrect trials vs correct trials, trial by trial
 
               self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) # / np.linalg.norm(coefs, axis=0)
           else:
-              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs) # / np.linalg.norm(coefs, axis=0)
-              # self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) # / np.linalg.norm(coefs, axis=0)
+              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs) / np.linalg.norm(coefs, axis=0)
+              # self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs, axis=0)
 
           return self.overlaps
 
@@ -333,7 +344,6 @@ Look at incorrect trials vs correct trials, trial by trial
 
 #+RESULTS:
 
-
   #+begin_src ipython :tangle ../src/torch/main.py
     from src.common.get_data import get_X_y_days, get_X_y_S1_S2
     from src.preprocess.helpers import avg_epochs
@@ -351,6 +361,8 @@ Look at incorrect trials vs correct trials, trial by trial
             X_days, y_days = get_X_y_days(**options)
             X, y = get_X_y_S1_S2(X_days, y_days, **options)
 
+            y_labels = y.copy()
+
             if options['features'] == 'sample':
                 y = y.sample_odor.dropna().to_numpy()
             elif options['features'] == 'distractor':
@@ -366,23 +378,19 @@ Look at incorrect trials vs correct trials, trial by trial
             X_avg = avg_epochs(X, **options).astype('float32')
             y_avg = y
 
-            # options['trials'] = 'incorrect'
-            # X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+            if options['trials'] == 'correct':
+                options['trials'] = ''
+                X, _ = get_X_y_S1_S2(X_days, y_days, **options)
 
             if dum:
                     options['features'] = 'sample'
                     options['task'] = task
                     X, _ = get_X_y_S1_S2(X_days, y_days, **options)
 
-            options['trials'] = ''
-
-            # index = mice.index(options['mouse'])
-            # model.num_features = N_NEURONS[index]
-
-            if options['class_weight']:
-                    pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
-                    print('imbalance', pos_weight)
-                    model.criterion__pos_weight = pos_weight
+            # if options['class_weight']:
+            #         pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
+            #         print('imbalance', pos_weight)
+            #         model.criterion__pos_weight = pos_weight
 
             if RETURN is None:
                 return None
@@ -399,7 +407,7 @@ Look at incorrect trials vs correct trials, trial by trial
                 overlaps = model.get_bootstrap_overlaps(X)
                 end = perf_counter()
                 print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return overlaps
+                return overlaps, y_labels
             elif 'coefs' in RETURN:
                 coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
                 end = perf_counter()
@@ -499,6 +507,7 @@ Look at incorrect trials vs correct trials, trial by trial
   kwargs = {
       'mouse': 'JawsM15', 'laser': 0,
       'trials': '', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 96,
       'preprocess': False, 'scaler_BL': 'robust',
       'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
@@ -506,7 +515,7 @@ Look at incorrect trials vs correct trials, trial by trial
       'n_comp': None, 'scaler': None,
       'bootstrap': 1, 'n_boots': 128,
       'n_splits': 3, 'n_repeats': 32,
-      'class_weight': 1,
+      'class_weight': 0,
       'multilabel':0,
   }
 
@@ -522,29 +531,9 @@ Look at incorrect trials vs correct trials, trial by trial
 
 #+RESULTS:
 
-#+begin_src ipython
-options['reload'] = 0
-print(options['tasks'])
-X_days, y_days = get_X_y_days(**options)
-X, y = get_X_y_S1_S2(X_days, y_days, **options)
-#+end_src
-
-#+RESULTS:
-: ['DPA' 'DualGo' 'DualNoGo']
-: multiple days 0 3 0
-: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-
-#+begin_src ipython
-# print(y.shape)
-# print(y.head())
-print(y.tasks.unique())
-#+end_src
-
-#+RESULTS:
-: ['DualGo']
-
 * Decoding vs days
 ** RNN
+
 #+begin_src ipython
 net = RegularizedNet(
     module=Perceptron,
@@ -634,21 +623,18 @@ Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 16s
+Elapsed (with compilation) = 0h 0m 33s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 10s
+Elapsed (with compilation) = 0h 0m 9s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
@@ -656,13 +642,11 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
@@ -670,27 +654,23 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 5s
+Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
@@ -698,13 +678,11 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 11s
+Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
@@ -712,13 +690,11 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
@@ -726,13 +702,11 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
@@ -740,13 +714,11 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
@@ -754,13 +726,11 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 9s
+Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
@@ -768,13 +738,11 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
@@ -782,97 +750,83 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
+Elapsed (with compilation) = 0h 0m 6s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X (32, 693, 84) y (32,)
+Elapsed (with compilation) = 0h 0m 6s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X (32, 693, 84) y (32,)
+Elapsed (with compilation) = 0h 0m 6s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X (32, 693, 84) y (32,)
+Elapsed (with compilation) = 0h 0m 6s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X (32, 693, 84) y (32,)
 Elapsed (with compilation) = 0h 0m 5s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 9s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 6s
+Elapsed (with compilation) = 0h 0m 5s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 X (32, 693, 84) y (32,)
-imbalance tensor(1., device='cuda:0')
 Elapsed (with compilation) = 0h 0m 6s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
@@ -880,8 +834,7 @@ X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
 DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
 X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-imbalance tensor(1., device='cuda:0')
-Elapsed (with compilation) = 0h 0m 9s
+Elapsed (with compilation) = 0h 0m 10s
 #+end_example
 
 #+begin_src ipython
@@ -890,7 +843,6 @@ print(overlaps_sample[2][2].shape)
 
 #+RESULTS:
 : (32, 84, 1)
-
 
 #+begin_src ipython
 overlaps_save = np.stack((overlaps_sample, overlaps_dist))
@@ -943,105 +895,174 @@ print(overlaps_dist.shape)
 : (3, 6, 32, 84, 1)
 
 #+begin_src ipython
-import pandas as pd
-options['n_days'] = 6
-cmap = plt.get_cmap('Blues')
-colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
-cmap = plt.get_cmap('Reds')
-colors2 = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
-width = 6
-golden_ratio = (5**.5 - 1) / 2
+  options['n_days'] = 6
+  cmap = plt.get_cmap('Blues')
+  colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+  cmap = plt.get_cmap('Reds')
+  colors2 = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
+  width = 6
+  golden_ratio = (5**.5 - 1) / 2
 
-task = 1
-# mask = ~np.isnan(overlaps_dist).any(axis=2)
-# overlaps_dist = overlaps_dist[:, mask.any(axis=0)]
-options['features'] = 'choice'
-options['preprocess'] = False
-X_days, y_days = get_X_y_days(**options)
+  task = 1
+  # mask = ~np.isnan(overlaps_dist).any(axis=2)
+  # overlaps_dist = overlaps_dist[:, mask.any(axis=0)]
+  options['features'] = 'choice'
+  options['preprocess'] = False
+  X_days, y_days = get_X_y_days(**options)
 
-time = np.linspace(0, 14, X_days.shape[-1])
+  time = np.linspace(0, 14, X_days.shape[-1])
 
-# fig, ax = plt.subplots(3, 3, figsize= [2.5 * width, 2.5*height])
+  fig, ax = plt.subplots(3, 2, figsize= [2* width, 3*height])
 
-for task in range(1):
-    for i in range(6):
-        # i = 2
-        task = 1
-        overlap = overlaps_dist[task][i]
+  for task in range(3):
+    for i in range(options['n_days']):
+        overlap = overlaps_sample[task][i]
         size = overlap.shape[0] // 2
 
-        options['day'] = days[i]
-        options['task'] = options['tasks'][task]
-        X_days, y_days = get_X_y_days(**options)
-        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        sample = overlap[:size].mean(0)
+        ax[task][0].plot(time, sample, label=i+1, color = colors[i]);
 
-        sample = overlap[..., 0].tolist()
-        y['overlaps'] = sample
+        sample = overlap[size:].mean(0)
+        ax[task][0].plot(time, sample, label=i+1, color = colors[i]);
 
-        options['epochs'] = ['ED']
-        y['overlaps_ED'] = y['overlaps'].apply(lambda x: avg_epochs(np.array(x), **options))
+        # ax[task][0].plot(time, circcvl(overlaps_sample[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        # ax[task][0].plot(time, circcvl(overlaps_sample[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
 
-        options['epochs'] = ['LD']
-        y['overlaps_LD'] = y['overlaps'].apply(lambda x: avg_epochs(np.array(x), **options))
+        # size = overlaps_dist[task][i].shape[0] // 2
+        overlap = overlaps_dist[task][i]
+        size = overlap.shape[0] // 2
+        dist = overlap[:size].mean(0)
+        ax[task][1].plot(time, dist, label=i+1, color = colors[i]);
 
-        idx = y.response.str.contains("incorrect")
-        y_incorrect = y[idx]
-        # print(y_incorrect.head())
+        dist = overlap[size:].mean(0)
+        ax[task][1].plot(time, dist, label=i+1, color = colors2[i]);
 
-        idx = ~y.response.str.contains("incorrect")
-        y_correct = y[idx]
-        # print(y_correct.head())
+        # ax[task][1].plot(overlaps_dist[task][i][:size].mean(0), label=i+1, color = colors[i]);
+        # ax[task][1].plot(time, circcvl(overlaps_dist[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
+        # ax[task][1].plot(time, circcvl(overlaps_dist[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
 
-        # plt.scatter(y_correct['overlaps_ED'], y_correct['overlaps_LD'])
-        # plt.scatter(y_incorrect['overlaps_ED'], y_incorrect['overlaps_LD'])
+        options['day'] = i+1
+        # X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        # size = np.sum(y==-1)
 
-        # print(y_incorrect['tasks'].unique())
-        # plt.scatter(y_incorrect['tasks'].astype('category'), y_incorrect['overlaps_LD'])
+        # ax[task][2].plot(time, circcvl(overlaps_choice[task][i][size:].mean(0), windowSize=2), label=i+1, color = colors2[i]);
+        # ax[task][2].plot(time, circcvl(overlaps_choice[task][i][:size].mean(0), windowSize=2), label=i+1, color = colors[i]);
 
-        # correct_df = pd.DataFrame(y_correct['overlaps'].tolist()).transpose()
-        # correct_df.plot(legend=False, alpha=0.3)
+    # ax[task][1].legend(fontsize=10)
+    ax[task][0].set_xlabel('Time (s)')
+    ax[task][1].set_xlabel('Time (s)')
+    ax[task][0].set_ylabel('Sample Overlap')
+    ax[task][1].set_ylabel('Distractor Overlap')
 
-        # incorrect_df = pd.DataFrame(y_incorrect['overlaps'].tolist()).transpose()
-        # incorrect_df.plot(legend=False, alpha=1)
+    for i in range(2):
+        ax[task][i].set_xticks(np.arange(0, 16, 2))
+        ax[task][i].set_xlim([0, 14])
+        add_vlines(ax[task][i])
+        # ax[task][i].set_ylim([-20, 20])
 
-        # plt.show()
+  # plt.savefig('%s_overlaps.svg' % options['mouse'], dpi=300)
+  # plt.show()
 #+end_src
 
 #+RESULTS:
 :RESULTS:
 : Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-: DATA: FEATURES choice TASK DualGo TRIALS  DAYS last LASER 0
-: multiple days 0 2 2
-: X_S1 (23, 693, 84) X_S2 (41, 693, 84)
-[[./figures/landscape/figure_26.png]]
+[[./figures/landscape/figure_23.png]]
 :END:
 
 #+begin_src ipython
-options['tasks'] = 'all'
-options['reload'] = 1
-_, y = get_X_y_days(**options)
-y = y[y['laser']==0]
-print(y.keys())
+df = []
+for task in tasks:
+    options['task'] = task
+    df2 = []
+    for day in days:
+        options['day'] = day
+        X_days, y_days = get_X_y_days(**options)
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
+        df2.append(y)
+    df.append(pd.concat(df2))
+y = pd.concat(df)
 #+end_src
 
 #+RESULTS:
 #+begin_example
-Reading data from source file
-mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
-mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
-mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
-mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
-mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
-mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
-Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
-       'dist_odor', 'choice'],
-      dtype='object')
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DPA TRIALS  DAYS 1 LASER 0
+X_S1 (19, 693, 84) X_S2 (13, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DPA TRIALS  DAYS 2 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DPA TRIALS  DAYS 3 LASER 0
+X_S1 (17, 693, 84) X_S2 (15, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DPA TRIALS  DAYS 4 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DPA TRIALS  DAYS 5 LASER 0
+X_S1 (9, 693, 84) X_S2 (23, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DPA TRIALS  DAYS 6 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualGo TRIALS  DAYS 1 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualGo TRIALS  DAYS 2 LASER 0
+X_S1 (9, 693, 84) X_S2 (23, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualGo TRIALS  DAYS 3 LASER 0
+X_S1 (14, 693, 84) X_S2 (18, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualGo TRIALS  DAYS 4 LASER 0
+X_S1 (17, 693, 84) X_S2 (15, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualGo TRIALS  DAYS 5 LASER 0
+X_S1 (8, 693, 84) X_S2 (24, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualGo TRIALS  DAYS 6 LASER 0
+X_S1 (15, 693, 84) X_S2 (17, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 1 LASER 0
+X_S1 (22, 693, 84) X_S2 (10, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 2 LASER 0
+X_S1 (18, 693, 84) X_S2 (14, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 3 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 4 LASER 0
+X_S1 (14, 693, 84) X_S2 (18, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 5 LASER 0
+X_S1 (7, 693, 84) X_S2 (25, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 6 LASER 0
+X_S1 (15, 693, 84) X_S2 (17, 693, 84)
 #+end_example
 
 #+begin_src ipython
-overlaps_sample = np.array(overlaps_sample)
-overlaps  = np.vstack(np.hstack(overlaps_sample)[..., 0])
+print(y.response.unique())
+#+end_src
+
+#+RESULTS:
+: ['correct_hit' 'incorrect_fa' 'correct_rej' 'incorrect_miss']
+
+#+begin_src ipython
+y['behavior'] = y['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+y['pair'] = y['response'].apply(lambda x: 0 if ('rej' in x) or ('fa' in x) else 1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+# print(np.vstack(overlaps_dist).shape)
+# print(np.vstack(np.vstack(np.swapaxes(overlaps_dist, 0, -3))).shape)
+# overlaps  = np.vstack(np.hstack(overlaps_sample)[..., 0])
+overlaps  = overlaps_sample[..., 0].reshape(-1, 84)
+# overlaps = np.vstack(np.vstack(np.swapaxes(overlaps_dist, 0, -3)))[..., 0]
 print(overlaps.shape)
 #+end_src
 
@@ -1050,6 +1071,7 @@ print(overlaps.shape)
 
 #+begin_src ipython
 y['overlaps'] = overlaps.tolist()
+y['overlaps'] = y['overlaps'].apply(np.array)
 
 options['epochs'] = ['ED']
 y['overlaps_ED'] = y['overlaps'].apply(lambda x: avg_epochs(np.array(x), **options))
@@ -1067,15 +1089,17 @@ print(overlaps.shape)
 : (576, 84)
 
 #+begin_src ipython
+y['OED_sign'] = y['overlaps_ED'].apply(lambda x: 0 if x<=0 else 1)
+y['OLD_sign'] = y['overlaps_LD'].apply(lambda x: 0 if x<=0 else 1)
 print(y.overlaps_ED.head())
 #+end_src
 
 #+RESULTS:
-: 0    0.912844
-: 2    2.088675
-: 3    0.459715
-: 5    0.921386
-: 6    1.718756
+: 14    0.670362
+: 21    1.601941
+: 25    0.438161
+: 26    0.689194
+: 32    1.255044
 : Name: overlaps_ED, dtype: float64
 
 #+begin_src ipython
@@ -1085,8 +1109,46 @@ print(y.keys())
 #+RESULTS:
 : Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
 :        'dist_odor', 'choice', 'overlaps', 'overlaps_ED', 'overlaps_MD',
-:        'overlaps_LD'],
+:        'overlaps_LD', 'behavior', 'pair', 'OED_sign', 'OLD_sign'],
 :       dtype='object')
+
+#+begin_src ipython
+print(y.choice.shape)
+#+end_src
+
+#+RESULTS:
+: (576,)
+
+#+begin_src ipython
+print(y.response.unique())
+#+end_src
+
+#+RESULTS:
+: ['correct_hit' 'incorrect_fa' 'correct_rej' 'incorrect_miss']
+
+#+begin_src ipython
+df = y[y.tasks=='DPA'].copy()
+# df['overlaps'] = df['overlaps'].apply(np.array)
+
+# Group by 'day' and compute the mean overlaps for each day
+mean_overlaps_by_day = df.groupby('day')['overlaps'].apply(lambda x: np.mean(np.stack(x), axis=0))
+
+# Prepare data for plotting
+mean_overlaps_df = pd.DataFrame(mean_overlaps_by_day.tolist(), index=mean_overlaps_by_day.index)
+
+# Plotting
+for idx, row in mean_overlaps_df.iterrows():
+    plt.plot(np.linspace(0, 14, 84), row, label=f"Day {idx}")
+
+plt.xlabel('Time (s)')
+plt.ylabel('Overlap')
+plt.legend(fontsize=10)
+add_vlines()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_33.png]]
 
 #+begin_src ipython
   import statsmodels.api as sm
@@ -1096,46 +1158,62 @@ print(y.keys())
   y['day'] = y['day'].astype('category')
   y['choice'] = y['choice'].astype('category')
 
-  formula = 'overlaps_LD ~ choice * day'
+  formula = 'OLD_sign ~ choice'
   results = []
 
   for day in y.day.unique():
       data = y[(y['day'] == day)]
       glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
       result = glm.fit()
-  #results.append(result.params['choice'])
-  print(result.summary())
+      results.append(result)
+
+  print(results[0].summary())
     #+end_src
 
 #+RESULTS:
 #+begin_example
                  Generalized Linear Model Regression Results
 ==============================================================================
-Dep. Variable:            overlaps_LD   No. Observations:                   96
+Dep. Variable:               OLD_sign   No. Observations:                   96
 Model:                            GLM   Df Residuals:                       94
 Model Family:                Gaussian   Df Model:                            1
-Link Function:               Identity   Scale:                          5.2315
-Method:                          IRLS   Log-Likelihood:                -214.35
-Date:                Wed, 21 Aug 2024   Deviance:                       488.87
-Time:                        18:25:33   Pearson chi2:                     489.
-No. Iterations:                     3   Pseudo R-squ. (CS):            0.01803
+Link Function:               Identity   Scale:                         0.16189
+Method:                          IRLS   Log-Likelihood:                -47.806
+Date:                Mon, 26 Aug 2024   Deviance:                       15.217
+Time:                        18:52:40   Pearson chi2:                     15.2
+No. Iterations:                     3   Pseudo R-squ. (CS):             0.4257
 Covariance Type:            nonrobust
-============================================================================================
-                               coef    std err          z      P>|z|      [0.025      0.975]
---------------------------------------------------------------------------------------------
-Intercept                    0.2309      0.169      1.369      0.171      -0.100       0.561
-choice[T.1.0]               -0.3057      0.234     -1.309      0.191      -0.764       0.152
-day[T.2.0]                        0          0        nan        nan           0           0
-day[T.3.0]                        0          0        nan        nan           0           0
-day[T.4.0]                        0          0        nan        nan           0           0
-day[T.5.0]                        0          0        nan        nan           0           0
-day[T.6.0]                   0.2309      0.169      1.369      0.171      -0.100       0.561
-choice[T.1.0]:day[T.2.0]          0          0        nan        nan           0           0
-choice[T.1.0]:day[T.3.0]          0          0        nan        nan           0           0
-choice[T.1.0]:day[T.4.0]          0          0        nan        nan           0           0
-choice[T.1.0]:day[T.5.0]          0          0        nan        nan           0           0
-choice[T.1.0]:day[T.6.0]    -0.3057      0.234     -1.309      0.191      -0.764       0.152
-============================================================================================
+=================================================================================
+                    coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------
+Intercept         0.7895      0.053     14.814      0.000       0.685       0.894
+choice[T.1.0]    -0.6100      0.084     -7.295      0.000      -0.774      -0.446
+=================================================================================
+#+end_example
+
+#+begin_src ipython
+  print(results[0].summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:            overlaps_ED   No. Observations:                   96
+Model:                            GLM   Df Residuals:                       94
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.22748
+Method:                          IRLS   Log-Likelihood:                -64.135
+Date:                Mon, 26 Aug 2024   Deviance:                       21.383
+Time:                        18:05:51   Pearson chi2:                     21.4
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.06226
+Covariance Type:            nonrobust
+=================================================================================
+                    coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------
+Intercept         0.3005      0.063      4.756      0.000       0.177       0.424
+choice[T.1.0]     0.2458      0.099      2.480      0.013       0.052       0.440
+=================================================================================
 #+end_example
 
 #+begin_src ipython
@@ -1145,10 +1223,12 @@ choice[T.1.0]:day[T.6.0]    -0.3057      0.234     -1.309      0.191      -0.764
   y['tasks'] = y['tasks'].astype('category')
   y['day'] = y['day'].astype('category')
 
-  formula = 'overlaps_ED ~ day'
+  formula = 'overlaps_LD ~ day'
+  formula = 'OLD_sign ~ day'
   results = []
 
   glm = smf.glm(formula=formula, data=y, family=sm.families.Gaussian())
+  # glm = smf.mixedlm(formula, y, groups=y['day'], re_formula='1')
   result = glm.fit()
 
   print(result.summary())
@@ -1158,24 +1238,24 @@ choice[T.1.0]:day[T.6.0]    -0.3057      0.234     -1.309      0.191      -0.764
 #+begin_example
                  Generalized Linear Model Regression Results
 ==============================================================================
-Dep. Variable:            overlaps_ED   No. Observations:                  576
+Dep. Variable:               OLD_sign   No. Observations:                  576
 Model:                            GLM   Df Residuals:                      570
 Model Family:                Gaussian   Df Model:                            5
-Link Function:               Identity   Scale:                          11.025
-Method:                          IRLS   Log-Likelihood:                -1505.5
-Date:                Wed, 21 Aug 2024   Deviance:                       6284.3
-Time:                        18:27:09   Pearson chi2:                 6.28e+03
-No. Iterations:                     3   Pseudo R-squ. (CS):           0.005113
+Link Function:               Identity   Scale:                         0.24543
+Method:                          IRLS   Log-Likelihood:                -409.73
+Date:                Mon, 26 Aug 2024   Deviance:                       139.90
+Time:                        18:53:12   Pearson chi2:                     140.
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.02633
 Covariance Type:            nonrobust
 ==============================================================================
                  coef    std err          z      P>|z|      [0.025      0.975]
 ------------------------------------------------------------------------------
-Intercept      0.4175      0.339      1.232      0.218      -0.247       1.082
-day[T.2.0]    -0.1603      0.479     -0.335      0.738      -1.100       0.779
-day[T.3.0]     0.3152      0.479      0.658      0.511      -0.624       1.255
-day[T.4.0]     0.3187      0.479      0.665      0.506      -0.621       1.258
-day[T.5.0]    -0.2919      0.479     -0.609      0.543      -1.231       0.647
-day[T.6.0]     0.2269      0.479      0.473      0.636      -0.712       1.166
+Intercept      0.5417      0.051     10.713      0.000       0.443       0.641
+day[T.2.0]     0.0208      0.072      0.291      0.771      -0.119       0.161
+day[T.3.0]    -0.1875      0.072     -2.622      0.009      -0.328      -0.047
+day[T.4.0]     0.0729      0.072      1.020      0.308      -0.067       0.213
+day[T.5.0]  1.058e-15      0.072   1.48e-14      1.000      -0.140       0.140
+day[T.6.0]    -0.0104      0.072     -0.146      0.884      -0.151       0.130
 ==============================================================================
 #+end_example
 
@@ -1193,14 +1273,14 @@ coefs = []
 for i in result.params.keys():
     coefs.append(result.params[i])
 
-plt.plot(np.arange(1, 7), coefs)
+plt.plot(np.arange(1, 7), coefs[:6])
 plt.xlabel('Day')
 plt.ylabel('$\\beta_{overlap}$')
 plt.show()
     #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_34.png]]
+[[./figures/landscape/figure_38.png]]
 
 #+begin_src ipython
 print(result.summary())
@@ -1210,61 +1290,23 @@ print(result.summary())
 #+begin_example
                  Generalized Linear Model Regression Results
 ==============================================================================
-Dep. Variable:            overlaps_ED   No. Observations:                   96
-Model:                            GLM   Df Residuals:                       91
-Model Family:                Gaussian   Df Model:                            4
-Link Function:               Identity   Scale:                          1.2619
-Method:                          IRLS   Log-Likelihood:                -144.82
-Date:                Wed, 21 Aug 2024   Deviance:                       114.83
-Time:                        17:48:59   Pearson chi2:                     115.
-No. Iterations:                     3   Pseudo R-squ. (CS):            0.01364
+Dep. Variable:            overlaps_ED   No. Observations:                  576
+Model:                            GLM   Df Residuals:                      570
+Model Family:                Gaussian   Df Model:                            5
+Link Function:               Identity   Scale:                         0.34608
+Method:                          IRLS   Log-Likelihood:                -508.70
+Date:                Mon, 26 Aug 2024   Deviance:                       197.27
+Time:                        17:54:52   Pearson chi2:                     197.
+No. Iterations:                     3   Pseudo R-squ. (CS):             0.5316
 Covariance Type:            nonrobust
-============================================================================================
-                               coef    std err          z      P>|z|      [0.025      0.975]
---------------------------------------------------------------------------------------------
-Intercept                   -1.6589      0.199     -8.354      0.000      -2.048      -1.270
-tasks[T.DualGo]              0.0955      0.294      0.325      0.745      -0.480       0.671
-tasks[T.DualNoGo]           -0.0309      0.283     -0.109      0.913      -0.586       0.524
-choice                      -0.3769      0.422     -0.893      0.372      -1.204       0.450
-choice:tasks[T.DualGo]      -0.1129      0.527     -0.214      0.830      -1.146       0.920
-choice:tasks[T.DualNoGo]    -0.2640      0.782     -0.337      0.736      -1.798       1.269
-============================================================================================
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.4003      0.060      6.667      0.000       0.283       0.518
+day[T.2.0]    -0.2510      0.085     -2.956      0.003      -0.417      -0.085
+day[T.3.0]     0.2413      0.085      2.842      0.004       0.075       0.408
+day[T.4.0]    -0.8347      0.085     -9.830      0.000      -1.001      -0.668
+day[T.5.0]    -0.4128      0.085     -4.862      0.000      -0.579      -0.246
+day[T.6.0]    -1.2922      0.085    -15.218      0.000      -1.459      -1.126
+==============================================================================
 #+end_example
-
-#+begin_src ipython
-overlaps_dist = overlaps_dist[..., 0]
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-options['epochs'] = ['STIM']
-size = overlaps_dist.shape[2] // 2
-colors = ['r', 'b', 'g']
-for task in range(len(tasks)):
-    dist_avg = []
-    dist_ci = []
-    for i in range(options['n_days']):
-        dist_epoch = avg_epochs(overlaps_dist[task][i][size:] + overlaps_dist[task][i][:size], **options) / 2.0
-        dist_avg.append(dist_epoch.mean(0))
-        dist_ci.append(get_bootstrap_ci(dist_epoch))
-
-    dist_avg = np.array(dist_avg)
-    dist_ci = np.array(dist_ci).T
-
-    plt.plot(np.arange(1, options['n_days']+1), dist_avg, '-o', label='%s' % options['tasks'][task], color=colors[task])
-    plt.fill_between(np.arange(1, options['n_days']+1), dist_ci[0], dist_ci[1], color=colors[task], alpha=0.1)
-
-plt.axhline(y=0.0, color='k', linestyle='--')
-
-plt.legend(fontsize=10)
-plt.xticks(np.arange(1, options['n_days']+1))
-# plt.yticks([0.4, 0.6, 0.8, 1.0])
-plt.xlabel('Day')
-plt.ylabel('Dist. Overlap')
-plt.savefig('%s_overlaps_dist_day.svg' % options['mouse'], dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./figures/landscape/figure_27.png]]
