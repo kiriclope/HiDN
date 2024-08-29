@@ -193,8 +193,9 @@ def preprocess_X(
     unit_var=0,
 ):
     # X = savgol_filter(X, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
-
-    if scaler == "standard":
+    if scaler=="mean":
+        X_scale = X - X.mean((0,-1))[np.newaxis, ..., np.newaxis]
+    elif scaler == "standard":
         X_scale, center, scale = standard_scaler_BL(
             X, center, scale, avg_mean, avg_noise
         )

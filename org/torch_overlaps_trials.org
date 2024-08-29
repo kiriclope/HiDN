@@ -1,7 +1,82 @@
 #+STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
 
+Use pymer 4
 Look at incorrect trials vs correct trials, trial by trial
+
+#+begin_src ipython
+from sklearn.linear_model import LogisticRegression
+
+class LogisticRegressionWrapper:
+    def __init__(self, *args, **kwargs):
+        self.model = LogisticRegression(*args, **kwargs)
+
+    def fit(self, X, y):
+        self.model.fit(X, y)
+        return self
+
+    def predict(self, X):
+        # Instead of predicting, we return the input X
+        return np.dot(X, self.model.coef_.ravel()).mean()
+
+    def predict_proba(self, X):
+        return np.dot(X, self.model.coef_.ravel()).mean()
+
+    def score(self, X, y):
+        return self.model.score(X, y)
+
+    def get_params(self, deep=True):
+        return self.model.get_params(deep)
+
+    def set_params(self, **params):
+        self.model.set_params(**params)
+        return self
+
+# Example usage
+# X and y should be your data features and labels
+# X, y = ...
+# wrapper = LogisticRegressionWrapper()
+# wrapper.fit(X, y)
+# y_pred = wrapper.predict(X)  # This will return X
+# y_proba = wrapper.predict_proba(X)  # This will return the predicted probabilities
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+from sklearn.model_selection import cross_val_score
+from sklearn.datasets import make_classification
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import make_scorer
+
+# Define the custom scoring function
+def custom_scorer(y_pred, y, clf):
+    # `clf.coef_` assumes a single class classification or binary classification,
+    # shape (1, n_features) or (n_features,)
+    # `np.dot` computes dot product of X and coefficients
+    # print(clf.coef_.shape)
+    return y_pred
+
+# Create an example dataset
+X, y = make_classification(n_samples=100, n_features=20, random_state=42)
+
+# Create the logistic regression classifier
+model = LogisticRegressionWrapper()
+model.fit(X, y)
+
+# Convert the scoring function into a scorer that can be used by scikit-learn
+my_scorer = make_scorer(custom_scorer, greater_is_better=True, clf=model, needs_proba=True)
+
+# Example of using the custom scorer in cross-validation
+scores = cross_val_score(model, X, y, cv=5, scoring=my_scorer)
+print("Custom Scorer results:", scores)
+
+#+end_src
+
+#+RESULTS:
+: Custom Scorer results: [nan nan nan nan nan]
+
 
 * Notebook Settings
 
@@ -345,76 +420,76 @@ Look at incorrect trials vs correct trials, trial by trial
 #+RESULTS:
 
   #+begin_src ipython :tangle ../src/torch/main.py
-    from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-    from src.preprocess.helpers import avg_epochs
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.preprocess.helpers import avg_epochs
 
-    def get_classification(model, RETURN='overlaps', **options):
-            start = perf_counter()
+def get_classification(model, RETURN='overlaps', **options):
+        start = perf_counter()
 
-            dum = 0
-            if options['features'] == 'distractor':
-                    if options['task'] != 'Dual':
-                            task = options['task']
-                            options['task'] = 'Dual'
-                            dum = 1
+        dum = 0
+        if options['features'] == 'distractor':
+                if options['task'] != 'Dual':
+                        task = options['task']
+                        options['task'] = 'Dual'
+                        dum = 1
 
-            X_days, y_days = get_X_y_days(**options)
-            X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        X_days, y_days = get_X_y_days(**options)
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
 
-            y_labels = y.copy()
+        y_labels = y.copy()
 
-            if options['features'] == 'sample':
-                y = y.sample_odor.dropna().to_numpy()
-            elif options['features'] == 'distractor':
-                y = y.dist_odor.dropna().to_numpy()
-            elif options['features'] == 'choice':
-                y = y.choice.to_numpy()
+        if options['features'] == 'sample':
+            y = y.sample_odor.dropna().to_numpy()
+        elif options['features'] == 'distractor':
+            y = y.dist_odor.dropna().to_numpy()
+        elif options['features'] == 'choice':
+            y = y.choice.to_numpy()
 
-            y[y==-1] = 0
+        y[y==-1] = 0
 
-            if options['verbose']:
-                print('X', X.shape, 'y', y.shape)
+        if options['verbose']:
+            print('X', X.shape, 'y', y.shape)
 
-            X_avg = avg_epochs(X, **options).astype('float32')
-            y_avg = y
+        X_avg = avg_epochs(X, **options).astype('float32')
+        y_avg = y
 
-            if options['trials'] == 'correct':
-                options['trials'] = ''
+        if options['trials'] == 'correct':
+            options['trials'] = ''
+            X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+        if dum:
+                options['features'] = 'sample'
+                options['task'] = task
                 X, _ = get_X_y_S1_S2(X_days, y_days, **options)
 
-            if dum:
-                    options['features'] = 'sample'
-                    options['task'] = task
-                    X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+        # if options['class_weight']:
+        #         pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
+        #         print('imbalance', pos_weight)
+        #         model.criterion__pos_weight = pos_weight
 
-            # if options['class_weight']:
-            #         pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
-            #         print('imbalance', pos_weight)
-            #         model.criterion__pos_weight = pos_weight
+        if RETURN is None:
+            return None
+        else:
+            model.fit(X_avg, y_avg)
 
-            if RETURN is None:
-                return None
-            else:
-                model.fit(X_avg, y_avg)
-
-            if 'scores' in RETURN:
-                scores = model.get_cv_scores(X, y, options['scoring'])
-                end = perf_counter()
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return scores
-            elif 'overlaps' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
-                overlaps = model.get_bootstrap_overlaps(X)
-                end = perf_counter()
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return overlaps, y_labels
-            elif 'coefs' in RETURN:
-                coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
-                end = perf_counter()
-                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-                return coefs, bias
-            else:
-                return None
+        if 'scores' in RETURN:
+            scores = model.get_cv_scores(X, y, options['scoring'])
+            end = perf_counter()
+            print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+            return scores
+        elif 'overlaps' in RETURN:
+            coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
+            overlaps = model.get_bootstrap_overlaps(X)
+            end = perf_counter()
+            print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+            return overlaps
+        elif 'coefs' in RETURN:
+            coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
+            end = perf_counter()
+            print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+            return coefs, bias
+        else:
+            return None
 #+end_src
 
 #+RESULTS:
@@ -507,8 +582,8 @@ Look at incorrect trials vs correct trials, trial by trial
   kwargs = {
       'mouse': 'JawsM15', 'laser': 0,
       'trials': '', 'reload': 0, 'data_type': 'dF',
-      'prescreen': None, 'pval': 96,
-      'preprocess': False, 'scaler_BL': 'robust',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'mean',
       'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
@@ -519,10 +594,10 @@ Look at incorrect trials vs correct trials, trial by trial
       'multilabel':0,
   }
 
-  # kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'middle', 'last']
   options = set_options(**kwargs)
-  days = np.arange(1, options['n_days']+1)
-  # days = ['first', 'middle', 'last']
+  # days = np.arange(1, options['n_days']+1)
+  days = ['first', 'middle', 'last']
 
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
   options['scoring'] = safe_roc_auc
@@ -602,6 +677,7 @@ options['verbose'] = 1
         overlaps = get_classification(model, RETURN='overlaps', **options)
         overlaps_sample_task.append(overlaps)
 
+        options['reload'] = 0
         options['features'] = 'distractor'
         options['epochs'] = ['MD']
         overlaps = get_classification(model, RETURN='overlaps', **options)
@@ -620,221 +696,140 @@ options['verbose'] = 1
 #+RESULTS:
 #+begin_example
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 33s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
+DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+multiple days 0 2 2
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+Elapsed (with compilation) = 0h 0m 20s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 18s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 11s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 19s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 19s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 18s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 10s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 19s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X (64, 693, 84) y (64,)
 Elapsed (with compilation) = 0h 0m 9s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 19s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
+multiple days 0 2 2
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
+Elapsed (with compilation) = 0h 0m 9s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 18s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
+Elapsed (with compilation) = 0h 0m 9s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
+multiple days 0 2 2
+X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+Elapsed (with compilation) = 0h 0m 18s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
 X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 Elapsed (with compilation) = 0h 0m 10s
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+X (128, 693, 84) y (128,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
 X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 1 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 2 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 3 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 5s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 4 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 5s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 5 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-X (32, 693, 84) y (32,)
-Elapsed (with compilation) = 0h 0m 6s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS 6 LASER 0
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Elapsed (with compilation) = 0h 0m 10s
+Elapsed (with compilation) = 0h 0m 19s
 #+end_example
 
 #+begin_src ipython
@@ -854,7 +849,48 @@ pkl_save(overlaps_save, '%s_overlaps_tasks_%.2f_l1_ratio%s' % (options['mouse'],
 #+RESULTS:
 : (2, 3, 6, 32, 84, 1)
 
-* Overlaps
+* Pickle
+
+#+begin_src ipython
+#pkl_save(y, 'y_ACCM04')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import pandas as pd
+options['n_days'] = 6
+y = []
+for mouse in options['mice']:
+    print(mouse)
+    try:
+        y_mouse = pkl_load('y_%s.pkl' % mouse)
+        y_mouse['mouse'] = mouse
+        y.append(y_mouse)
+    except:
+        pass
+y = pd.concat(y)
+#+end_src
+
+#+RESULTS:
+: ChRM04
+: JawsM15
+: JawsM18
+: ACCM03
+: ACCM04
+
+#+begin_src ipython
+print(y.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
+:        'dist_odor', 'choice', 'behavior', 'pair', 'sample', 'sample_STIM',
+:        'sample_ED', 'sample_MD', 'sample_LD', 'dist', 'dist_STIM', 'dist_ED',
+:        'dist_MD', 'dist_LD', 'OED_sign', 'OLD_sign', 'mouse'],
+:       dtype='object')
+
+* Data
 
 #+begin_src ipython
 filename = '%s_overlaps_tasks_%.2f_l1_ratio%s.pkl' % (options['mouse'], options['l1_ratio'], options['fname'])
@@ -867,8 +903,8 @@ except:
 #+end_src
 
 #+RESULTS:
-: JawsM15_overlaps_tasks_0.95_l1_ratio.pkl
-: overlaps (2, 3, 6, 32, 84, 1)
+: ACCM04_overlaps_tasks_0.95_l1_ratio.pkl
+: overlaps (2, 3, 5, 64, 84, 1)
 
 #+begin_src ipython
 overlaps_sample = overlaps[0]
@@ -878,11 +914,9 @@ print(overlaps_sample.shape)
 #+end_src
 
 #+RESULTS:
-: (3, 6, 32, 84, 1)
+: (3, 5, 64, 84, 1)
 
 #+begin_src ipython
-options['n_days'] = 6
-
 overlaps_sample = np.array(overlaps_sample)
 print(overlaps_sample.shape)
 
@@ -891,11 +925,10 @@ print(overlaps_dist.shape)
 #+end_src
 
 #+RESULTS:
-: (3, 6, 32, 84, 1)
-: (3, 6, 32, 84, 1)
+: (3, 5, 64, 84, 1)
+: (3, 5, 64, 84, 1)
 
 #+begin_src ipython
-  options['n_days'] = 6
   cmap = plt.get_cmap('Blues')
   colors = [cmap((i+1) / options['n_days'] ) for i in range(options['n_days'])]
   cmap = plt.get_cmap('Reds')
@@ -966,18 +999,24 @@ print(overlaps_dist.shape)
 
 #+RESULTS:
 :RESULTS:
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-[[./figures/landscape/figure_23.png]]
+: Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+[[./figures/landscape/figure_25.png]]
 :END:
 
 #+begin_src ipython
+import pandas as pd
+options['trials'] = ''
+options['verbose'] = 0
+options['features'] = 'sample'
 df = []
+
+X_days, y_days = get_X_y_days(**options)
+
 for task in tasks:
     options['task'] = task
     df2 = []
     for day in days:
         options['day'] = day
-        X_days, y_days = get_X_y_days(**options)
         X, y = get_X_y_S1_S2(X_days, y_days, **options)
 
         df2.append(y)
@@ -987,72 +1026,27 @@ y = pd.concat(df)
 
 #+RESULTS:
 #+begin_example
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DPA TRIALS  DAYS 1 LASER 0
-X_S1 (19, 693, 84) X_S2 (13, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DPA TRIALS  DAYS 2 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DPA TRIALS  DAYS 3 LASER 0
-X_S1 (17, 693, 84) X_S2 (15, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DPA TRIALS  DAYS 4 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DPA TRIALS  DAYS 5 LASER 0
-X_S1 (9, 693, 84) X_S2 (23, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DPA TRIALS  DAYS 6 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualGo TRIALS  DAYS 1 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualGo TRIALS  DAYS 2 LASER 0
-X_S1 (9, 693, 84) X_S2 (23, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualGo TRIALS  DAYS 3 LASER 0
-X_S1 (14, 693, 84) X_S2 (18, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualGo TRIALS  DAYS 4 LASER 0
-X_S1 (17, 693, 84) X_S2 (15, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualGo TRIALS  DAYS 5 LASER 0
-X_S1 (8, 693, 84) X_S2 (24, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualGo TRIALS  DAYS 6 LASER 0
-X_S1 (15, 693, 84) X_S2 (17, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 1 LASER 0
-X_S1 (22, 693, 84) X_S2 (10, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 2 LASER 0
-X_S1 (18, 693, 84) X_S2 (14, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 693, 84) X_S2 (16, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 4 LASER 0
-X_S1 (14, 693, 84) X_S2 (18, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 5 LASER 0
-X_S1 (7, 693, 84) X_S2 (25, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES choice TASK DualNoGo TRIALS  DAYS 6 LASER 0
-X_S1 (15, 693, 84) X_S2 (17, 693, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
 #+end_example
 
 #+begin_src ipython
-print(y.response.unique())
-#+end_src
-
-#+RESULTS:
-: ['correct_hit' 'incorrect_fa' 'correct_rej' 'incorrect_miss']
-
-#+begin_src ipython
-y['behavior'] = y['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
-y['pair'] = y['response'].apply(lambda x: 0 if ('rej' in x) or ('fa' in x) else 1)
+# y['choice'] = ~y['choice'].astype('int')
+y['behavior'] = y['response'].apply(lambda x: 1 if 'incorrect' in x else 0)
+y['pair'] = y['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
 #+end_src
 
 #+RESULTS:
@@ -1061,77 +1055,81 @@ y['pair'] = y['response'].apply(lambda x: 0 if ('rej' in x) or ('fa' in x) else 
 # print(np.vstack(overlaps_dist).shape)
 # print(np.vstack(np.vstack(np.swapaxes(overlaps_dist, 0, -3))).shape)
 # overlaps  = np.vstack(np.hstack(overlaps_sample)[..., 0])
-overlaps  = overlaps_sample[..., 0].reshape(-1, 84)
+sample  = overlaps_sample[..., 0].reshape(-1, 84)
+dist  = overlaps_dist[..., 0].reshape(-1, 84)
 # overlaps = np.vstack(np.vstack(np.swapaxes(overlaps_dist, 0, -3)))[..., 0]
-print(overlaps.shape)
 #+end_src
 
 #+RESULTS:
-: (576, 84)
 
 #+begin_src ipython
-y['overlaps'] = overlaps.tolist()
-y['overlaps'] = y['overlaps'].apply(np.array)
+y['sample'] = sample.tolist()
+y['sample'] = y['sample'].apply(np.array)
+# y['sample'] = (2*y.sample_odor-1) * y['sample']
+
+options['epochs'] = ['STIM']
+y['sample_STIM'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
 
 options['epochs'] = ['ED']
-y['overlaps_ED'] = y['overlaps'].apply(lambda x: avg_epochs(np.array(x), **options))
+y['sample_ED'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
 
 options['epochs'] = ['MD']
-y['overlaps_MD'] = y['overlaps'].apply(lambda x: avg_epochs(np.array(x), **options))
+y['sample_MD'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
 
 options['epochs'] = ['LD']
-y['overlaps_LD'] = y['overlaps'].apply(lambda x: avg_epochs(np.array(x), **options))
+y['sample_LD'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
 
-print(overlaps.shape)
+print(sample.shape)
 #+end_src
 
 #+RESULTS:
-: (576, 84)
+: (960, 84)
 
 #+begin_src ipython
-y['OED_sign'] = y['overlaps_ED'].apply(lambda x: 0 if x<=0 else 1)
-y['OLD_sign'] = y['overlaps_LD'].apply(lambda x: 0 if x<=0 else 1)
-print(y.overlaps_ED.head())
+y['dist'] = dist.tolist()
+y['dist'] = y['dist'].apply(np.array)
+# y['dist'] = (2*y.dist_odor-1) * y['dist']
+
+options['epochs'] = ['STIM']
+y['dist_STIM'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['ED']
+y['dist_ED'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['MD']
+y['dist_MD'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['LD']
+y['dist_LD'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+print(dist.shape)
 #+end_src
 
 #+RESULTS:
-: 14    0.670362
-: 21    1.601941
-: 25    0.438161
-: 26    0.689194
-: 32    1.255044
-: Name: overlaps_ED, dtype: float64
+: (960, 84)
+:
 
 #+begin_src ipython
-print(y.keys())
+y['OED_sign'] = y['dist_ED'].apply(lambda x: 0 if x<=0 else 1)
+y['OLD_sign'] = (-(2 * y.sample_odor -1 ) * y['sample_LD']).apply(lambda x: 1 if x<=0 else 0)
 #+end_src
 
 #+RESULTS:
-: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
-:        'dist_odor', 'choice', 'overlaps', 'overlaps_ED', 'overlaps_MD',
-:        'overlaps_LD', 'behavior', 'pair', 'OED_sign', 'OLD_sign'],
-:       dtype='object')
 
 #+begin_src ipython
-print(y.choice.shape)
+k=23
+print(y.sample_odor.iloc[k], y.sample_ED.iloc[k], y.OLD_sign.iloc[k])
 #+end_src
 
 #+RESULTS:
-: (576,)
+: 1.0 -0.9962940578650235 0
 
 #+begin_src ipython
-print(y.response.unique())
-#+end_src
-
-#+RESULTS:
-: ['correct_hit' 'incorrect_fa' 'correct_rej' 'incorrect_miss']
-
-#+begin_src ipython
-df = y[y.tasks=='DPA'].copy()
+df = y[y.tasks=='DualGo'].copy()
 # df['overlaps'] = df['overlaps'].apply(np.array)
 
 # Group by 'day' and compute the mean overlaps for each day
-mean_overlaps_by_day = df.groupby('day')['overlaps'].apply(lambda x: np.mean(np.stack(x), axis=0))
+mean_overlaps_by_day = df.groupby('day')['sample'].apply(lambda x: np.mean(np.stack(x)**2, axis=0))
 
 # Prepare data for plotting
 mean_overlaps_df = pd.DataFrame(mean_overlaps_by_day.tolist(), index=mean_overlaps_by_day.index)
@@ -1150,71 +1148,2250 @@ plt.show()
 #+RESULTS:
 [[./figures/landscape/figure_33.png]]
 
+* Overlaps
+** Sample OLD
+*** Tasks
+
 #+begin_src ipython
   import statsmodels.api as sm
   import statsmodels.formula.api as smf
 
   y['tasks'] = y['tasks'].astype('category')
   y['day'] = y['day'].astype('category')
-  y['choice'] = y['choice'].astype('category')
+  y['mouse'] = y['mouse'].astype('category')
+  print(y.sample_odor.unique())
+  formula = 'sample_LD ~ tasks -1 '
 
-  formula = 'OLD_sign ~ choice'
   results = []
+  beta = []
+  pval = []
 
   for day in y.day.unique():
-      data = y[(y['day'] == day)]
+      # data = y[(y['day'] == day) & (y.pair==0)]
+      data = y[(y['day'] == day) & (y.mouse == 'JawsM15')]
+      data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
       glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
       result = glm.fit()
       results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
 
-  print(results[0].summary())
+print(result.summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+[0. 1.]
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:              sample_LD   No. Observations:                   96
+Model:                            GLM   Df Residuals:                       93
+Model Family:                Gaussian   Df Model:                            2
+Link Function:               Identity   Scale:                         0.38268
+Method:                          IRLS   Log-Likelihood:                -88.587
+Date:                Wed, 28 Aug 2024   Deviance:                       35.589
+Time:                        17:22:39   Pearson chi2:                     35.6
+No. Iterations:                     3   Pseudo R-squ. (CS):             0.2218
+Covariance Type:            nonrobust
+===================================================================================
+                      coef    std err          z      P>|z|      [0.025      0.975]
+-----------------------------------------------------------------------------------
+tasks[DPA]          1.1661      0.109     10.664      0.000       0.952       1.380
+tasks[DualGo]       0.4110      0.109      3.758      0.000       0.197       0.625
+tasks[DualNoGo]     0.8452      0.109      7.729      0.000       0.631       1.060
+===================================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1,  np.max(beta) + .01 + i * .05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('Sample OLD $\\beta_{Task}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.006 0.    0.    0.    0.    0.   ]
+: [0.    0.    0.005 0.    0.    0.   ]
+: [0.    0.003 0.    0.    0.    0.   ]
+[[./figures/landscape/figure_36.png]]
+:END:
+
+*** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'sample_LD ~ choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task) & (y.mouse=='JawsM15')]
+        data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+        # data = y[(y['day'] == day)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+        result = glm.fit()
+        results.append(result)
+        beta.append(result.params)
+        pval.append(result.pvalues)
+
+print(results[2].summary())
     #+end_src
 
 #+RESULTS:
 #+begin_example
                  Generalized Linear Model Regression Results
 ==============================================================================
-Dep. Variable:               OLD_sign   No. Observations:                   96
-Model:                            GLM   Df Residuals:                       94
+Dep. Variable:              sample_LD   No. Observations:                   32
+Model:                            GLM   Df Residuals:                       30
 Model Family:                Gaussian   Df Model:                            1
-Link Function:               Identity   Scale:                         0.16189
-Method:                          IRLS   Log-Likelihood:                -47.806
-Date:                Mon, 26 Aug 2024   Deviance:                       15.217
-Time:                        18:52:40   Pearson chi2:                     15.2
-No. Iterations:                     3   Pseudo R-squ. (CS):             0.4257
+Link Function:               Identity   Scale:                         0.23209
+Method:                          IRLS   Log-Likelihood:                -21.004
+Date:                Wed, 28 Aug 2024   Deviance:                       6.9628
+Time:                        17:33:35   Pearson chi2:                     6.96
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.02567
 Covariance Type:            nonrobust
-=================================================================================
-                    coef    std err          z      P>|z|      [0.025      0.975]
----------------------------------------------------------------------------------
-Intercept         0.7895      0.053     14.814      0.000       0.685       0.894
-choice[T.1.0]    -0.6100      0.084     -7.295      0.000      -0.774      -0.446
-=================================================================================
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.7669      0.124      6.165      0.000       0.523       1.011
+choice        -0.1495      0.171     -0.876      0.381      -0.484       0.185
+==============================================================================
 #+end_example
 
 #+begin_src ipython
-  print(results[0].summary())
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
 #+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k]) + .01 + i * .05, '*', ha='center', va='bottom', color=cols[i])
+      # plt.text(j+1, .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('SOLD $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.086 0.973 0.381 0.692 0.458 0.186]
+: [0.125 0.375 0.296 0.448 0.066 0.767]
+: [0.699 0.634 0.679 0.338 0.348 0.419]
+[[./figures/landscape/figure_39.png]]
+:END:
+
+*** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+  # y['behavior'] = 2*y.behavior -1
+  formula = 'sample_LD ~ behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+        # data = y[(y['day'] == day)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+        result = glm.fit()
+        results.append(result)
+        beta.append(result.params)
+        pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
 
 #+RESULTS:
 #+begin_example
                  Generalized Linear Model Regression Results
 ==============================================================================
-Dep. Variable:            overlaps_ED   No. Observations:                   96
-Model:                            GLM   Df Residuals:                       94
+Dep. Variable:              sample_LD   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
 Model Family:                Gaussian   Df Model:                            1
-Link Function:               Identity   Scale:                         0.22748
-Method:                          IRLS   Log-Likelihood:                -64.135
-Date:                Mon, 26 Aug 2024   Deviance:                       21.383
-Time:                        18:05:51   Pearson chi2:                     21.4
-No. Iterations:                     3   Pseudo R-squ. (CS):            0.06226
+Link Function:               Identity   Scale:                         0.40234
+Method:                          IRLS   Log-Likelihood:                -214.87
+Date:                Wed, 28 Aug 2024   Deviance:                       89.320
+Time:                        17:44:33   Pearson chi2:                     89.3
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.01653
 Covariance Type:            nonrobust
-=================================================================================
-                    coef    std err          z      P>|z|      [0.025      0.975]
----------------------------------------------------------------------------------
-Intercept         0.3005      0.063      4.756      0.000       0.177       0.424
-choice[T.1.0]     0.2458      0.099      2.480      0.013       0.052       0.440
-=================================================================================
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.9551      0.188      5.078      0.000       0.586       1.324
+behavior       0.1048      0.054      1.930      0.054      -0.002       0.211
+==============================================================================
 #+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(pval[i, :, k])
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, .51+i*0.05, '*', ha='center', va='bottom', color=cols[i])
+      # plt.text(j+1, .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('SOLD $\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.86037155 0.21418035 0.05364159 0.02929007 0.06089178 0.00199354]
+: [0.70087702 0.44260844 0.28563124 0.21726989 0.34405583 0.1625283 ]
+: [0.43464444 0.3659488  0.05960316 0.32394952 0.58576318 0.64897676]
+[[./figures/landscape/figure_42.png]]
+:END:
+
+*** Pair
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'sample_LD ~ pair'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        # data = y[(y['day'] == day)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+        result = glm.fit()
+        results.append(result)
+        beta.append(result.params)
+        pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:              sample_LD   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.77313
+Method:                          IRLS   Log-Likelihood:                -288.02
+Date:                Wed, 28 Aug 2024   Deviance:                       171.64
+Time:                        16:17:24   Pearson chi2:                     172.
+No. Iterations:                     3   Pseudo R-squ. (CS):          0.0003932
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept     -0.0105      0.083     -0.127      0.899      -0.173       0.152
+pair          -0.0330      0.117     -0.281      0.779      -0.263       0.197
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01+.05*i, '*', ha='center', va='bottom', color=cols[i])
+      # plt.text(j+1, .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('SOLD $\\beta_{pair}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.759 0.888 0.779 0.815 0.728 0.759]
+: [0.316 0.64  0.824 0.43  0.944 0.694]
+: [0.875 0.33  0.668 0.458 0.564 0.94 ]
+[[./figures/landscape/figure_44.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Sample sign OLD
+*** Tasks
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  # y['choice'] = y['choice'].astype('category')
+
+  formula = 'OLD_sign ~ tasks'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      # data = y[(y['day'] == day) & (y.pair==0)]
+      data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(result.summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OLD_sign   No. Observations:                  288
+Model:                            GLM   Df Residuals:                      285
+Model Family:                Gaussian   Df Model:                            2
+Link Function:               Identity   Scale:                         0.16177
+Method:                          IRLS   Log-Likelihood:                -144.84
+Date:                Wed, 28 Aug 2024   Deviance:                       46.104
+Time:                        16:17:54   Pearson chi2:                     46.1
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.004664
+Covariance Type:            nonrobust
+=====================================================================================
+                        coef    std err          z      P>|z|      [0.025      0.975]
+-------------------------------------------------------------------------------------
+Intercept             0.1771      0.041      4.314      0.000       0.097       0.258
+tasks[T.DualGo]       0.0104      0.058      0.179      0.858      -0.103       0.124
+tasks[T.DualNoGo]     0.0625      0.058      1.077      0.282      -0.051       0.176
+=====================================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1,  np.max(beta) + .01 + i* .05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(SOLD) $\\beta_{Task}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0. 0. 0. 0. 0. 0.]
+: [0.393 0.472 0.    0.18  0.26  0.858]
+: [0.625 0.023 0.738 0.003 0.055 0.282]
+[[./figures/landscape/figure_47.png]]
+:END:
+
+*** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OLD_sign ~ choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        # data = y[(y['day'] == day)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+        result = glm.fit()
+        results.append(result)
+        beta.append(result.params)
+        pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OLD_sign   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.14396
+Method:                          IRLS   Log-Likelihood:                -99.759
+Date:                Wed, 28 Aug 2024   Deviance:                       31.960
+Time:                        16:18:41   Pearson chi2:                     32.0
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.007766
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.1333      0.040      3.334      0.001       0.055       0.212
+choice         0.0682      0.052      1.318      0.187      -0.033       0.170
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k]) + .01 + i * .05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(SOLD) $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.33  0.094 0.187 0.762 0.113 0.16 ]
+: [0.374 0.763 0.913 0.235 0.112 0.475]
+: [0.563 0.696 0.556 0.539 0.793 0.711]
+[[./figures/landscape/figure_50.png]]
+:END:
+
+*** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OLD_sign ~ behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        # data = y[(y['day'] == day)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+        try:
+            result = glm.fit()
+            results.append(result)
+            beta.append(result.params)
+            pval.append(result.pvalues)
+        except:
+            beta.append(np.zeros(2))
+            pval.append(np.ones(2))
+            pass
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OLD_sign   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.14329
+Method:                          IRLS   Log-Likelihood:                -99.238
+Date:                Wed, 28 Aug 2024   Deviance:                       31.811
+Time:                        16:20:30   Pearson chi2:                     31.8
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.01238
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.1538      0.028      5.483      0.000       0.099       0.209
+behavior       0.1081      0.065      1.668      0.095      -0.019       0.235
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(pval[i, :, k])
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01+i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(SOLD) $\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.7304999  0.37880538 0.09540339 0.45984996 0.78289986 0.00912811]
+: [0.84462168 0.55503664 0.5356652  0.66135849 0.71381496 0.15582459]
+: [0.1195424  0.2127877  0.03086698 0.81245162 0.49723088 0.53695203]
+[[./figures/landscape/figure_53.png]]
+:END:
+
+*** Pair
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OLD_sign ~ pair'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        # data = y[(y['day'] == day)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+        result = glm.fit()
+        results.append(result)
+        beta.append(result.params)
+        pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OLD_sign   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.14459
+Method:                          IRLS   Log-Likelihood:                -100.24
+Date:                Wed, 28 Aug 2024   Deviance:                       32.098
+Time:                        16:20:50   Pearson chi2:                     32.1
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.003480
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.1518      0.036      4.225      0.000       0.081       0.222
+pair           0.0446      0.051      0.879      0.380      -0.055       0.144
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(SOLD) $\\beta_{pair}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.305 0.855 0.38  0.434 0.171 0.791]
+: [0.855 0.606 0.275 0.227 0.206 0.604]
+: [0.322 0.35  0.305 0.35  0.45  0.813]
+[[./figures/landscape/figure_56.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Distractor OED
+*** Tasks
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  # y['choice'] = y['choice'].astype('category')
+
+  formula = 'dist_ED ~ tasks'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      # data = y[(y['day'] == day) & (y.pair==0)]
+      data = y[(y['day'] == day) & (y.mouse=='JawsM15')]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(result.summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:                dist_ED   No. Observations:                   96
+Model:                            GLM   Df Residuals:                       93
+Model Family:                Gaussian   Df Model:                            2
+Link Function:               Identity   Scale:                         0.29278
+Method:                          IRLS   Log-Likelihood:                -75.734
+Date:                Wed, 28 Aug 2024   Deviance:                       27.229
+Time:                        18:41:30   Pearson chi2:                     27.2
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.09962
+Covariance Type:            nonrobust
+=====================================================================================
+                        coef    std err          z      P>|z|      [0.025      0.975]
+-------------------------------------------------------------------------------------
+Intercept            -0.8730      0.096     -9.127      0.000      -1.061      -0.686
+tasks[T.DualGo]       0.2024      0.135      1.496      0.135      -0.063       0.467
+tasks[T.DualNoGo]    -0.2258      0.135     -1.669      0.095      -0.491       0.039
+=====================================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, np.max(beta)+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('DOED $\\beta_{Task}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.    0.029 0.    0.    0.743 0.   ]
+: [0.    0.014 0.    0.001 0.    0.135]
+: [0.002 0.001 0.    0.004 0.    0.095]
+[[./figures/landscape/figure_60.png]]
+:END:
+
+*** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'dist_ED ~ choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task) ]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+        try:
+            result = glm.fit()
+            results.append(result)
+            beta.append(result.params)
+            pval.append(result.pvalues)
+        except:
+            beta.append(np.zeros(2))
+            pval.append(np.ones(2))
+            pass
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:                dist_ED   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.16259
+Method:                          IRLS   Log-Likelihood:                -113.38
+Date:                Wed, 28 Aug 2024   Deviance:                       36.094
+Time:                        16:21:56   Pearson chi2:                     36.1
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.005115
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.0463      0.043      1.089      0.276      -0.037       0.130
+choice        -0.0587      0.055     -1.068      0.286      -0.166       0.049
+==============================================================================
+#+end_example
+
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('DOED $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.067 0.67  0.286 0.128 0.996 0.516]
+: [0.001 0.013 0.485 0.539 0.251 0.986]
+: [0.257 0.484 0.768 0.783 0.276 0.95 ]
+[[./figures/landscape/figure_62.png]]
+:END:
+
+*** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'dist_ED ~ behavior'
+  # formula = 'OED_sign ~ behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+        try:
+            result = glm.fit()
+            results.append(result)
+            beta.append(result.params)
+            pval.append(result.pvalues)
+        except:
+            beta.append(np.zeros(2))
+            pval.append(np.ones(2))
+            pass
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:                dist_ED   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.16336
+Method:                          IRLS   Log-Likelihood:                -113.92
+Date:                Wed, 28 Aug 2024   Deviance:                       36.266
+Time:                        16:23:10   Pearson chi2:                     36.3
+No. Iterations:                     3   Pseudo R-squ. (CS):          0.0004085
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.0149      0.030      0.498      0.619      -0.044       0.074
+behavior      -0.0199      0.069     -0.287      0.774      -0.155       0.116
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('DOED $\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.26  0.066 0.774 0.548 0.065 0.066]
+: [0.781 0.    0.004 0.108 0.295 0.003]
+: [0.919 0.407 0.185 0.043 0.951 0.409]
+[[./figures/landscape/figure_65.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** Pair
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'dist_ED ~ pair'
+  # formula = 'OED_sign ~ behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+        try:
+            result = glm.fit()
+            results.append(result)
+            beta.append(result.params)
+            pval.append(result.pvalues)
+        except:
+            beta.append(np.zeros(2))
+            pval.append(np.ones(2))
+            pass
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:                dist_ED   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.16332
+Method:                          IRLS   Log-Likelihood:                -113.89
+Date:                Wed, 28 Aug 2024   Deviance:                       36.256
+Time:                        16:23:29   Pearson chi2:                     36.3
+No. Iterations:                     3   Pseudo R-squ. (CS):          0.0006663
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.0213      0.038      0.558      0.577      -0.054       0.096
+pair          -0.0202      0.054     -0.375      0.708      -0.126       0.086
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('DOED $\\beta_{pair}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.906 0.723 0.708 0.283 0.775 0.875]
+: [0.348 0.565 0.568 0.566 0.823 0.881]
+: [0.857 0.31  0.789 0.113 0.601 0.353]
+[[./figures/landscape/figure_69.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Distractor sign OED
+*** Tasks
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  # y['choice'] = y['choice'].astype('category')
+
+  formula = 'OED_sign ~ tasks'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      # data = y[(y['day'] == day) & (y.pair==0)]
+      data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(result.summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OED_sign   No. Observations:                  288
+Model:                            GLM   Df Residuals:                      285
+Model Family:                Gaussian   Df Model:                            2
+Link Function:               Identity   Scale:                         0.24784
+Method:                          IRLS   Log-Likelihood:                -206.27
+Date:                Wed, 28 Aug 2024   Deviance:                       70.635
+Time:                        16:23:43   Pearson chi2:                     70.6
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.008193
+Covariance Type:            nonrobust
+=====================================================================================
+                        coef    std err          z      P>|z|      [0.025      0.975]
+-------------------------------------------------------------------------------------
+Intercept             0.4062      0.051      7.995      0.000       0.307       0.506
+tasks[T.DualGo]       0.1042      0.072      1.450      0.147      -0.037       0.245
+tasks[T.DualNoGo]     0.0208      0.072      0.290      0.772      -0.120       0.162
+=====================================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, np.max(beta)+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(DOED) $\\beta_{Task}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0. 0. 0. 0. 0. 0.]
+: [0.02  0.003 0.08  0.637 0.    0.147]
+: [0.042 0.001 0.001 0.22  0.021 0.772]
+[[./figures/landscape/figure_72.png]]
+:END:
+
+*** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OED_sign ~ choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task) ]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+        try:
+            result = glm.fit()
+            results.append(result)
+            beta.append(result.params)
+            pval.append(result.pvalues)
+        except:
+            beta.append(np.zeros(2))
+            pval.append(np.ones(2))
+            pass
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OED_sign   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.24043
+Method:                          IRLS   Log-Likelihood:                -157.20
+Date:                Wed, 28 Aug 2024   Deviance:                       53.376
+Time:                        16:24:46   Pearson chi2:                     53.4
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.004901
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.6444      0.052     12.468      0.000       0.543       0.746
+choice        -0.0698      0.067     -1.045      0.296      -0.201       0.061
+==============================================================================
+#+end_example
+
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(DOED) $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.432 0.065 0.296 0.026 0.726 0.305]
+: [0.001 0.986 0.597 0.157 0.627 0.538]
+: [0.603 0.286 0.392 0.678 0.384 0.465]
+[[./figures/landscape/figure_75.png]]
+:END:
+
+*** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OED_sign ~ behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+        try:
+            result = glm.fit()
+            results.append(result)
+            beta.append(result.params)
+            pval.append(result.pvalues)
+        except:
+            beta.append(np.zeros(2))
+            pval.append(np.ones(2))
+            pass
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OED_sign   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.24155
+Method:                          IRLS   Log-Likelihood:                -157.72
+Date:                Wed, 28 Aug 2024   Deviance:                       53.625
+Time:                        16:24:54   Pearson chi2:                     53.6
+No. Iterations:                     3   Pseudo R-squ. (CS):          0.0002960
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.5989      0.036     16.439      0.000       0.527       0.670
+behavior       0.0201      0.084      0.239      0.811      -0.145       0.185
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(DOED) $\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.025 0.002 0.811 0.225 0.149 0.064]
+: [0.601 0.008 0.004 0.007 0.567 0.123]
+: [0.849 0.64  0.836 0.043 0.293 0.426]
+[[./figures/landscape/figure_78.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** Pair
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OED_sign ~ behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for task in tasks:
+    for day in y.day.unique():
+        data = y[(y['day'] == day) & (y.tasks==task)]
+        glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+        try:
+            result = glm.fit()
+            results.append(result)
+            beta.append(result.params)
+            pval.append(result.pvalues)
+        except:
+            beta.append(np.zeros(2))
+            pval.append(np.ones(2))
+            pass
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OED_sign   No. Observations:                  224
+Model:                            GLM   Df Residuals:                      222
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.24155
+Method:                          IRLS   Log-Likelihood:                -157.72
+Date:                Wed, 28 Aug 2024   Deviance:                       53.625
+Time:                        16:25:27   Pearson chi2:                     53.6
+No. Iterations:                     3   Pseudo R-squ. (CS):          0.0002960
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.5989      0.036     16.439      0.000       0.527       0.670
+behavior       0.0201      0.084      0.239      0.811      -0.145       0.185
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+beta = np.array(beta).reshape((3, options['n_days'], -1))
+print(beta.shape)
+
+pval = np.array(pval).reshape((3, options['n_days'], -1))
+print(pval.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 6, 2)
+: (3, 6, 2)
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+k=1
+for i in range(3):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta)[i, :, k], '-o', color=cols[i])
+  print(np.round(pval[i, :, k], 3))
+  for j in range(pval.shape[1]):
+    if pval[i, j, k] < 0.05:
+      plt.text(j+1, np.max(beta[..., k])+.01 + i*.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(DOED) $\\beta_{pair}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.025 0.002 0.811 0.225 0.149 0.064]
+: [0.601 0.008 0.004 0.007 0.567 0.123]
+: [0.849 0.64  0.836 0.043 0.293 0.426]
+[[./figures/landscape/figure_82.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** All tasks
+*** sample OLD
+**** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'sample_LD ~  choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      data = y[(y['day'] == day)]
+      data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:              sample_LD   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.50343
+Method:                          IRLS   Log-Likelihood:                -721.92
+Date:                Wed, 28 Aug 2024   Deviance:                       337.30
+Time:                        17:49:28   Pearson chi2:                     337.
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.005184
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.5413      0.046     11.843      0.000       0.452       0.631
+choice        -0.1066      0.057     -1.868      0.062      -0.218       0.005
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1, 2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i]))
+  # for j, p in enumerate(np.array(pval).T[i]):
+  #   if p < 0.05:
+  #     plt.text(j+1, max(np.array(beta).T[i]) + .01 + i * 0.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('SOLD $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0. 0. 0. 0. 0. 0.]
+[[./figures/landscape/figure_86.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+**** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'sample_LD ~  behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      data = y[(y['day'] == day)]
+      data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+      # data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:              sample_LD   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.50112
+Method:                          IRLS   Log-Likelihood:                -720.38
+Date:                Wed, 28 Aug 2024   Deviance:                       335.75
+Time:                        17:46:18   Pearson chi2:                     336.
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.009761
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.7626      0.116      6.568      0.000       0.535       0.990
+behavior       0.0840      0.033      2.567      0.010       0.020       0.148
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1, 2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  # for j, p in enumerate(np.array(pval).T[i]):
+  #   if p < 0.05:
+  #     plt.text(j+1, .11 + i * 0.05, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('SOLD $\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.466 0.096 0.01  0.008 0.036 0.171]
+[[./figures/landscape/figure_89.png]]
+:END:
+
+*** sample sign OLD
+**** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OLD_sign ~  choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      data = y[(y['day'] == day)]
+      # data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OLD_sign   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.18791
+Method:                          IRLS   Log-Likelihood:                -390.81
+Date:                Wed, 28 Aug 2024   Deviance:                       125.90
+Time:                        16:28:30   Pearson chi2:                     126.
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.004723
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.2116      0.028      7.579      0.000       0.157       0.266
+choice         0.0622      0.035      1.783      0.075      -0.006       0.131
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1, 2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i],3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, max(np.array(beta).T[i]) + .01 + i * 0.001, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(SOLD) $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.664 0.419 0.075 0.406 0.046 0.56 ]
+[[./figures/landscape/figure_90.png]]
+:END:
+
+**** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OLD_sign ~  behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      data = y[(y['day'] == day)]
+      # data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OLD_sign   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.18630
+Method:                          IRLS   Log-Likelihood:                -387.90
+Date:                Wed, 28 Aug 2024   Deviance:                       124.82
+Time:                        16:29:21   Pearson chi2:                     125.
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.01334
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.2246      0.019     11.876      0.000       0.188       0.262
+behavior       0.1198      0.040      3.003      0.003       0.042       0.198
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1, 2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, max(np.array(beta).T[i]) + .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(SOLD) $\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.4   0.428 0.003 0.788 0.382 0.987]
+[[./figures/landscape/figure_92.png]]
+:END:
+
+*** Dist OED
+**** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'dist_ED ~  choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      # data = y[(y['day'] == day) & (y['pair']==0)]
+      data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:                dist_ED   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.17625
+Method:                          IRLS   Log-Likelihood:                -369.27
+Date:                Wed, 28 Aug 2024   Deviance:                       118.08
+Time:                        16:29:37   Pearson chi2:                     118.
+No. Iterations:                     3   Pseudo R-squ. (CS):          0.0004536
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.0022      0.027      0.083      0.934      -0.051       0.055
+choice        -0.0186      0.034     -0.549      0.583      -0.085       0.048
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1,2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, max(np.array(beta).T[i]) + .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('DOED $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.    0.178 0.583 0.244 0.951 0.738]
+[[./figures/landscape/figure_94.png]]
+:END:
+
+**** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'dist_ED ~  behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      # data = y[(y['day'] == day) & (y['pair']==0)]
+      data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:                dist_ED   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.17423
+Method:                          IRLS   Log-Likelihood:                -365.40
+Date:                Wed, 28 Aug 2024   Deviance:                       116.73
+Time:                        16:29:39   Pearson chi2:                     117.
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.01195
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept     -0.0343      0.018     -1.875      0.061      -0.070       0.002
+behavior       0.1096      0.039      2.841      0.004       0.034       0.185
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1, 2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, max(np.array(beta).T[i]) + .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('$\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.715 0.    0.004 0.016 0.136 0.889]
+[[./figures/landscape/figure_96.png]]
+:END:
+
+*** Dist sign OED
+**** Choice
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OED_sign ~  choice'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      # data = y[(y['day'] == day) & (y['pair']==0)]
+      data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OED_sign   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.24450
+Method:                          IRLS   Log-Likelihood:                -479.26
+Date:                Wed, 28 Aug 2024   Deviance:                       163.82
+Time:                        16:29:40   Pearson chi2:                     164.
+No. Iterations:                     3   Pseudo R-squ. (CS):          1.458e-05
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.5768      0.032     18.108      0.000       0.514       0.639
+choice         0.0033      0.040      0.083      0.934      -0.075       0.081
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1,2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, max(np.array(beta).T[i]) + .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(DOED) $\\beta_{choice}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.012 0.482 0.934 0.061 0.607 0.817]
+[[./figures/landscape/figure_98.png]]
+:END:
+
+**** Behavior
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+  y['choice'] = y['choice'].astype('int')
+
+  formula = 'OED_sign ~  behavior'
+
+  results = []
+  beta = []
+  pval = []
+
+  for day in y.day.unique():
+      # data = y[(y['day'] == day) & (y['pair']==0)]
+      data = y[(y['day'] == day)]
+      glm = smf.glm(formula=formula, data=data, family=sm.families.Gaussian())
+
+      result = glm.fit()
+      results.append(result)
+      beta.append(result.params)
+      pval.append(result.pvalues)
+
+print(results[2].summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OED_sign   No. Observations:                  672
+Model:                            GLM   Df Residuals:                      670
+Model Family:                Gaussian   Df Model:                            1
+Link Function:               Identity   Scale:                         0.24249
+Method:                          IRLS   Log-Likelihood:                -476.48
+Date:                Wed, 28 Aug 2024   Deviance:                       162.47
+Time:                        16:29:42   Pearson chi2:                     162.
+No. Iterations:                     3   Pseudo R-squ. (CS):           0.008280
+Covariance Type:            nonrobust
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+Intercept      0.5547      0.022     25.712      0.000       0.512       0.597
+behavior       0.1075      0.046      2.363      0.018       0.018       0.197
+==============================================================================
+#+end_example
+
+#+begin_src ipython
+cols = ['r', 'b', 'g', 'r', 'b', 'g']
+for i in range(1, 2):
+  plt.plot(np.arange(1, options['n_days']+1), np.array(beta).T[i], '-o', color=cols[i])
+  print(np.round(np.array(pval).T[i], 3))
+  for j, p in enumerate(np.array(pval).T[i]):
+    if p < 0.05:
+      plt.text(j+1, max(np.array(beta).T[i]) + .01, '*', ha='center', va='bottom', color=cols[i])
+
+plt.xlabel('Day')
+plt.ylabel('sign(DOED) $\\beta_{behavior}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.092 0.    0.018 0.001 0.576 0.628]
+[[./figures/landscape/figure_100.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** overlaps day
+
+*** Sample LD
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+  import os
+  os.environ['R_LIBS_USER'] = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+
+  from rpy2.robjects.packages import importr
+  lmer = importr("~/R/x86_64-pc-linux-gnu-library/4.3/lme4/R/lme4")
+  # from pymer4.models import Lmer
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  print(y.behavior.unique())
+
+  formula = 'behavior ~ day * tasks * sample_LD + (1|mouse)'
+
+  results = []
+  data = y.copy()
+  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+
+  glm = lmer(formula=formula, data=data, family='binomial')
+  # glm = smf.glm(formula=formula, data=data, family=sm.families.Binomial())
+  # glm = smf.mixedlm(formula, data, groups=data['mouse'], re_formula='1')
+  result = glm.fit()
+  pval = result.pvalues
+
+  print(result.summary())
+    #+end_src
+
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  print(y.behavior.unique())
+
+  formula = 'behavior ~ day * tasks * sample_LD + (1|mouse)'
+
+  results = []
+  data = y.copy()
+  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+
+  formula = 'behavior ~ day * tasks * sample_LD + (1|mouse)'
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  # glm = smf.glm(formula=formula, data=data, family=sm.families.Binomial())
+  # glm = smf.mixedlm(formula, data, groups=data['mouse'], re_formula='1')
+  result = glm.fit()
+  pval = result.pvalues
+
+  print(result.summary())
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  print(glm.summary())
+#+end_src
+
+
+#+begin_src ipython
+random_effects = glm.ranef
+print(random_effects)
+#+end_src
+
+#+RESULTS:
+:          X.Intercept.
+: ACCM03       0.202566
+: ACCM04       0.726651
+: ChRM04      -0.436518
+: JawsM15      0.273253
+: JawsM18     -0.751546
+
+#+begin_src ipython
+print(result['P-val'])
+#+end_src
+
+#+RESULTS:
+#+begin_example
+(Intercept)                    0.311
+day                            0.000
+tasksDualGo                    0.243
+tasksDualNoGo                  0.952
+sample_LD                      0.027
+day:tasksDualGo                0.594
+day:tasksDualNoGo              0.821
+day:sample_LD                  0.001
+tasksDualGo:sample_LD          0.202
+tasksDualNoGo:sample_LD        0.525
+day:tasksDualGo:sample_LD      0.023
+day:tasksDualNoGo:sample_LD    0.145
+Name: P-val, dtype: float64
+#+end_example
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['(Intercept)', 'day', 'tasksDualGo', 'tasksDualNoGo', 'sample_LD']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     df = result.Estimate[key] + random_effects
+
+     mean_value = df['X.Intercept.'].mean()
+     std_dev = df['X.Intercept.'].std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.01, '***', ha='center', va='bottom')
+
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.01, '**', ha='center', va='bottom')
+
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.01, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df['X.Intercept.'], color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_109.png]]
+#+RESULTS:
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['day:tasksDualGo', 'day:tasksDualNoGo', 'day:sample_LD']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     df = result.Estimate[key] + random_effects
+
+     mean_value = df['X.Intercept.'].mean()
+     std_dev = df['X.Intercept.'].std()
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df['X.Intercept.'], color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_110.png]]
+
+
+
+#+begin_src ipython
+df = intercepts
+# Step 3: Calculate mean and standard deviation
+mean_value = df['X.Intercept.'].mean()
+std_dev = df['X.Intercept.'].std()
+
+# Step 4: Plotting the data
+plt.figure(figsize=(10, 5))
+
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+# Plot individual points
+plt.scatter(np.ones(df.shape[0]) + space, df['X.Intercept.'], label='Intercepts', color=colors)
+# Plot mean and stddev as error bars
+plt.plot(1, mean_value, 'ok')
+plt.errorbar(np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15, label='Mean ± Std. Dev')
+
+# Adding labels and title
+plt.xlim([.85, 1.15])
+plt.xticks([1], ['Intercept'])
+plt.ylabel('$\\beta$')
+plt.legend(fontsize=10)
+
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: <matplotlib.legend.Legend at 0x7fe4f3b79010>
+[[./figures/landscape/figure_110.png]]
+:END:
+
+#+begin_src ipython
+pval_DPA = [result.pvalues[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+pval_Go = [result.pvalues[i] for i in result.params.keys() if 'DualGo' in i]
+pval_NoGo = [result.pvalues[i] for i in result.params.keys() if 'DualNoGo' in i]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+coefs_DPA = [result.params[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+coefs_Go = [result.params[i] for i in result.params.keys() if 'DualGo' in i]
+coefs_NoGo = [result.params[i] for i in result.params.keys() if 'DualNoGo' in i]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+plt.plot(np.arange(1, options['n_days']+1), coefs_DPA, '-o', color='r')
+plt.plot(np.arange(1, options['n_days']+1), coefs_Go, '-o', color='b')
+plt.plot(np.arange(1, options['n_days']+1), coefs_NoGo, '-o', color='g')
+
+print(np.round(pval_DPA, 3))
+print(np.round(pval_Go, 3))
+print(np.round(pval_NoGo, 3))
+
+for i in range(len(coefs_DPA)):
+    if pval_DPA[i] < 0.05:
+        plt.text(i+1, .01, '*', ha='center', va='bottom', color='r')
+    if pval_Go[i] < 0.05:
+        plt.text(i+1, .05, '*', ha='center', va='bottom', color='b')
+    if pval_NoGo[i] < 0.05:
+        plt.text(i+1, .1, '*', ha='center', va='bottom', color='g')
+
+plt.xlabel('Day')
+plt.ylabel('SOLD $\\beta_{day}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.041 0.198 0.288 0.    0.014 0.002]
+: [0.024 0.774 0.218 0.003 0.245 0.007]
+: [0.099 0.701 0.794 0.567 0.237 0.535]
+[[./figures/landscape/figure_105.png]]
+:END:
+
+
+#+RESULTS:
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** sign Sample LD
 
 #+begin_src ipython
   import statsmodels.api as sm
@@ -1223,13 +3400,13 @@ choice[T.1.0]     0.2458      0.099      2.480      0.013       0.052       0.44
   y['tasks'] = y['tasks'].astype('category')
   y['day'] = y['day'].astype('category')
 
-  formula = 'overlaps_LD ~ day'
-  formula = 'OLD_sign ~ day'
-  results = []
+  formula = 'OLD_sign ~ day * tasks'
 
+  results = []
   glm = smf.glm(formula=formula, data=y, family=sm.families.Gaussian())
   # glm = smf.mixedlm(formula, y, groups=y['day'], re_formula='1')
   result = glm.fit()
+  pval = result.pvalues
 
   print(result.summary())
     #+end_src
@@ -1238,75 +3415,311 @@ choice[T.1.0]     0.2458      0.099      2.480      0.013       0.052       0.44
 #+begin_example
                  Generalized Linear Model Regression Results
 ==============================================================================
-Dep. Variable:               OLD_sign   No. Observations:                  576
-Model:                            GLM   Df Residuals:                      570
-Model Family:                Gaussian   Df Model:                            5
-Link Function:               Identity   Scale:                         0.24543
-Method:                          IRLS   Log-Likelihood:                -409.73
-Date:                Mon, 26 Aug 2024   Deviance:                       139.90
-Time:                        18:53:12   Pearson chi2:                     140.
-No. Iterations:                     3   Pseudo R-squ. (CS):            0.02633
+Dep. Variable:               OLD_sign   No. Observations:                 3648
+Model:                            GLM   Df Residuals:                     3630
+Model Family:                Gaussian   Df Model:                           17
+Link Function:               Identity   Scale:                         0.16200
+Method:                          IRLS   Log-Likelihood:                -1847.3
+Date:                Wed, 28 Aug 2024   Deviance:                       588.06
+Time:                        16:34:20   Pearson chi2:                     588.
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.02084
 Covariance Type:            nonrobust
-==============================================================================
-                 coef    std err          z      P>|z|      [0.025      0.975]
-------------------------------------------------------------------------------
-Intercept      0.5417      0.051     10.713      0.000       0.443       0.641
-day[T.2.0]     0.0208      0.072      0.291      0.771      -0.119       0.161
-day[T.3.0]    -0.1875      0.072     -2.622      0.009      -0.328      -0.047
-day[T.4.0]     0.0729      0.072      1.020      0.308      -0.067       0.213
-day[T.5.0]  1.058e-15      0.072   1.48e-14      1.000      -0.140       0.140
-day[T.6.0]    -0.0104      0.072     -0.146      0.884      -0.151       0.130
-==============================================================================
+================================================================================================
+                                   coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------------------------
+Intercept                        0.1875      0.027      6.972      0.000       0.135       0.240
+day[T.2.0]                      -0.0312      0.038     -0.822      0.411      -0.106       0.043
+day[T.3.0]                      -0.0134      0.038     -0.352      0.725      -0.088       0.061
+day[T.4.0]                      -0.0536      0.038     -1.409      0.159      -0.128       0.021
+day[T.5.0]                     1.01e-15      0.038   2.65e-14      1.000      -0.075       0.075
+day[T.6.0]                      -0.0104      0.049     -0.212      0.832      -0.107       0.086
+tasks[T.DualGo]                 -0.0313      0.038     -0.822      0.411      -0.106       0.043
+tasks[T.DualNoGo]                0.0179      0.038      0.470      0.639      -0.057       0.092
+day[T.2.0]:tasks[T.DualGo]       0.0580      0.054      1.079      0.281      -0.047       0.163
+day[T.3.0]:tasks[T.DualGo]       0.2500      0.054      4.648      0.000       0.145       0.355
+day[T.4.0]:tasks[T.DualGo]       0.0804      0.054      1.494      0.135      -0.025       0.186
+day[T.5.0]:tasks[T.DualGo]       0.0759      0.054      1.411      0.158      -0.030       0.181
+day[T.6.0]:tasks[T.DualGo]       0.0417      0.069      0.600      0.548      -0.094       0.178
+day[T.2.0]:tasks[T.DualNoGo]     0.0670      0.054      1.245      0.213      -0.038       0.172
+day[T.3.0]:tasks[T.DualNoGo]    -0.0045      0.054     -0.083      0.934      -0.110       0.101
+day[T.4.0]:tasks[T.DualNoGo]     0.0893      0.054      1.660      0.097      -0.016       0.195
+day[T.5.0]:tasks[T.DualNoGo]     0.0580      0.054      1.079      0.281      -0.047       0.163
+day[T.6.0]:tasks[T.DualNoGo]     0.0446      0.069      0.643      0.520      -0.091       0.181
+================================================================================================
 #+end_example
 
 #+begin_src ipython
-print(result.params.keys())
+pval_DPA = [result.pvalues[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+pval_Go = [result.pvalues[i] for i in result.params.keys() if 'DualGo' in i]
+pval_NoGo = [result.pvalues[i] for i in result.params.keys() if 'DualNoGo' in i]
 #+end_src
 
 #+RESULTS:
-: Index(['Intercept', 'day[T.2.0]', 'day[T.3.0]', 'day[T.4.0]', 'day[T.5.0]',
-:        'day[T.6.0]'],
-:       dtype='object')
 
 #+begin_src ipython
-coefs = []
-for i in result.params.keys():
-    coefs.append(result.params[i])
+coefs_DPA = [result.params[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+coefs_Go = [result.params[i] for i in result.params.keys() if 'DualGo' in i]
+coefs_NoGo = [result.params[i] for i in result.params.keys() if 'DualNoGo' in i]
+#+end_src
 
-plt.plot(np.arange(1, 7), coefs[:6])
+#+RESULTS:
+
+#+begin_src ipython
+plt.plot(np.arange(1, options['n_days']+1), coefs_DPA, '-o', color='r')
+plt.plot(np.arange(1, options['n_days']+1), coefs_Go, '-o', color='b')
+plt.plot(np.arange(1, options['n_days']+1), coefs_NoGo, '-o', color='g')
+
+print(np.round(pval_DPA, 3))
+print(np.round(pval_Go, 3))
+print(np.round(pval_NoGo, 3))
+
+for i in range(len(coefs_DPA)):
+    if pval_DPA[i] < 0.05:
+        plt.text(i+1, .01, '*', ha='center', va='bottom', color='r')
+    if pval_Go[i] < 0.05:
+        plt.text(i+1, .05, '*', ha='center', va='bottom', color='b')
+    if pval_NoGo[i] < 0.05:
+        plt.text(i+1, .1, '*', ha='center', va='bottom', color='g')
+
 plt.xlabel('Day')
-plt.ylabel('$\\beta_{overlap}$')
+plt.ylabel('sign(SOLD) $\\beta_{day}$')
 plt.show()
-    #+end_src
+#+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_38.png]]
+:RESULTS:
+: [0.    0.411 0.725 0.159 1.    0.832]
+: [0.411 0.281 0.    0.135 0.158 0.548]
+: [0.639 0.213 0.934 0.097 0.281 0.52 ]
+[[./figures/landscape/figure_110.png]]
+:END:
+
+
+#+RESULTS:
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+*** dist ED
 
 #+begin_src ipython
-print(result.summary())
-#+end_src
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+
+  formula = 'dist_ED ~ day * tasks'
+
+  results = []
+  glm = smf.glm(formula=formula, data=y, family=sm.families.Gaussian())
+  # glm = smf.mixedlm(formula, y, groups=y['day'], re_formula='1')
+  result = glm.fit()
+  pval = result.pvalues
+
+  print(result.summary())
+    #+end_src
 
 #+RESULTS:
 #+begin_example
                  Generalized Linear Model Regression Results
 ==============================================================================
-Dep. Variable:            overlaps_ED   No. Observations:                  576
-Model:                            GLM   Df Residuals:                      570
-Model Family:                Gaussian   Df Model:                            5
-Link Function:               Identity   Scale:                         0.34608
-Method:                          IRLS   Log-Likelihood:                -508.70
-Date:                Mon, 26 Aug 2024   Deviance:                       197.27
-Time:                        17:54:52   Pearson chi2:                     197.
-No. Iterations:                     3   Pseudo R-squ. (CS):             0.5316
+Dep. Variable:                dist_ED   No. Observations:                 3648
+Model:                            GLM   Df Residuals:                     3630
+Model Family:                Gaussian   Df Model:                           17
+Link Function:               Identity   Scale:                         0.22039
+Method:                          IRLS   Log-Likelihood:                -2408.7
+Date:                Wed, 28 Aug 2024   Deviance:                       800.02
+Time:                        16:34:46   Pearson chi2:                     800.
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.08119
 Covariance Type:            nonrobust
-==============================================================================
-                 coef    std err          z      P>|z|      [0.025      0.975]
-------------------------------------------------------------------------------
-Intercept      0.4003      0.060      6.667      0.000       0.283       0.518
-day[T.2.0]    -0.2510      0.085     -2.956      0.003      -0.417      -0.085
-day[T.3.0]     0.2413      0.085      2.842      0.004       0.075       0.408
-day[T.4.0]    -0.8347      0.085     -9.830      0.000      -1.001      -0.668
-day[T.5.0]    -0.4128      0.085     -4.862      0.000      -0.579      -0.246
-day[T.6.0]    -1.2922      0.085    -15.218      0.000      -1.459      -1.126
-==============================================================================
+================================================================================================
+                                   coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------------------------
+Intercept                        0.1062      0.031      3.384      0.001       0.045       0.168
+day[T.2.0]                      -0.1781      0.044     -4.014      0.000      -0.265      -0.091
+day[T.3.0]                      -0.0950      0.044     -2.141      0.032      -0.182      -0.008
+day[T.4.0]                      -0.1120      0.044     -2.526      0.012      -0.199      -0.025
+day[T.5.0]                      -0.2633      0.044     -5.936      0.000      -0.350      -0.176
+day[T.6.0]                      -0.3259      0.057     -5.691      0.000      -0.438      -0.214
+tasks[T.DualGo]                  0.1092      0.044      2.461      0.014       0.022       0.196
+tasks[T.DualNoGo]               -0.1060      0.044     -2.389      0.017      -0.193      -0.019
+day[T.2.0]:tasks[T.DualGo]      -0.0153      0.063     -0.243      0.808      -0.138       0.108
+day[T.3.0]:tasks[T.DualGo]      -0.0646      0.063     -1.030      0.303      -0.188       0.058
+day[T.4.0]:tasks[T.DualGo]      -0.1031      0.063     -1.643      0.100      -0.226       0.020
+day[T.5.0]:tasks[T.DualGo]       0.1380      0.063      2.200      0.028       0.015       0.261
+day[T.6.0]:tasks[T.DualGo]      -0.0212      0.081     -0.262      0.793      -0.180       0.138
+day[T.2.0]:tasks[T.DualNoGo]    -0.0168      0.063     -0.267      0.789      -0.140       0.106
+day[T.3.0]:tasks[T.DualNoGo]    -0.0012      0.063     -0.019      0.985      -0.124       0.122
+day[T.4.0]:tasks[T.DualNoGo]    -0.0025      0.063     -0.040      0.968      -0.125       0.120
+day[T.5.0]:tasks[T.DualNoGo]    -0.0667      0.063     -1.063      0.288      -0.190       0.056
+day[T.6.0]:tasks[T.DualNoGo]     0.0113      0.081      0.140      0.889      -0.147       0.170
+================================================================================================
 #+end_example
+
+#+begin_src ipython
+pval_DPA = [result.pvalues[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+pval_Go = [result.pvalues[i] for i in result.params.keys() if 'DualGo' in i]
+pval_NoGo = [result.pvalues[i] for i in result.params.keys() if 'DualNoGo' in i]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+coefs_DPA = [result.params[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+coefs_Go = [result.params[i] for i in result.params.keys() if 'DualGo' in i]
+coefs_NoGo = [result.params[i] for i in result.params.keys() if 'DualNoGo' in i]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+plt.plot(np.arange(1, options['n_days']+1), coefs_DPA, '-o', color='r')
+plt.plot(np.arange(1, options['n_days']+1), coefs_Go, '-o', color='b')
+plt.plot(np.arange(1, options['n_days']+1), coefs_NoGo, '-o', color='g')
+
+print(np.round(pval_DPA, 3))
+print(np.round(pval_Go, 3))
+print(np.round(pval_NoGo, 3))
+
+for i in range(len(coefs_DPA)):
+    if pval_DPA[i] < 0.05:
+        plt.text(i+1, .01, '*', ha='center', va='bottom', color='r')
+    if pval_Go[i] < 0.05:
+        plt.text(i+1, .05, '*', ha='center', va='bottom', color='b')
+    if pval_NoGo[i] < 0.05:
+        plt.text(i+1, .1, '*', ha='center', va='bottom', color='g')
+
+plt.xlabel('Day')
+plt.ylabel('DOED $\\beta_{day}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.001 0.    0.032 0.012 0.    0.   ]
+: [0.014 0.808 0.303 0.1   0.028 0.793]
+: [0.017 0.789 0.985 0.968 0.288 0.889]
+[[./figures/landscape/figure_115.png]]
+:END:
+
+
+#+RESULTS:
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** sign dist ED
+
+#+begin_src ipython
+  import statsmodels.api as sm
+  import statsmodels.formula.api as smf
+
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+
+  formula = 'OED_sign ~ day * tasks'
+
+  results = []
+  glm = smf.glm(formula=formula, data=y, family=sm.families.Gaussian())
+  # glm = smf.mixedlm(formula, y, groups=y['day'], re_formula='1')
+  result = glm.fit()
+  pval = result.pvalues
+
+  print(result.summary())
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:               OED_sign   No. Observations:                 3648
+Model:                            GLM   Df Residuals:                     3630
+Model Family:                Gaussian   Df Model:                           17
+Link Function:               Identity   Scale:                         0.23677
+Method:                          IRLS   Log-Likelihood:                -2539.5
+Date:                Wed, 28 Aug 2024   Deviance:                       859.47
+Time:                        16:35:26   Pearson chi2:                     859.
+No. Iterations:                     3   Pseudo R-squ. (CS):            0.05890
+Covariance Type:            nonrobust
+================================================================================================
+                                   coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------------------------
+Intercept                        0.5714      0.033     17.576      0.000       0.508       0.635
+day[T.2.0]                      -0.1473      0.046     -3.204      0.001      -0.237      -0.057
+day[T.3.0]                       0.0313      0.046      0.680      0.497      -0.059       0.121
+day[T.4.0]                      -0.0357      0.046     -0.777      0.437      -0.126       0.054
+day[T.5.0]                      -0.2054      0.046     -4.466      0.000      -0.295      -0.115
+day[T.6.0]                      -0.1652      0.059     -2.783      0.005      -0.282      -0.049
+tasks[T.DualGo]                  0.1071      0.046      2.330      0.020       0.017       0.197
+tasks[T.DualNoGo]               -0.0938      0.046     -2.039      0.041      -0.184      -0.004
+day[T.2.0]:tasks[T.DualGo]       0.0268      0.065      0.412      0.680      -0.101       0.154
+day[T.3.0]:tasks[T.DualGo]      -0.0268      0.065     -0.412      0.680      -0.154       0.101
+day[T.4.0]:tasks[T.DualGo]      -0.1295      0.065     -1.991      0.046      -0.257      -0.002
+day[T.5.0]:tasks[T.DualGo]       0.1250      0.065      1.922      0.055      -0.002       0.252
+day[T.6.0]:tasks[T.DualGo]      -0.0030      0.084     -0.035      0.972      -0.168       0.162
+day[T.2.0]:tasks[T.DualNoGo]    -0.0536      0.065     -0.824      0.410      -0.181       0.074
+day[T.3.0]:tasks[T.DualNoGo]    -0.0580      0.065     -0.893      0.372      -0.185       0.069
+day[T.4.0]:tasks[T.DualNoGo]     0.0357      0.065      0.549      0.583      -0.092       0.163
+day[T.5.0]:tasks[T.DualNoGo]    -0.0089      0.065     -0.137      0.891      -0.136       0.119
+day[T.6.0]:tasks[T.DualNoGo]     0.1146      0.084      1.365      0.172      -0.050       0.279
+================================================================================================
+#+end_example
+
+#+begin_src ipython
+pval_DPA = [result.pvalues[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+pval_Go = [result.pvalues[i] for i in result.params.keys() if 'DualGo' in i]
+pval_NoGo = [result.pvalues[i] for i in result.params.keys() if 'DualNoGo' in i]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+coefs_DPA = [result.params[j] for i, j in enumerate(result.params.keys()) if i<options['n_days']]
+coefs_Go = [result.params[i] for i in result.params.keys() if 'DualGo' in i]
+coefs_NoGo = [result.params[i] for i in result.params.keys() if 'DualNoGo' in i]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+plt.plot(np.arange(1, options['n_days']+1), coefs_DPA, '-o', color='r')
+plt.plot(np.arange(1, options['n_days']+1), coefs_Go, '-o', color='b')
+plt.plot(np.arange(1, options['n_days']+1), coefs_NoGo, '-o', color='g')
+
+print(np.round(pval_DPA, 3))
+print(np.round(pval_Go, 3))
+print(np.round(pval_NoGo, 3))
+
+for i in range(len(coefs_DPA)):
+    if pval_DPA[i] < 0.05:
+        plt.text(i+1, .01, '*', ha='center', va='bottom', color='r')
+    if pval_Go[i] < 0.05:
+        plt.text(i+1, .05, '*', ha='center', va='bottom', color='b')
+    if pval_NoGo[i] < 0.05:
+        plt.text(i+1, .1, '*', ha='center', va='bottom', color='g')
+
+plt.xlabel('Day')
+plt.ylabel('sign(DOED) $\\beta_{day}$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [0.    0.001 0.497 0.437 0.    0.005]
+: [0.02  0.68  0.68  0.046 0.055 0.972]
+: [0.041 0.41  0.372 0.583 0.891 0.172]
+[[./figures/landscape/figure_120.png]]
+:END:
+
+#+RESULTS:
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

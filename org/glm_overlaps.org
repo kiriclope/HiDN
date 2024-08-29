@@ -1,0 +1,2222 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+Use pymer 4
+Look at incorrect trials vs correct trials, trial by trial
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+from sklearn.exceptions import ConvergenceWarning
+warnings.filterwarnings("ignore")
+
+import sys
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import os
+if not sys.warnoptions:
+warnings.simplefilter("ignore")
+os.environ["PYTHONWARNINGS"] = "ignore"
+
+import pickle as pkl
+import numpy as np
+import matplotlib.pyplot as plt
+from time import perf_counter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from skorch import NeuralNetClassifier
+
+from sklearn.base import clone
+from sklearn.metrics import make_scorer, roc_auc_score
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+from sklearn.decomposition import PCA
+
+from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.decode.bump import decode_bump, circcvl
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.decode.classifiers import safeSelector
+from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Perceptron
+
+#+begin_src ipython :tangle ../src/torch/perceptron.py
+import torch
+import torch.nn as nn
+
+class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
+    def __init__(self, pos_weight=None, weight=None, reduction='mean'):
+        super(CustomBCEWithLogitsLoss, self).__init__(weight=weight, reduction=reduction, pos_weight=pos_weight)
+
+    def forward(self, input, target):
+        target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
+        return super().forward(input.to(torch.float32), target.to(torch.float32))
+#+end_src
+
+#+RESULTS:
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/perceptron.py
+class Perceptron(nn.Module):
+    def __init__(self, num_features, dropout_rate=0.0):
+        super(Perceptron, self).__init__()
+        self.linear = nn.Linear(num_features, 1)
+        self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+        x = self.dropout(x)
+        hidden = self.linear(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/perceptron.py
+class MLP(nn.Module):
+    def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
+        super(MLP, self).__init__()
+        self.linear = nn.Linear(num_features, hidden_units)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_units, 1)
+
+    def forward(self, x):
+        x = self.dropout(x)
+        x = self.relu(self.linear(x))
+        x = self.dropout(x)
+        hidden = self.linear2(x)
+        return hidden
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/skorch.py
+import torch
+from skorch import NeuralNetClassifier
+from skorch.callbacks import Callback
+from skorch.callbacks import EarlyStopping
+
+early_stopping = EarlyStopping(
+    monitor='train_loss',    # Metric to monitor
+    patience=10,              # Number of epochs to wait for improvement
+    threshold=0.001,       # Minimum change to qualify as an improvement
+    threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
+    lower_is_better=True     # Set to True if lower metric values are better
+)
+
+class RegularizedNet(NeuralNetClassifier):
+    def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
+        self.alpha = alpha  # Regularization strength
+        self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
+
+        super().__init__(module, **kwargs)
+
+    def get_loss(self, y_pred, y_true, X=None, training=False):
+        # Call super method to compute primary loss
+        if y_pred.shape != y_true.shape:
+            y_true = y_true.unsqueeze(-1)
+
+        loss = super().get_loss(y_pred, y_true, X=X, training=training)
+
+        if self.alpha>0:
+            elastic_net_reg = 0
+            for param in self.module_.parameters():
+                elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
+                elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
+
+        # Add the elastic net regularization term to the primary loss
+        return loss + elastic_net_reg
+#+end_src
+
+#+RESULTS:
+
+** Model
+#+begin_src ipython
+def get_bagged_coefs(clf, n_estimators):
+    coefs_list = []
+    bias_list = []
+    for i in range(n_estimators):
+        model = clf.estimators_[i]
+        try:
+            coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+            bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+        except:
+            coefs = model.named_steps['net'].coef_.T
+            bias = model.named_steps['net'].intercept_.T
+
+        # coefs, bias = rescale_coefs(model, coefs, bias)
+
+        coefs_list.append(coefs)
+        bias_list.append(bias)
+
+    return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/classificationCV.py
+from time import perf_counter
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+  from sklearn.decomposition import PCA
+
+  from mne.decoding import SlidingEstimator, cross_val_multiscore
+
+  class ClassificationCV():
+      def __init__(self, net, params, **kwargs):
+
+          pipe = []
+          self.scaler = kwargs['scaler']
+          if self.scaler is not None and self.scaler !=0 :
+              pipe.append(("scaler", StandardScaler()))
+
+          self.n_comp = kwargs['n_comp']
+          if kwargs['n_comp'] is not None:
+              self.n_comp = kwargs['n_comp']
+              pipe.append(("pca", PCA(n_components=self.n_comp)))
+
+          self.prescreen = kwargs['prescreen']
+          self.alpha = kwargs['pval']
+          if kwargs["prescreen"] is not None:
+              pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
+
+          pipe.append(("net", net))
+          self.model = Pipeline(pipe)
+
+          self.num_features = kwargs['num_features']
+          self.scoring =  kwargs['scoring']
+
+          if  kwargs['n_splits']==-1:
+              self.cv = LeaveOneOut()
+          else:
+              self.cv = RepeatedStratifiedKFold(n_splits=kwargs['n_splits'], n_repeats=kwargs['n_repeats'])
+
+          self.params = params
+          self.verbose =  kwargs['verbose']
+          self.n_jobs =  kwargs['n_jobs']
+
+      def fit(self, X, y):
+          start = perf_counter()
+          if self.verbose:
+              print('Fitting hyperparameters ...')
+
+          try:
+              self.model['net'].module__num_features = self.num_features
+          except:
+              pass
+
+          grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
+          grid.fit(X.astype('float32'), y.astype('float32'))
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          self.best_model = grid.best_estimator_
+          self.best_params = grid.best_params_
+
+          if self.verbose:
+              print(self.best_params)
+
+          try:
+              self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+              self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+          except:
+              self.coefs = self.best_model.named_steps['net'].coef_.T
+              self.bias = self.best_model.named_steps['net'].intercept_.T
+
+      def get_bootstrap_coefs(self, X, y, n_boots=10):
+          start = perf_counter()
+          if self.verbose:
+              print('Bootstrapping coefficients ...')
+
+          self.bagging_clf = BaggingClassifier(base_estimator=self.best_model, n_estimators=n_boots)
+          self.bagging_clf.fit(X.astype('float32'), y.astype('float32'))
+          end = perf_counter()
+
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
+
+          return self.coefs, self.bias
+
+
+      def get_overlap(self, model, X):
+          try:
+              coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+              bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+          except:
+              coefs = model.named_steps['net'].coef_.T
+              bias = model.named_steps['net'].intercept_.T
+
+          if self.scaler is not None and self.scaler!=0:
+              scaler = model.named_steps['scaler']
+              for i in range(X.shape[-1]):
+                  X[..., i] = scaler.transform(X[..., i])
+
+          if (self.prescreen is not None) and (self.prescreen != 0):
+              filter = model.named_steps['filter']
+              idx = filter.selector.get_support(indices=True)
+              self.overlaps = (np.swapaxes(X[:, idx], 1, -1) @ coefs) / np.linalg.norm(coefs, axis=0)
+
+          elif (self.n_comp is not None) and (self.n_comp != 0):
+              pca = model.named_steps['pca']
+              X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
+
+              for i in range(X.shape[-1]):
+                  X_pca[..., i] = pca.transform(X[..., i])
+
+              self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) # / np.linalg.norm(coefs, axis=0)
+          else:
+              self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs) / np.linalg.norm(coefs, axis=0)
+              # self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs, axis=0)
+
+          return self.overlaps
+
+      def get_bootstrap_overlaps(self, X):
+          start = perf_counter()
+          if self.verbose:
+              print('Getting bootstrapped overlaps ...')
+
+          X_copy = np.copy(X)
+          overlaps_list = []
+          n_boots = len(self.bagging_clf.estimators_)
+
+          for i in range(n_boots):
+              model = self.bagging_clf.estimators_[i]
+              overlaps = self.get_overlap(model, X_copy)
+              overlaps_list.append(overlaps)
+
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          return np.array(overlaps_list).mean(0)
+
+      def get_cv_scores(self, X, y, scoring):
+          start = perf_counter()
+          if self.verbose:
+              print('Computing cv scores ...')
+
+          estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
+                                       scoring=scoring, verbose=False)
+
+          self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
+                                             cv=self.cv, n_jobs=-1, verbose=False)
+          end = perf_counter()
+          if self.verbose:
+              print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+          return self.scores
+#+end_src
+
+#+RESULTS:
+
+  #+begin_src ipython :tangle ../src/torch/main.py
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.preprocess.helpers import avg_epochs
+
+def get_classification(model, RETURN='overlaps', **options):
+        start = perf_counter()
+
+        dum = 0
+        if options['features'] == 'distractor':
+                if options['task'] != 'Dual':
+                        task = options['task']
+                        options['task'] = 'Dual'
+                        dum = 1
+
+        X_days, y_days = get_X_y_days(**options)
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
+        y_labels = y.copy()
+
+        if options['features'] == 'sample':
+            y = y.sample_odor.dropna().to_numpy()
+        elif options['features'] == 'distractor':
+            y = y.dist_odor.dropna().to_numpy()
+        elif options['features'] == 'choice':
+            y = y.choice.to_numpy()
+
+        y[y==-1] = 0
+
+        if options['verbose']:
+            print('X', X.shape, 'y', y.shape)
+
+        X_avg = avg_epochs(X, **options).astype('float32')
+        y_avg = y
+
+        if options['trials'] == 'correct':
+            options['trials'] = ''
+            X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+        if dum:
+                options['features'] = 'sample'
+                options['task'] = task
+                X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+        # if options['class_weight']:
+        #         pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
+        #         print('imbalance', pos_weight)
+        #         model.criterion__pos_weight = pos_weight
+
+        if RETURN is None:
+            return None
+        else:
+            model.fit(X_avg, y_avg)
+
+        if 'scores' in RETURN:
+            scores = model.get_cv_scores(X, y, options['scoring'])
+            end = perf_counter()
+            print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+            return scores
+        elif 'overlaps' in RETURN:
+            coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
+            overlaps = model.get_bootstrap_overlaps(X)
+            end = perf_counter()
+            print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+            return overlaps
+        elif 'coefs' in RETURN:
+            coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
+            end = perf_counter()
+            print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+            return coefs, bias
+        else:
+            return None
+#+end_src
+
+#+RESULTS:
+
+** Other
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  params = { 'net__alpha': np.logspace(-4, 4, 10),
+             # 'net__l1_ratio': np.linspace(0, 1, 10),
+             # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+            }
+
+  # ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
+
+  kwargs = {
+      'mouse': 'ACCM04', 'laser': 0,
+      'trials': '', 'reload': 1, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 3, 'n_repeats': 32,
+      'class_weight': 0,
+      'multilabel':0,
+  }
+
+  # kwargs['days'] = ['first', 'middle', 'last']
+  options = set_options(**kwargs)
+  days = np.arange(1, options['n_days']+1)
+  # days = ['first', 'middle', 'last']
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  options['scoring'] = safe_roc_auc
+  options['n_jobs'] = 30
+#+end_src
+
+#+RESULTS:
+
+* DATA
+
+#+begin_src ipython
+import pandas as pd
+options['n_days'] = 6
+y = []
+for mouse in options['mice']:
+    print(mouse)
+    try:
+        y_mouse = pkl_load('y_%s.pkl' % mouse)
+        y_mouse['mouse'] = mouse
+        y.append(y_mouse)
+    except:
+        pass
+y = pd.concat(y)
+#+end_src
+
+#+RESULTS:
+: ChRM04
+: JawsM15
+: JawsM18
+: ACCM03
+: ACCM04
+
+#+begin_src ipython
+print(y.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
+:        'dist_odor', 'choice', 'behavior', 'pair', 'sample', 'sample_STIM',
+:        'sample_ED', 'sample_MD', 'sample_LD', 'dist', 'dist_STIM', 'dist_ED',
+:        'dist_MD', 'dist_LD', 'OED_sign', 'OLD_sign', 'mouse'],
+:       dtype='object')
+
+
+* Sample Late Delay
+** behavior ~ day * tasks * overlaps + (1|mouse)
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  print(y.behavior.unique())
+
+  formula = 'behavior ~ day * tasks * sample_LD + (1+ tasks + day + sample_LD | mouse)'
+
+  results = []
+  data = y.copy()
+  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+#+end_src
+
+#+RESULTS:
+#+begin_example
+[0 1]
+[1] "failure to converge in 10000 evaluations"
+[2] " \n"
+
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~day*tasks*sample_LD+(1+tasks+day+sample_LD|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1750.881 	 AIC: 3555.762
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.148  0.384
+mouse    tasksDualGo  0.077  0.278
+mouse  tasksDualNoGo  0.007  0.084
+mouse            day  0.030  0.174
+mouse      sample_LD  0.003  0.051
+
+                 IV1            IV2   Corr
+mouse    (Intercept)    tasksDualGo  0.141
+mouse    (Intercept)  tasksDualNoGo -0.776
+mouse    (Intercept)            day -0.031
+mouse    (Intercept)      sample_LD  0.598
+mouse    tasksDualGo  tasksDualNoGo  0.515
+mouse    tasksDualGo            day -0.510
+mouse    tasksDualGo      sample_LD  0.870
+mouse  tasksDualNoGo            day -0.298
+mouse  tasksDualNoGo      sample_LD  0.036
+mouse            day      sample_LD -0.517
+
+Fixed effects:
+#+end_example
+
+
+#+begin_src ipython
+random_effects = glm.ranef
+print(random_effects.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['X.Intercept.', 'tasksDualGo', 'tasksDualNoGo', 'day', 'sample_LD'], dtype='object')
+
+#+begin_src ipython
+print(result['P-val'])
+#+end_src
+
+#+RESULTS:
+#+begin_example
+(Intercept)                    0.624
+day                            0.000
+tasksDualGo                    0.242
+tasksDualNoGo                  0.831
+sample_LD                      0.165
+day:tasksDualGo                0.756
+day:tasksDualNoGo              0.972
+day:sample_LD                  0.027
+tasksDualGo:sample_LD          0.101
+tasksDualNoGo:sample_LD        0.424
+day:tasksDualGo:sample_LD      0.025
+day:tasksDualNoGo:sample_LD    0.180
+Name: P-val, dtype: float64
+#+end_example
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .5
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+# keys = result.Estimate.keys()
+
+for i, key in enumerate(keys):
+     if key == '(Intercept)':
+          df = result.Estimate['(Intercept)']+ random_effects['X.Intercept.']
+     else:
+          df = result.Estimate['(Intercept)']+ result.Estimate[key] + random_effects[key]
+
+     df *= -1
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.51, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1.5,1.5])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_26.png]]
+#+RESULTS:
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['day', 'day:tasksDualGo', 'day:tasksDualNoGo']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     if i == 0 :
+          df = result.Estimate[key] + random_effects['day']
+     else:
+          df = result.Estimate['day']+ result.Estimate[key] + random_effects['day']
+     df *= -1
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.01, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.01, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.01, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1,1])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_27.png]]
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['sample_LD', 'tasksDualGo:sample_LD', 'tasksDualNoGo:sample_LD']
+for i, key in enumerate(keys):
+     if i==0:
+          df = result.Estimate[key] + random_effects['sample_LD']
+     else:
+          df = result.Estimate['sample_LD']+ result.Estimate[key] + random_effects['sample_LD']
+
+     df *= -1
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.51, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1.5,1.5])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_28.png]]
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['day:sample_LD', 'day:tasksDualGo:sample_LD', 'day:tasksDualNoGo:sample_LD']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     if i == 0 :
+          df = result.Estimate[key] + random_effects['day']
+     else:
+          df = result.Estimate['day:sample_LD']+ result.Estimate[key] + random_effects['day']
+     df *= -1
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.01, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.01, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.01, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1,1])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_29.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+** behavior ~ tasks * overlaps, per day
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  results = []
+  data = y.copy()
+  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+
+  formula = 'behavior ~ tasks * sample_LD + (1 | mouse)'
+  # formula = 'behavior ~ tasks * sample_LD + (1 | mouse)'
+  data = data[data.mouse!='ACCM04']
+
+  glms = []
+  results = []
+  for day in y.day.unique():
+      glm = Lmer(formula=formula, data=data[data.day==day], family='binomial')
+      glm.fit()
+      glms.append(glm)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -325.050 	 AIC: 664.101
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.015  0.124
+
+No random effect correlations specified
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -248.136 	 AIC: 510.271
+
+Random effects:
+
+              Name    Var   Std
+mouse  (Intercept)  1.041  1.02
+
+No random effect correlations specified
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -206.989 	 AIC: 427.978
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.185  0.431
+
+No random effect correlations specified
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -117.096 	 AIC: 248.192
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.597  0.773
+
+No random effect correlations specified
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -140.226 	 AIC: 294.452
+
+Random effects:
+
+              Name   Var    Std
+mouse  (Intercept)  1.34  1.158
+
+No random effect correlations specified
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 288	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -64.273 	 AIC: 142.546
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.086  0.294
+
+No random effect correlations specified
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+coefs = []
+rands = []
+
+for day in y.day.unique():
+    glm = glms[day-1]
+    df = glm.coefs
+    df['day'] = day
+    coefs.append(df)
+
+    df2 = glm.ranef
+    df2['day'] = day
+    rands.append(df2)
+
+coefs = pd.concat(coefs)
+rands = pd.concat(rands)
+# coefs = pd.concat(coefs, ignore_index=True)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(rands.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['X.Intercept.', 'day'], dtype='object')
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['sample_LD', 'tasksDualGo:sample_LD', 'tasksDualNoGo:sample_LD']
+
+for i, key in enumerate(keys):
+    df = []
+    for day in y.day.unique():
+        result = coefs[coefs.day==day]
+
+        if key == '(Intercept)':
+            df.append(-result.Estimate['(Intercept)'])
+        else:
+            df.append(-result.Estimate['sample_LD'] - result.Estimate[key])
+
+        if result['P-val'][key]<0.001:
+            plt.text(day,   5.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.01:
+            plt.text(day,   5.1 + i * 0.5, '**', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.05:
+            plt.text(day,   5.1 + i * 0.5, '*', ha='center', va='bottom', color=colors[i])
+
+
+    plt.plot(np.arange(1, 7), df, '-o', color=colors[i])
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{sample_{LD}}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+
+for i, key in enumerate(keys):
+    df = []
+    for day in y.day.unique():
+        result = coefs[coefs.day==day]
+
+        if key == '(Intercept)':
+            df.append(-result.Estimate['(Intercept)'])
+        else:
+            df.append(-result.Estimate['(Intercept)'] - result.Estimate[key])
+
+        if result['P-val'][key]<0.001:
+            plt.text(day,   3.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.01:
+            plt.text(day,   3.1 + i * 0.5, '**', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.05:
+            plt.text(day,   3.1 + i * 0.5, '*', ha='center', va='bottom', color=colors[i])
+
+
+    plt.plot(np.arange(1, 7), df, '-o', color=colors[i])
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{tasks}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_35.png]]
+
+
+* Distractor Early Delay
+** behavior ~ day * tasks * overlaps
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  print(y.behavior.unique())
+
+  formula = 'behavior ~ day * tasks * dist_ED + (1+ tasks + day + dist_ED | mouse)'
+
+  results = []
+  data = y.copy()
+  # data = data[data.mouse != 'JawsM18']
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+#+end_src
+
+#+RESULTS:
+#+begin_example
+[0 1]
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~day*tasks*dist_ED+(1+tasks+day+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1752.763 	 AIC: 3559.525
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.185  0.430
+mouse    tasksDualGo  0.079  0.280
+mouse  tasksDualNoGo  0.014  0.119
+mouse            day  0.032  0.180
+mouse        dist_ED  0.000  0.012
+
+                 IV1            IV2   Corr
+mouse    (Intercept)    tasksDualGo  0.001
+mouse    (Intercept)  tasksDualNoGo -0.727
+mouse    (Intercept)            day -0.077
+mouse    (Intercept)        dist_ED  0.995
+mouse    tasksDualGo  tasksDualNoGo  0.686
+mouse    tasksDualGo            day -0.596
+mouse    tasksDualGo        dist_ED -0.097
+mouse  tasksDualNoGo            day -0.353
+mouse  tasksDualNoGo        dist_ED -0.791
+mouse            day        dist_ED -0.021
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+random_effects = glm.ranef
+print(random_effects)
+#+end_src
+
+#+RESULTS:
+:          X.Intercept.  tasksDualGo  tasksDualNoGo       day   dist_ED
+: ACCM03       0.440830     0.299130      -0.001612 -0.141753  0.011346
+: ACCM04       0.440614    -0.337814      -0.187496  0.188535  0.014079
+: ChRM04      -0.530684    -0.159065       0.060624  0.076844 -0.014526
+: JawsM15     -0.141525     0.079885       0.051869  0.134592 -0.004452
+: JawsM18     -0.207606     0.107126       0.073152 -0.242943 -0.006357
+
+#+begin_src ipython
+print(result['P-val'])
+#+end_src
+
+#+RESULTS:
+#+begin_example
+(Intercept)                  0.974
+day                          0.000
+tasksDualGo                  0.796
+tasksDualNoGo                0.720
+dist_ED                      0.911
+day:tasksDualGo              0.174
+day:tasksDualNoGo            0.274
+day:dist_ED                  0.408
+tasksDualGo:dist_ED          0.642
+tasksDualNoGo:dist_ED        0.880
+day:tasksDualGo:dist_ED      0.453
+day:tasksDualNoGo:dist_ED    0.762
+Name: P-val, dtype: float64
+#+end_example
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .5
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+# keys = result.Estimate.keys()
+
+for i, key in enumerate(keys):
+     if key == '(Intercept)':
+          df = result.Estimate['(Intercept)']+ random_effects['X.Intercept.']
+     else:
+          df = result.Estimate['(Intercept)']+ result.Estimate[key] + random_effects[key]
+
+     df *= -1
+     print(df)
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.51, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1.5,1.5])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+#+begin_example
+gin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['day', 'day:tasksDualGo', 'day:tasksDualNoGo']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     if i == 0 :
+          df = result.Estimate[key] + random_effects['day']
+     else:
+          df = result.Estimate['day']+ result.Es
+#+end_example
+[[./figures/landscape/figure_40.png]]
+:END:
+#+RESULTS:
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['day', 'day:tasksDualGo', 'day:tasksDualNoGo']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     if i == 0 :
+          df = result.Estimate[key] + random_effects['day']
+     else:
+          df = result.Estimate['day']+ result.Estimate[key] + random_effects['day']
+     df *= -1
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.01, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.01, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.01, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1,1])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_41.png]]
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['dist_ED', 'tasksDualGo:dist_ED', 'tasksDualNoGo:dist_ED']
+for i, key in enumerate(keys):
+     if i==0:
+          df = result.Estimate[key] + random_effects['dist_ED']
+     else:
+          df = result.Estimate['dist_ED']+ result.Estimate[key] + random_effects['dist_ED']
+
+     df *= -1
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.51, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1.5,1.5])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_42.png]]
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['day:dist_ED', 'day:tasksDualGo:dist_ED', 'day:tasksDualNoGo:dist_ED']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     if i == 0 :
+          df = result.Estimate[key] + random_effects['day']
+     else:
+          df = result.Estimate['day:dist_ED']+ result.Estimate[key] + random_effects['day']
+     df *= -1
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.01, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.01, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.01, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1,1])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_43.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** behavior ~ tasks * overlaps, per day
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  results = []
+  data = y.copy()
+  data = data[data.mouse != 'ACCM04']
+
+  formula = 'behavior ~ tasks * dist_ED + (1 + tasks + dist_ED | mouse)'
+
+  glms = []
+  results = []
+  for day in y.day.unique():
+      glm = Lmer(formula=formula, data=data[data.day==day], family='binomial')
+      glm.fit()
+      glms.append(glm)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -324.337 	 AIC: 680.675
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.005  0.070
+mouse    tasksDualGo  0.015  0.122
+mouse  tasksDualNoGo  0.001  0.028
+mouse        dist_ED  0.008  0.089
+
+                 IV1            IV2  Corr
+mouse    (Intercept)    tasksDualGo   1.0
+mouse    (Intercept)  tasksDualNoGo   1.0
+mouse    (Intercept)        dist_ED   1.0
+mouse    tasksDualGo  tasksDualNoGo   1.0
+mouse    tasksDualGo        dist_ED   1.0
+mouse  tasksDualNoGo        dist_ED   1.0
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.0148845 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -245.281 	 AIC: 522.562
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  1.366  1.169
+mouse    tasksDualGo  0.062  0.248
+mouse  tasksDualNoGo  0.013  0.115
+mouse        dist_ED  0.121  0.348
+
+                 IV1            IV2  Corr
+mouse    (Intercept)    tasksDualGo  -1.0
+mouse    (Intercept)  tasksDualNoGo  -1.0
+mouse    (Intercept)        dist_ED   1.0
+mouse    tasksDualGo  tasksDualNoGo   1.0
+mouse    tasksDualGo        dist_ED  -1.0
+mouse  tasksDualNoGo        dist_ED  -1.0
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.00714466 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -204.747 	 AIC: 441.494
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.025  0.157
+mouse    tasksDualGo  0.020  0.140
+mouse  tasksDualNoGo  0.032  0.180
+mouse        dist_ED  0.002  0.047
+
+                 IV1            IV2  Corr
+mouse    (Intercept)    tasksDualGo   1.0
+mouse    (Intercept)  tasksDualNoGo  -1.0
+mouse    (Intercept)        dist_ED   1.0
+mouse    tasksDualGo  tasksDualNoGo  -1.0
+mouse    tasksDualGo        dist_ED   1.0
+mouse  tasksDualNoGo        dist_ED  -1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -117.024 	 AIC: 266.048
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.549  0.741
+mouse    tasksDualGo  0.120  0.346
+mouse  tasksDualNoGo  0.026  0.162
+mouse        dist_ED  0.243  0.493
+
+                 IV1            IV2   Corr
+mouse    (Intercept)    tasksDualGo  0.998
+mouse    (Intercept)  tasksDualNoGo -0.998
+mouse    (Intercept)        dist_ED  1.000
+mouse    tasksDualGo  tasksDualNoGo -0.992
+mouse    tasksDualGo        dist_ED  0.999
+mouse  tasksDualNoGo        dist_ED -0.997
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.0225755 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -140.183 	 AIC: 312.365
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  2.173  1.474
+mouse    tasksDualGo  0.422  0.649
+mouse  tasksDualNoGo  0.076  0.276
+mouse        dist_ED  0.001  0.037
+
+                 IV1            IV2   Corr
+mouse    (Intercept)    tasksDualGo -1.000
+mouse    (Intercept)  tasksDualNoGo -1.000
+mouse    (Intercept)        dist_ED -0.988
+mouse    tasksDualGo  tasksDualNoGo  1.000
+mouse    tasksDualGo        dist_ED  0.988
+mouse  tasksDualNoGo        dist_ED  0.990
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.0555658 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 288	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -62.266 	 AIC: 156.533
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  4.987  2.233
+mouse    tasksDualGo  3.339  1.827
+mouse  tasksDualNoGo  1.922  1.386
+mouse        dist_ED  0.210  0.458
+
+                 IV1            IV2   Corr
+mouse    (Intercept)    tasksDualGo -1.000
+mouse    (Intercept)  tasksDualNoGo -1.000
+mouse    (Intercept)        dist_ED  0.999
+mouse    tasksDualGo  tasksDualNoGo  1.000
+mouse    tasksDualGo        dist_ED -0.999
+mouse  tasksDualNoGo        dist_ED -0.999
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+coefs = []
+rands = []
+
+for day in y.day.unique():
+    glm = glms[day-1]
+    df = glm.coefs
+    df['day'] = day
+    coefs.append(df)
+
+    df2 = glm.ranef
+    df2['day'] = day
+    rands.append(df2)
+
+coefs = pd.concat(coefs)
+rands = pd.concat(rands)
+# coefs = pd.concat(coefs, ignore_index=True)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['dist_ED', 'tasksDualGo:dist_ED', 'tasksDualNoGo:dist_ED']
+
+for i, key in enumerate(keys):
+    df = []
+    for day in y.day.unique():
+        result = coefs[coefs.day==day]
+
+        if i==0:
+            df.append(-result.Estimate[key])
+        else:
+            df.append(-result.Estimate['dist_ED'] - result.Estimate[key])
+
+        if result['P-val'][key]<0.001:
+            plt.text(day,   1.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.01:
+            plt.text(day,   1.1 + i * 0.5, '**', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.05:
+            plt.text(day,   1.1 + i * 0.5, '*', ha='center', va='bottom', color=colors[i])
+
+
+    plt.plot(np.arange(1, 7), df, '-o', color=colors[i])
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{Dist_{ED}}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_47.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** behavior ~ overlaps, per day
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  results = []
+  data = y.copy()
+  data = data[data.mouse != 'JawsM18']
+
+  formula = 'behavior ~ dist_ED + (1 + dist_ED | mouse)'
+
+  glms = []
+  results = []
+  for day in y.day.unique():
+      glm = Lmer(formula=formula, data=data[data.day==day], family='binomial')
+      glm.fit()
+      glms.append(glm)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 576	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -396.449 	 AIC: 802.898
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.006  0.079
+mouse      dist_ED  0.102  0.320
+
+               IV1      IV2  Corr
+mouse  (Intercept)  dist_ED   1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 576	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -343.401 	 AIC: 696.803
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.894  0.946
+mouse      dist_ED  0.067  0.259
+
+               IV1      IV2  Corr
+mouse  (Intercept)  dist_ED  -1.0
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 576	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -315.460 	 AIC: 640.919
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.193  0.439
+mouse      dist_ED  0.000  0.010
+
+               IV1      IV2  Corr
+mouse  (Intercept)  dist_ED  -1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 576	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -234.938 	 AIC: 479.875
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  1.058  1.029
+mouse      dist_ED  0.011  0.104
+
+               IV1      IV2  Corr
+mouse  (Intercept)  dist_ED  -1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 576	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -233.002 	 AIC: 476.004
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.413  0.643
+mouse      dist_ED  0.011  0.106
+
+               IV1      IV2  Corr
+mouse  (Intercept)  dist_ED  -1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 192	 Groups: {'mouse': 2.0}
+
+Log-likelihood: -59.436 	 AIC: 128.872
+
+Random effects:
+
+              Name  Var  Std
+mouse  (Intercept)  0.0  0.0
+mouse      dist_ED  0.0  0.0
+
+               IV1      IV2 Corr
+mouse  (Intercept)  dist_ED
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+coefs = []
+rands = []
+
+for day in y.day.unique():
+    glm = glms[day-1]
+    df = glm.coefs
+    df['day'] = day
+    coefs.append(df)
+
+    df2 = glm.ranef
+    df2['day'] = day
+    rands.append(df2)
+
+coefs = pd.concat(coefs)
+rands = pd.concat(rands)
+# coefs = pd.concat(coefs, ignore_index=True)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['k', 'red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['dist_ED']
+
+for i, key in enumerate(keys):
+    df = []
+    for day in y.day.unique():
+        result = coefs[coefs.day==day]
+
+        if i==0:
+            df.append(-result.Estimate[key])
+        else:
+            df.append(-result.Estimate['dist_ED'] - result.Estimate[key])
+
+        if result['P-val'][key]<0.001:
+            plt.text(day,  0.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.01:
+            plt.text(day,   0.1 + i * 0.5, '**', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.05:
+            plt.text(day,   0.1 + i * 0.5, '*', ha='center', va='bottom', color=colors[i])
+
+
+    plt.plot(np.arange(1, 7), df, '-o', color=colors[i])
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{Dist_{ED}}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_51.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+** overlaps ~ tasks
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  results = []
+  data = y.copy()
+  # data = data[data.mouse != 'JawsM18']
+  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+
+
+  formula = 'dist_ED ~ tasks + (1 + tasks | mouse)'
+
+  glms = []
+  results = []
+  for day in y.day.unique():
+      glm = Lmer(formula=formula, data=data[data.day==day], family='gaussian')
+      glm.fit()
+      glms.append(glm)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~tasks+(1+tasks|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -255.172 	 AIC: 530.344
+
+Random effects:
+
+                   Name    Var    Std
+mouse       (Intercept)  0.049  0.221
+mouse       tasksDualGo  0.035  0.187
+mouse     tasksDualNoGo  0.019  0.136
+Residual                 0.118  0.344
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo  0.856
+mouse  (Intercept)  tasksDualNoGo -0.871
+mouse  tasksDualGo  tasksDualNoGo -1.000
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~tasks+(1+tasks|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -183.091 	 AIC: 386.182
+
+Random effects:
+
+                   Name    Var    Std
+mouse       (Intercept)  0.103  0.321
+mouse       tasksDualGo  0.013  0.113
+mouse     tasksDualNoGo  0.029  0.172
+Residual                 0.094  0.307
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo  0.246
+mouse  (Intercept)  tasksDualNoGo -0.299
+mouse  tasksDualGo  tasksDualNoGo -0.998
+
+Fixed effects:
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~tasks+(1+tasks|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -175.478 	 AIC: 370.955
+
+Random effects:
+
+                   Name    Var    Std
+mouse       (Intercept)  0.093  0.304
+mouse       tasksDualGo  0.042  0.204
+mouse     tasksDualNoGo  0.024  0.156
+Residual                 0.092  0.303
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo  0.714
+mouse  (Intercept)  tasksDualNoGo -0.441
+mouse  tasksDualGo  tasksDualNoGo -0.511
+
+Fixed effects:
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~tasks+(1+tasks|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -336.494 	 AIC: 692.988
+
+Random effects:
+
+                   Name    Var    Std
+mouse       (Intercept)  0.103  0.321
+mouse       tasksDualGo  0.072  0.268
+mouse     tasksDualNoGo  0.027  0.165
+Residual                 0.150  0.387
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo -0.897
+mouse  (Intercept)  tasksDualNoGo  0.427
+mouse  tasksDualGo  tasksDualNoGo -0.157
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~tasks+(1+tasks|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -438.518 	 AIC: 897.036
+
+Random effects:
+
+                   Name    Var    Std
+mouse       (Intercept)  0.140  0.374
+mouse       tasksDualGo  0.048  0.218
+mouse     tasksDualNoGo  0.054  0.232
+Residual                 0.203  0.451
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo  0.062
+mouse  (Intercept)  tasksDualNoGo -0.456
+mouse  tasksDualGo  tasksDualNoGo -0.916
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~tasks+(1+tasks|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 288	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -144.040 	 AIC: 308.080
+
+Random effects:
+
+                   Name    Var    Std
+mouse       (Intercept)  0.320  0.566
+mouse       tasksDualGo  0.010  0.101
+mouse     tasksDualNoGo  0.013  0.112
+Residual                 0.148  0.384
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo   1.0
+mouse  tasksDualGo  tasksDualNoGo  -1.0
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+coefs = []
+rands = []
+
+for day in y.day.unique():
+    glm = glms[day-1]
+    df = glm.coefs
+    df['day'] = day
+    coefs.append(df)
+
+    df2 = glm.ranef
+    df2['day'] = day
+    rands.append(df2)
+
+coefs = pd.concat(coefs)
+rands = pd.concat(rands)
+# coefs = pd.concat(coefs, ignore_index=True)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(coefs)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+               Estimate    2.5_ci   97.5_ci        SE        DF    T-stat  \
+(Intercept)    0.096171 -0.103089  0.295432  0.101665  3.928968  0.945959
+tasksDualGo    0.120419 -0.056211  0.297049  0.090119  3.757202  1.336225
+tasksDualNoGo -0.113380 -0.248949  0.022190  0.069169  3.713611 -1.639156
+(Intercept)   -0.112150 -0.396269  0.171968  0.144961  3.960589 -0.773658
+tasksDualGo    0.111786 -0.002866  0.226438  0.058497  3.867105  1.910970
+tasksDualNoGo -0.148228 -0.309518  0.013063  0.082293  3.826729 -1.801230
+(Intercept)   -0.019188 -0.289237  0.250861  0.137783  3.954611 -0.139263
+tasksDualGo    0.044459 -0.143596  0.232514  0.095948  3.771685  0.463363
+tasksDualNoGo -0.139101 -0.287986  0.009785  0.075963  3.878412 -1.831157
+(Intercept)   -0.050090 -0.336016  0.235837  0.145883  3.937412 -0.343355
+tasksDualGo    0.014229 -0.232145  0.260603  0.125703  3.791353  0.113195
+tasksDualNoGo -0.153372 -0.316456  0.009712  0.083208  4.061240 -1.843249
+(Intercept)   -0.111878 -0.445527  0.221771  0.170232  3.998996 -0.657209
+tasksDualGo    0.278822  0.069636  0.488007  0.106729  3.874560  2.612420
+tasksDualNoGo -0.213824 -0.433719  0.006070  0.112193  3.879097 -1.905860
+(Intercept)   -0.219734 -0.864720  0.425252  0.329081  2.000340 -0.667720
+tasksDualGo    0.087952 -0.070060  0.245964  0.080620  2.566928  1.090949
+tasksDualNoGo -0.094619 -0.261613  0.072375  0.085203  2.432701 -1.110518
+
+                  P-val Sig  day
+(Intercept)    0.398634        1
+tasksDualGo    0.256655        1
+tasksDualNoGo  0.181983        1
+(Intercept)    0.482717        2
+tasksDualGo    0.131047        2
+tasksDualNoGo  0.149266        2
+(Intercept)    0.896046        3
+tasksDualGo    0.668571        3
+tasksDualNoGo  0.143279        3
+(Intercept)    0.748880        4
+tasksDualGo    0.915614        4
+tasksDualNoGo  0.137994        4
+(Intercept)    0.546948        5
+tasksDualGo    0.061206   .    5
+tasksDualNoGo  0.131580        5
+(Intercept)    0.573037        6
+tasksDualGo    0.367003        6
+tasksDualNoGo  0.364390        6
+#+end_example
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+
+for i, key in enumerate(keys):
+    df = []
+    for day in y.day.unique():
+        result = coefs[coefs.day==day]
+
+        if i==0:
+            df.append(result.Estimate[key])
+        else:
+            df.append(result.Estimate['(Intercept)'] + result.Estimate[key])
+
+        if result['P-val'][key]<0.001:
+            plt.text(day,  0.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.01:
+            plt.text(day,   0.1 + i * 0.5, '**', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.05:
+            plt.text(day,   0.1 + i * 0.5, '*', ha='center', va='bottom', color=colors[i])
+
+
+    plt.plot(np.arange(1, 7), df, '-o', color=colors[i])
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{Tasks}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_51.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** overlaps ~ day
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+
+  results = []
+  data = y.copy()
+  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
+  # data = data[data.mouse != 'ACCM04']
+
+  formula = 'dist_ED ~ day + (1 | mouse)'
+
+  glms = []
+  results = []
+  glm = Lmer(formula=formula, data=data, family='gaussian')
+  glm.fit();
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~day+(1|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -2405.459 	 AIC: 4826.917
+
+Random effects:
+
+                 Name    Var    Std
+mouse     (Intercept)  0.021  0.143
+Residual               0.216  0.465
+
+No random effect correlations specified
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+print(glm.summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Linear mixed model fit by REML [’lmerMod’]
+Formula: dist_ED~day+(1|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -2405.459 	 AIC: 4826.917
+
+Random effects:
+
+                 Name    Var    Std
+mouse     (Intercept)  0.021  0.143
+Residual               0.216  0.465
+
+No random effect correlations specified
+
+Fixed effects:
+
+             Estimate  2.5_ci  97.5_ci     SE        DF  T-stat  P-val  Sig
+(Intercept)     0.086  -0.045    0.216  0.067     4.506   1.284  0.261
+day2           -0.189  -0.238   -0.139  0.025  3637.985  -7.442  0.000  ***
+day3           -0.117  -0.167   -0.067  0.025  3637.985  -4.609  0.000  ***
+day4           -0.147  -0.197   -0.098  0.025  3637.985  -5.806  0.000  ***
+day5           -0.240  -0.289   -0.190  0.025  3637.985  -9.446  0.000  ***
+day6           -0.257  -0.324   -0.190  0.034  3641.998  -7.557  0.000  ***
+#+end_example
+
+#+begin_src ipython
+print(glm.coefs.Estimate.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['(Intercept)', 'day2', 'day3', 'day4', 'day5', 'day6'], dtype='object')
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = glm.coefs.Estimate.keys()
+result = glm.coefs
+
+df = []
+for i, key in enumerate(keys):
+
+    if i==0:
+        df.append(result.Estimate[key])
+    else:
+        df.append(result.Estimate['(Intercept)'] + result.Estimate[key])
+
+    if result['P-val'][key]<0.001:
+        plt.text(i+1,  0.1 , '***', ha='center', va='bottom')
+    elif result['P-val'][key]<0.01:
+        plt.text(i+1,   0.1 , '**', ha='center', va='bottom')
+    elif result['P-val'][key]<0.05:
+        plt.text(i+1,   0.1 , '*', ha='center', va='bottom')
+
+
+plt.plot(np.arange(1, 7), df, '-o')
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{Day}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_56.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

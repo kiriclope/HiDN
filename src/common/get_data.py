@@ -159,10 +159,10 @@ def create_df(y_raw, day=None):
     y_df.loc[y_df.tasks == 13, "dist_odor"] = 0
     y_df.loc[y_df.tasks == 14, "dist_odor"] = 1
 
-    y_df.loc[y_df.response == 1, "choice"] = 0
-    y_df.loc[y_df.response == 2, "choice"] = 1
-    y_df.loc[y_df.response == 3, "choice"] = 0
-    y_df.loc[y_df.response == 4, "choice"] = 1
+    y_df.loc[y_df.response == 1, "choice"] = 1
+    y_df.loc[y_df.response == 2, "choice"] = 0
+    y_df.loc[y_df.response == 3, "choice"] = 1
+    y_df.loc[y_df.response == 4, "choice"] = 0
 
     y_df.loc[y_df.response == 1, "response"] = "correct_hit"
     y_df.loc[y_df.response == 2, "response"] = "incorrect_miss"
