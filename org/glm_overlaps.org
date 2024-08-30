@@ -1,9 +1,6 @@
 #+STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
 
-Use pymer 4
-Look at incorrect trials vs correct trials, trial by trial
-
 * Notebook Settings
 
 #+begin_src ipython
@@ -17,10 +14,13 @@ Look at incorrect trials vs correct trials, trial by trial
 #+end_src
 
 #+RESULTS:
+:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 1200x741.641 with 0 Axes>
+:END:
 
 * Imports
 
@@ -536,7 +536,7 @@ def get_classification(model, RETURN='overlaps', **options):
 
 #+begin_src ipython
 import pandas as pd
-options['n_days'] = 6
+options['n_days'] = 3
 y = []
 for mouse in options['mice']:
     print(mouse)
@@ -547,6 +547,7 @@ for mouse in options['mice']:
     except:
         pass
 y = pd.concat(y)
+print(y.day.unique())
 #+end_src
 
 #+RESULTS:
@@ -555,6 +556,7 @@ y = pd.concat(y)
 : JawsM18
 : ACCM03
 : ACCM04
+: [1. 2. 3. 4. 5. 6.]
 
 #+begin_src ipython
 print(y.keys())
@@ -564,9 +566,8 @@ print(y.keys())
 : Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
 :        'dist_odor', 'choice', 'behavior', 'pair', 'sample', 'sample_STIM',
 :        'sample_ED', 'sample_MD', 'sample_LD', 'dist', 'dist_STIM', 'dist_ED',
-:        'dist_MD', 'dist_LD', 'OED_sign', 'OLD_sign', 'mouse'],
+:        'dist_MD', 'dist_LD', 'mouse'],
 :       dtype='object')
-
 
 * Sample Late Delay
 ** behavior ~ day * tasks * overlaps + (1|mouse)
@@ -594,7 +595,6 @@ from pymer4.models import Lmer
 
   results = []
   data = y.copy()
-  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
 
   glm = Lmer(formula=formula, data=data, family='binomial')
   result = glm.fit()
@@ -602,10 +602,7 @@ from pymer4.models import Lmer
 
 #+RESULTS:
 #+begin_example
-[0 1]
-[1] "failure to converge in 10000 evaluations"
-[2] " \n"
-
+[1 0]
 boundary (singular) fit: see help('isSingular')
 
 Linear mixed model fit by maximum likelihood  ['lmerMod']
@@ -615,32 +612,31 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 3648	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -1750.881 	 AIC: 3555.762
+Log-likelihood: -1748.159 	 AIC: 3550.318
 
 Random effects:
 
                 Name    Var    Std
-mouse    (Intercept)  0.148  0.384
-mouse    tasksDualGo  0.077  0.278
-mouse  tasksDualNoGo  0.007  0.084
-mouse            day  0.030  0.174
-mouse      sample_LD  0.003  0.051
+mouse    (Intercept)  0.151  0.389
+mouse    tasksDualGo  0.063  0.251
+mouse  tasksDualNoGo  0.006  0.077
+mouse            day  0.028  0.166
+mouse      sample_LD  0.003  0.055
 
                  IV1            IV2   Corr
-mouse    (Intercept)    tasksDualGo  0.141
-mouse    (Intercept)  tasksDualNoGo -0.776
-mouse    (Intercept)            day -0.031
-mouse    (Intercept)      sample_LD  0.598
-mouse    tasksDualGo  tasksDualNoGo  0.515
-mouse    tasksDualGo            day -0.510
-mouse    tasksDualGo      sample_LD  0.870
-mouse  tasksDualNoGo            day -0.298
-mouse  tasksDualNoGo      sample_LD  0.036
-mouse            day      sample_LD -0.517
+mouse    (Intercept)    tasksDualGo  0.117
+mouse    (Intercept)  tasksDualNoGo -0.918
+mouse    (Intercept)            day -0.020
+mouse    (Intercept)      sample_LD  0.959
+mouse    tasksDualGo  tasksDualNoGo  0.285
+mouse    tasksDualGo            day -0.422
+mouse    tasksDualGo      sample_LD  0.382
+mouse  tasksDualNoGo            day -0.149
+mouse  tasksDualNoGo      sample_LD -0.773
+mouse            day      sample_LD -0.205
 
 Fixed effects:
 #+end_example
-
 
 #+begin_src ipython
 random_effects = glm.ranef
@@ -651,28 +647,7 @@ print(random_effects.keys())
 : Index(['X.Intercept.', 'tasksDualGo', 'tasksDualNoGo', 'day', 'sample_LD'], dtype='object')
 
 #+begin_src ipython
-print(result['P-val'])
-#+end_src
-
-#+RESULTS:
-#+begin_example
-(Intercept)                    0.624
-day                            0.000
-tasksDualGo                    0.242
-tasksDualNoGo                  0.831
-sample_LD                      0.165
-day:tasksDualGo                0.756
-day:tasksDualNoGo              0.972
-day:sample_LD                  0.027
-tasksDualGo:sample_LD          0.101
-tasksDualNoGo:sample_LD        0.424
-day:tasksDualGo:sample_LD      0.025
-day:tasksDualNoGo:sample_LD    0.180
-Name: P-val, dtype: float64
-#+end_example
-
-#+begin_src ipython
-plt.figure(figsize=(15, 5))
+# plt.figure(figsize=(15, 5))
 colors = ['blue', 'green', 'red', 'purple', 'orange']
 space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .5
 
@@ -685,7 +660,6 @@ for i, key in enumerate(keys):
      else:
           df = result.Estimate['(Intercept)']+ result.Estimate[key] + random_effects[key]
 
-     df *= -1
      mean_value = df.mean()
      std_dev = df.std()
 
@@ -710,11 +684,11 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_26.png]]
+[[./figures/landscape/figure_20.png]]
 #+RESULTS:
 
 #+begin_src ipython
-plt.figure(figsize=(15, 5))
+# plt.figure(figsize=(15, 5))
 colors = ['blue', 'green', 'red', 'purple', 'orange']
 space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
 
@@ -725,7 +699,6 @@ for i, key in enumerate(keys):
           df = result.Estimate[key] + random_effects['day']
      else:
           df = result.Estimate['day']+ result.Estimate[key] + random_effects['day']
-     df *= -1
 
      mean_value = df.mean()
      std_dev = df.std()
@@ -751,10 +724,10 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_27.png]]
+[[./figures/landscape/figure_21.png]]
 
 #+begin_src ipython
-plt.figure(figsize=(15, 5))
+# plt.figure(figsize=(15, 5))
 colors = ['blue', 'green', 'red', 'purple', 'orange']
 space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
 
@@ -764,8 +737,6 @@ for i, key in enumerate(keys):
           df = result.Estimate[key] + random_effects['sample_LD']
      else:
           df = result.Estimate['sample_LD']+ result.Estimate[key] + random_effects['sample_LD']
-
-     df *= -1
 
      mean_value = df.mean()
      std_dev = df.std()
@@ -791,7 +762,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_28.png]]
+[[./figures/landscape/figure_22.png]]
 
 #+begin_src ipython
 plt.figure(figsize=(15, 5))
@@ -805,7 +776,6 @@ for i, key in enumerate(keys):
           df = result.Estimate[key] + random_effects['day']
      else:
           df = result.Estimate['day:sample_LD']+ result.Estimate[key] + random_effects['day']
-     df *= -1
 
      mean_value = df.mean()
      std_dev = df.std()
@@ -831,11 +801,13 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_29.png]]
+[[./figures/landscape/figure_23.png]]
 
 #+begin_src ipython
 
 #+end_src
+
+#+RESULTS:
 
 ** behavior ~ tasks * overlaps, per day
 
@@ -845,11 +817,10 @@ plt.show()
 
   results = []
   data = y.copy()
-  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
 
   formula = 'behavior ~ tasks * sample_LD + (1 | mouse)'
   # formula = 'behavior ~ tasks * sample_LD + (1 | mouse)'
-  data = data[data.mouse!='ACCM04']
+  # data = data[data.mouse!='ACCM04']
 
   glms = []
   results = []
@@ -866,48 +837,14 @@ Formula: behavior~tasks*sample_LD+(1|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 480	 Groups: {'mouse': 4.0}
+Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -325.050 	 AIC: 664.101
-
-Random effects:
-
-              Name    Var    Std
-mouse  (Intercept)  0.015  0.124
-
-No random effect correlations specified
-
-Fixed effects:
-Linear mixed model fit by maximum likelihood  ['lmerMod']
-Formula: behavior~tasks*sample_LD+(1|mouse)
-
-Family: binomial	 Inference: parametric
-
-Number of observations: 480	 Groups: {'mouse': 4.0}
-
-Log-likelihood: -248.136 	 AIC: 510.271
-
-Random effects:
-
-              Name    Var   Std
-mouse  (Intercept)  1.041  1.02
-
-No random effect correlations specified
-
-Fixed effects:
-Linear mixed model fit by maximum likelihood  ['lmerMod']
-Formula: behavior~tasks*sample_LD+(1|mouse)
-
-Family: binomial	 Inference: parametric
-
-Number of observations: 480	 Groups: {'mouse': 4.0}
-
-Log-likelihood: -206.989 	 AIC: 427.978
+Log-likelihood: -459.770 	 AIC: 933.541
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.185  0.431
+mouse  (Intercept)  0.029  0.171
 
 No random effect correlations specified
 
@@ -917,14 +854,14 @@ Formula: behavior~tasks*sample_LD+(1|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 480	 Groups: {'mouse': 4.0}
+Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -117.096 	 AIC: 248.192
+Log-likelihood: -381.684 	 AIC: 777.367
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.597  0.773
+mouse  (Intercept)  0.996  0.998
 
 No random effect correlations specified
 
@@ -934,14 +871,48 @@ Formula: behavior~tasks*sample_LD+(1|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 480	 Groups: {'mouse': 4.0}
+Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -140.226 	 AIC: 294.452
+Log-likelihood: -339.996 	 AIC: 693.991
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.305  0.552
+
+No random effect correlations specified
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -243.949 	 AIC: 501.898
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  1.432  1.197
+
+No random effect correlations specified
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*sample_LD+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -238.565 	 AIC: 491.131
 
 Random effects:
 
               Name   Var    Std
-mouse  (Intercept)  1.34  1.158
+mouse  (Intercept)  1.08  1.039
 
 No random effect correlations specified
 
@@ -953,12 +924,12 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 288	 Groups: {'mouse': 3.0}
 
-Log-likelihood: -64.273 	 AIC: 142.546
+Log-likelihood: -63.413 	 AIC: 140.825
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.086  0.294
+mouse  (Intercept)  0.071  0.267
 
 No random effect correlations specified
 
@@ -1006,9 +977,9 @@ for i, key in enumerate(keys):
         result = coefs[coefs.day==day]
 
         if key == '(Intercept)':
-            df.append(-result.Estimate['(Intercept)'])
+            df.append(result.Estimate['(Intercept)'])
         else:
-            df.append(-result.Estimate['sample_LD'] - result.Estimate[key])
+            df.append(result.Estimate['sample_LD'] + result.Estimate[key])
 
         if result['P-val'][key]<0.001:
             plt.text(day,   5.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
@@ -1026,7 +997,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_34.png]]
+[[./figures/landscape/figure_28.png]]
 
 #+begin_src ipython
 plt.figure(figsize=(15, 5))
@@ -1041,9 +1012,9 @@ for i, key in enumerate(keys):
         result = coefs[coefs.day==day]
 
         if key == '(Intercept)':
-            df.append(-result.Estimate['(Intercept)'])
+            df.append(result.Estimate['(Intercept)'])
         else:
-            df.append(-result.Estimate['(Intercept)'] - result.Estimate[key])
+            df.append(result.Estimate['(Intercept)'] + result.Estimate[key])
 
         if result['P-val'][key]<0.001:
             plt.text(day,   3.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
@@ -1061,8 +1032,311 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_35.png]]
+[[./figures/landscape/figure_29.png]]
 
+** overlaps ~ tasks
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('int')
+
+  results = []
+  data = y.copy()
+  # data = data[data.mouse != 'JawsM18']
+
+  formula = 'sample_LD ~ tasks + (1 + tasks | mouse)'
+
+  glms = []
+  results = []
+  for day in y.day.unique():
+      glm = Lmer(formula=formula, data=data[data.day==day], family='gaussian')
+      glm.fit()
+      glms.append(glm)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+RRuntimeError                             Traceback (most recent call last)
+Cell In[74], line 14
+     12 for day in y.day.unique():
+     13     glm = Lmer(formula=formula, data=data[data.day==day], family='gaussian')
+---> 14     glm.fit()
+     15     glms.append(glm)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pymer4/models/Lmer.py:424, in Lmer.fit(self, conf_int, n_boot, factors, permute, ordered, verbose, REML, rank, rank_group, rank_exclude_cols, no_warnings, control, old_optimizer, **kwargs)
+    422     lmer = importr("lmerTest")
+    423     lmc = robjects.r(f"lmerControl({control})")
+--> 424     self.model_obj = lmer.lmer(
+    425         self.formula, data=data, REML=REML, control=lmc, contrasts=contrasts
+    426     )
+    427 else:
+    428     if verbose:
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/functions.py:208, in SignatureTranslatedFunction.__call__(self, *args, **kwargs)
+    206         v = kwargs.pop(k)
+    207         kwargs[r_k] = v
+--> 208 return (super(SignatureTranslatedFunction, self)
+    209         .__call__(*args, **kwargs))
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/functions.py:131, in Function.__call__(self, *args, **kwargs)
+    129     else:
+    130         new_kwargs[k] = cv.py2rpy(v)
+--> 131 res = super(Function, self).__call__(*new_args, **new_kwargs)
+    132 res = cv.rpy2py(res)
+    133 return res
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface_lib/conversion.py:45, in _cdata_res_to_rinterface.<locals>._(*args, **kwargs)
+     44 def _(*args, **kwargs):
+---> 45     cdata = function(*args, **kwargs)
+     46     # TODO: test cdata is of the expected CType
+     47     return _cdata_to_rinterface(cdata)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface.py:817, in SexpClosure.__call__(self, *args, **kwargs)
+    810     res = rmemory.protect(
+    811         openrlib.rlib.R_tryEval(
+    812             call_r,
+    813             call_context.__sexp__._cdata,
+    814             error_occured)
+    815     )
+    816     if error_occured[0]:
+--> 817         raise embedded.RRuntimeError(_rinterface._geterrmessage())
+    818 return res
+
+RRuntimeError: Error in eval(predvars, data, env) : object 'mouse' not found
+#+end_example
+:END:
+
+#+begin_src ipython
+coefs = []
+rands = []
+
+for day in y.day.unique():
+    glm = glms[day-1]
+    df = glm.coefs
+    df['day'] = day
+    coefs.append(df)
+
+    df2 = glm.ranef
+    df2['day'] = day
+    rands.append(df2)
+
+coefs = pd.concat(coefs)
+rands = pd.concat(rands)
+# coefs = pd.concat(coefs, ignore_index=True)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[75], line 5
+:       2 rands = []
+:       4 for day in y.day.unique():
+: ----> 5     glm = glms[day-1]
+:       6     df = glm.coefs
+:       7     df['day'] = day
+:
+: IndexError: list index out of range
+:END:
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+
+for i, key in enumerate(keys):
+    df = []
+    for day in y.day.unique():
+        result = coefs[coefs.day==day]
+
+        if i==0:
+            df.append(result.Estimate[key])
+        else:
+            df.append(result.Estimate['(Intercept)'] + result.Estimate[key])
+
+        if result['P-val'][key]<0.001:
+            plt.text(day,  0.1 + i * 0.05, '***', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.01:
+            plt.text(day,   0.1 + i * 0.05, '**', ha='center', va='bottom', color=colors[i])
+        elif result['P-val'][key]<0.05:
+            plt.text(day,   0.1 + i * 0.05, '*', ha='center', va='bottom', color=colors[i])
+
+
+    plt.plot(np.arange(1, 7), df, '-o', color=colors[i])
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{Tasks}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: AttributeError                            Traceback (most recent call last)
+: Cell In[76], line 10
+:       8 df = []
+:       9 for day in y.day.unique():
+: ---> 10     result = coefs[coefs.day==day]
+:      12     if i==0:
+:      13         df.append(result.Estimate[key])
+:
+: AttributeError: 'list' object has no attribute 'day'
+: <Figure size 1500x500 with 0 Axes>
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** overlaps ~ day
+
+#+begin_src ipython
+  y['tasks'] = y['tasks'].astype('category')
+  y['day'] = y['day'].astype('category')
+
+  results = []
+  data = y.copy()
+  # data = data[data.mouse != 'ACCM04']
+
+  formula = 'sample_LD ~ day + (1 | mouse)'
+
+  glms = []
+  results = []
+  glm = Lmer(formula=formula, data=data, family='gaussian')
+  glm.fit();
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+RRuntimeError                             Traceback (most recent call last)
+Cell In[77], line 13
+     11 results = []
+     12 glm = Lmer(formula=formula, data=data, family='gaussian')
+---> 13 glm.fit();
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pymer4/models/Lmer.py:424, in Lmer.fit(self, conf_int, n_boot, factors, permute, ordered, verbose, REML, rank, rank_group, rank_exclude_cols, no_warnings, control, old_optimizer, **kwargs)
+    422     lmer = importr("lmerTest")
+    423     lmc = robjects.r(f"lmerControl({control})")
+--> 424     self.model_obj = lmer.lmer(
+    425         self.formula, data=data, REML=REML, control=lmc, contrasts=contrasts
+    426     )
+    427 else:
+    428     if verbose:
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/functions.py:208, in SignatureTranslatedFunction.__call__(self, *args, **kwargs)
+    206         v = kwargs.pop(k)
+    207         kwargs[r_k] = v
+--> 208 return (super(SignatureTranslatedFunction, self)
+    209         .__call__(*args, **kwargs))
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/functions.py:131, in Function.__call__(self, *args, **kwargs)
+    129     else:
+    130         new_kwargs[k] = cv.py2rpy(v)
+--> 131 res = super(Function, self).__call__(*new_args, **new_kwargs)
+    132 res = cv.rpy2py(res)
+    133 return res
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface_lib/conversion.py:45, in _cdata_res_to_rinterface.<locals>._(*args, **kwargs)
+     44 def _(*args, **kwargs):
+---> 45     cdata = function(*args, **kwargs)
+     46     # TODO: test cdata is of the expected CType
+     47     return _cdata_to_rinterface(cdata)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface.py:817, in SexpClosure.__call__(self, *args, **kwargs)
+    810     res = rmemory.protect(
+    811         openrlib.rlib.R_tryEval(
+    812             call_r,
+    813             call_context.__sexp__._cdata,
+    814             error_occured)
+    815     )
+    816     if error_occured[0]:
+--> 817         raise embedded.RRuntimeError(_rinterface._geterrmessage())
+    818 return res
+
+RRuntimeError: Error in eval(predvars, data, env) : object 'mouse' not found
+#+end_example
+:END:
+
+
+#+begin_src ipython
+print(glm.coefs.Estimate.keys())
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: AttributeError                            Traceback (most recent call last)
+: Cell In[78], line 1
+: ----> 1 print(glm.coefs.Estimate.keys())
+:
+: AttributeError: 'NoneType' object has no attribute 'Estimate'
+:END:
+
+#+begin_src ipython
+plt.figure(figsize=(15, 5))
+colors = ['red', 'blue', 'green', 'k']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = glm.coefs.Estimate.keys()
+result = glm.coefs
+
+df = []
+for i, key in enumerate(keys):
+
+    if i==0:
+        df.append(result.Estimate[key])
+    else:
+        df.append(result.Estimate['(Intercept)'] + result.Estimate[key])
+
+    if result['P-val'][key]<0.001:
+        plt.text(i+1,  0.1 , '***', ha='center', va='bottom')
+    elif result['P-val'][key]<0.01:
+        plt.text(i+1,   0.1 , '**', ha='center', va='bottom')
+    elif result['P-val'][key]<0.05:
+        plt.text(i+1,   0.1 , '*', ha='center', va='bottom')
+
+
+plt.plot(np.arange(1, 7), df, '-o')
+plt.axhline(y=0, color='black', linestyle='--')
+plt.ylabel('$\\beta_{Day}$')
+plt.xlabel('Day')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: AttributeError                            Traceback (most recent call last)
+: Cell In[79], line 5
+:       2 colors = ['red', 'blue', 'green', 'k']
+:       3 space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+: ----> 5 keys = glm.coefs.Estimate.keys()
+:       6 result = glm.coefs
+:       8 df = []
+:
+: AttributeError: 'NoneType' object has no attribute 'Estimate'
+: <Figure size 1500x500 with 0 Axes>
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
 
 * Distractor Early Delay
 ** behavior ~ day * tasks * overlaps
@@ -1098,7 +1372,10 @@ from pymer4.models import Lmer
 
 #+RESULTS:
 #+begin_example
-[0 1]
+[1 0]
+[1] "failure to converge in 10000 evaluations"
+[2] " \n"
+
 boundary (singular) fit: see help('isSingular')
 
 Linear mixed model fit by maximum likelihood  ['lmerMod']
@@ -1108,28 +1385,28 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 3648	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -1752.763 	 AIC: 3559.525
+Log-likelihood: -1751.956 	 AIC: 3557.911
 
 Random effects:
 
                 Name    Var    Std
 mouse    (Intercept)  0.185  0.430
-mouse    tasksDualGo  0.079  0.280
-mouse  tasksDualNoGo  0.014  0.119
-mouse            day  0.032  0.180
-mouse        dist_ED  0.000  0.012
+mouse    tasksDualGo  0.086  0.293
+mouse  tasksDualNoGo  0.013  0.114
+mouse            day  0.033  0.181
+mouse        dist_ED  0.004  0.064
 
                  IV1            IV2   Corr
-mouse    (Intercept)    tasksDualGo  0.001
-mouse    (Intercept)  tasksDualNoGo -0.727
-mouse    (Intercept)            day -0.077
-mouse    (Intercept)        dist_ED  0.995
-mouse    tasksDualGo  tasksDualNoGo  0.686
-mouse    tasksDualGo            day -0.596
-mouse    tasksDualGo        dist_ED -0.097
-mouse  tasksDualNoGo            day -0.353
-mouse  tasksDualNoGo        dist_ED -0.791
-mouse            day        dist_ED -0.021
+mouse    (Intercept)    tasksDualGo -0.001
+mouse    (Intercept)  tasksDualNoGo -0.535
+mouse    (Intercept)            day -0.089
+mouse    (Intercept)        dist_ED  0.947
+mouse    tasksDualGo  tasksDualNoGo  0.846
+mouse    tasksDualGo            day -0.540
+mouse    tasksDualGo        dist_ED  0.314
+mouse  tasksDualNoGo            day -0.409
+mouse  tasksDualNoGo        dist_ED -0.240
+mouse            day        dist_ED -0.303
 
 Fixed effects:
 #+end_example
@@ -1141,11 +1418,11 @@ print(random_effects)
 
 #+RESULTS:
 :          X.Intercept.  tasksDualGo  tasksDualNoGo       day   dist_ED
-: ACCM03       0.440830     0.299130      -0.001612 -0.141753  0.011346
-: ACCM04       0.440614    -0.337814      -0.187496  0.188535  0.014079
-: ChRM04      -0.530684    -0.159065       0.060624  0.076844 -0.014526
-: JawsM15     -0.141525     0.079885       0.051869  0.134592 -0.004452
-: JawsM18     -0.207606     0.107126       0.073152 -0.242943 -0.006357
+: ACCM03      -0.419763    -0.321440      -0.046173  0.141837 -0.081215
+: ACCM04      -0.457873     0.344073       0.177631 -0.184507 -0.038531
+: ChRM04       0.535574     0.177842      -0.017322 -0.084956  0.087309
+: JawsM15      0.151374    -0.111512      -0.057990 -0.136626  0.017701
+: JawsM18      0.191389    -0.078830      -0.052919  0.249132  0.015813
 
 #+begin_src ipython
 print(result['P-val'])
@@ -1153,23 +1430,23 @@ print(result['P-val'])
 
 #+RESULTS:
 #+begin_example
-(Intercept)                  0.974
+(Intercept)                  0.976
 day                          0.000
-tasksDualGo                  0.796
-tasksDualNoGo                0.720
-dist_ED                      0.911
-day:tasksDualGo              0.174
-day:tasksDualNoGo            0.274
-day:dist_ED                  0.408
-tasksDualGo:dist_ED          0.642
-tasksDualNoGo:dist_ED        0.880
-day:tasksDualGo:dist_ED      0.453
-day:tasksDualNoGo:dist_ED    0.762
+tasksDualGo                  0.757
+tasksDualNoGo                0.644
+dist_ED                      0.819
+day:tasksDualGo              0.187
+day:tasksDualNoGo            0.249
+day:dist_ED                  0.533
+tasksDualGo:dist_ED          0.858
+tasksDualNoGo:dist_ED        0.347
+day:tasksDualGo:dist_ED      0.567
+day:tasksDualNoGo:dist_ED    0.784
 Name: P-val, dtype: float64
 #+end_example
 
 #+begin_src ipython
-plt.figure(figsize=(15, 5))
+# plt.figure(figsize=(15, 5))
 colors = ['blue', 'green', 'red', 'purple', 'orange']
 space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .5
 
@@ -1181,105 +1458,6 @@ for i, key in enumerate(keys):
           df = result.Estimate['(Intercept)']+ random_effects['X.Intercept.']
      else:
           df = result.Estimate['(Intercept)']+ result.Estimate[key] + random_effects[key]
-
-     df *= -1
-     print(df)
-     mean_value = df.mean()
-     std_dev = df.std()
-
-     if result['P-val'][key]<0.001:
-          plt.text(i,   1.51, '***', ha='center', va='bottom')
-     elif result['P-val'][key]<0.01:
-          plt.text(i,   1.51, '**', ha='center', va='bottom')
-     elif result['P-val'][key]<0.05:
-          plt.text(i,   1.51, '*', ha='center', va='bottom')
-
-     # Plot individual points
-     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
-     # Plot mean and stddev as error bars
-     plt.plot(i, mean_value, '_k', ms=20)
-     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
-
-plt.axhline(y=0, color='black', linestyle='--')
-plt.xticks(np.arange(len(keys)), keys)
-plt.ylim([-1.5,1.5])
-plt.ylabel('$\\beta$')
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-#+begin_example
-gin_src ipython
-plt.figure(figsize=(15, 5))
-colors = ['blue', 'green', 'red', 'purple', 'orange']
-space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
-
-keys = ['day', 'day:tasksDualGo', 'day:tasksDualNoGo']
-# keys = result.Estimate.keys()
-for i, key in enumerate(keys):
-     if i == 0 :
-          df = result.Estimate[key] + random_effects['day']
-     else:
-          df = result.Estimate['day']+ result.Es
-#+end_example
-[[./figures/landscape/figure_40.png]]
-:END:
-#+RESULTS:
-
-#+begin_src ipython
-plt.figure(figsize=(15, 5))
-colors = ['blue', 'green', 'red', 'purple', 'orange']
-space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
-
-keys = ['day', 'day:tasksDualGo', 'day:tasksDualNoGo']
-# keys = result.Estimate.keys()
-for i, key in enumerate(keys):
-     if i == 0 :
-          df = result.Estimate[key] + random_effects['day']
-     else:
-          df = result.Estimate['day']+ result.Estimate[key] + random_effects['day']
-     df *= -1
-
-     mean_value = df.mean()
-     std_dev = df.std()
-
-     if result['P-val'][key]<0.001:
-          plt.text(i,   1.01, '***', ha='center', va='bottom')
-     elif result['P-val'][key]<0.01:
-          plt.text(i,   1.01, '**', ha='center', va='bottom')
-     elif result['P-val'][key]<0.05:
-          plt.text(i,   1.01, '*', ha='center', va='bottom')
-
-     # Plot individual points
-     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
-     # Plot mean and stddev as error bars
-     plt.plot(i, mean_value, '_k', ms=20)
-     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
-
-plt.axhline(y=0, color='black', linestyle='--')
-plt.xticks(np.arange(len(keys)), keys)
-plt.ylim([-1,1])
-plt.ylabel('$\\beta$')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./figures/landscape/figure_41.png]]
-
-#+begin_src ipython
-plt.figure(figsize=(15, 5))
-colors = ['blue', 'green', 'red', 'purple', 'orange']
-space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
-
-keys = ['dist_ED', 'tasksDualGo:dist_ED', 'tasksDualNoGo:dist_ED']
-for i, key in enumerate(keys):
-     if i==0:
-          df = result.Estimate[key] + random_effects['dist_ED']
-     else:
-          df = result.Estimate['dist_ED']+ result.Estimate[key] + random_effects['dist_ED']
-
-     df *= -1
 
      mean_value = df.mean()
      std_dev = df.std()
@@ -1306,20 +1484,20 @@ plt.show()
 
 #+RESULTS:
 [[./figures/landscape/figure_42.png]]
+#+RESULTS:
 
 #+begin_src ipython
-plt.figure(figsize=(15, 5))
+# plt.figure(figsize=(15, 5))
 colors = ['blue', 'green', 'red', 'purple', 'orange']
 space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
 
-keys = ['day:dist_ED', 'day:tasksDualGo:dist_ED', 'day:tasksDualNoGo:dist_ED']
+keys = ['day', 'day:tasksDualGo', 'day:tasksDualNoGo']
 # keys = result.Estimate.keys()
 for i, key in enumerate(keys):
      if i == 0 :
           df = result.Estimate[key] + random_effects['day']
      else:
-          df = result.Estimate['day:dist_ED']+ result.Estimate[key] + random_effects['day']
-     df *= -1
+          df = result.Estimate['day']+ result.Estimate[key] + random_effects['day']
 
      mean_value = df.mean()
      std_dev = df.std()
@@ -1346,6 +1524,83 @@ plt.show()
 
 #+RESULTS:
 [[./figures/landscape/figure_43.png]]
+
+#+begin_src ipython
+# plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['dist_ED', 'tasksDualGo:dist_ED', 'tasksDualNoGo:dist_ED']
+for i, key in enumerate(keys):
+     if i==0:
+          df = result.Estimate[key] + random_effects['dist_ED']
+     else:
+          df = result.Estimate['dist_ED']+ result.Estimate[key] + random_effects['dist_ED']
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.51, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1.5,1.5])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_44.png]]
+
+#+begin_src ipython
+# plt.figure(figsize=(15, 5))
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
+
+keys = ['day:dist_ED', 'day:tasksDualGo:dist_ED', 'day:tasksDualNoGo:dist_ED']
+# keys = result.Estimate.keys()
+for i, key in enumerate(keys):
+     if i == 0 :
+          df = result.Estimate[key] + random_effects['day']
+     else:
+          df = result.Estimate['day:dist_ED']+ result.Estimate[key] + random_effects['day']
+
+     mean_value = df.mean()
+     std_dev = df.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   1.01, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   1.01, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   1.01, '*', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(df.shape[0]) + space, df, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(df.shape[0]), [mean_value]*len(df), yerr=[std_dev]*len(df), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylim([-1,1])
+plt.ylabel('$\\beta$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_45.png]]
 
 #+begin_src ipython
 
@@ -1384,15 +1639,15 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 480	 Groups: {'mouse': 4.0}
 
-Log-likelihood: -324.337 	 AIC: 680.675
+Log-likelihood: -324.092 	 AIC: 680.185
 
 Random effects:
 
                 Name    Var    Std
-mouse    (Intercept)  0.005  0.070
-mouse    tasksDualGo  0.015  0.122
-mouse  tasksDualNoGo  0.001  0.028
-mouse        dist_ED  0.008  0.089
+mouse    (Intercept)  0.004  0.061
+mouse    tasksDualGo  0.016  0.126
+mouse  tasksDualNoGo  0.002  0.048
+mouse        dist_ED  0.015  0.122
 
                  IV1            IV2  Corr
 mouse    (Intercept)    tasksDualGo   1.0
@@ -1403,7 +1658,7 @@ mouse    tasksDualGo        dist_ED   1.0
 mouse  tasksDualNoGo        dist_ED   1.0
 
 Fixed effects:
-Model failed to converge with max|grad| = 0.0148845 (tol = 0.002, component 1)
+Model failed to converge with max|grad| = 0.0171665 (tol = 0.002, component 1)
 
 Linear mixed model fit by maximum likelihood  ['lmerMod']
 Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
@@ -1412,51 +1667,23 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 480	 Groups: {'mouse': 4.0}
 
-Log-likelihood: -245.281 	 AIC: 522.562
+Log-likelihood: -245.261 	 AIC: 522.523
 
 Random effects:
 
                 Name    Var    Std
-mouse    (Intercept)  1.366  1.169
-mouse    tasksDualGo  0.062  0.248
-mouse  tasksDualNoGo  0.013  0.115
-mouse        dist_ED  0.121  0.348
+mouse    (Intercept)  1.373  1.172
+mouse    tasksDualGo  0.055  0.235
+mouse  tasksDualNoGo  0.014  0.120
+mouse        dist_ED  0.161  0.401
 
-                 IV1            IV2  Corr
-mouse    (Intercept)    tasksDualGo  -1.0
-mouse    (Intercept)  tasksDualNoGo  -1.0
-mouse    (Intercept)        dist_ED   1.0
-mouse    tasksDualGo  tasksDualNoGo   1.0
-mouse    tasksDualGo        dist_ED  -1.0
-mouse  tasksDualNoGo        dist_ED  -1.0
-
-Fixed effects:
-Model failed to converge with max|grad| = 0.00714466 (tol = 0.002, component 1)
-
-Linear mixed model fit by maximum likelihood  ['lmerMod']
-Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
-
-Family: binomial	 Inference: parametric
-
-Number of observations: 480	 Groups: {'mouse': 4.0}
-
-Log-likelihood: -204.747 	 AIC: 441.494
-
-Random effects:
-
-                Name    Var    Std
-mouse    (Intercept)  0.025  0.157
-mouse    tasksDualGo  0.020  0.140
-mouse  tasksDualNoGo  0.032  0.180
-mouse        dist_ED  0.002  0.047
-
-                 IV1            IV2  Corr
-mouse    (Intercept)    tasksDualGo   1.0
-mouse    (Intercept)  tasksDualNoGo  -1.0
-mouse    (Intercept)        dist_ED   1.0
-mouse    tasksDualGo  tasksDualNoGo  -1.0
-mouse    tasksDualGo        dist_ED   1.0
-mouse  tasksDualNoGo        dist_ED  -1.0
+                 IV1            IV2   Corr
+mouse    (Intercept)    tasksDualGo -1.000
+mouse    (Intercept)  tasksDualNoGo -1.000
+mouse    (Intercept)        dist_ED  1.000
+mouse    tasksDualGo  tasksDualNoGo  1.000
+mouse    tasksDualGo        dist_ED -1.000
+mouse  tasksDualNoGo        dist_ED -0.999
 
 Fixed effects:
 boundary (singular) fit: see help('isSingular')
@@ -1468,26 +1695,26 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 480	 Groups: {'mouse': 4.0}
 
-Log-likelihood: -117.024 	 AIC: 266.048
+Log-likelihood: -204.863 	 AIC: 441.726
 
 Random effects:
 
                 Name    Var    Std
-mouse    (Intercept)  0.549  0.741
+mouse    (Intercept)  0.000  0.000
 mouse    tasksDualGo  0.120  0.346
-mouse  tasksDualNoGo  0.026  0.162
-mouse        dist_ED  0.243  0.493
+mouse  tasksDualNoGo  0.009  0.092
+mouse        dist_ED  0.000  0.016
 
-                 IV1            IV2   Corr
-mouse    (Intercept)    tasksDualGo  0.998
-mouse    (Intercept)  tasksDualNoGo -0.998
-mouse    (Intercept)        dist_ED  1.000
-mouse    tasksDualGo  tasksDualNoGo -0.992
-mouse    tasksDualGo        dist_ED  0.999
-mouse  tasksDualNoGo        dist_ED -0.997
+                 IV1            IV2      Corr
+mouse    (Intercept)    tasksDualGo
+mouse    (Intercept)  tasksDualNoGo
+mouse    (Intercept)        dist_ED
+mouse    tasksDualGo  tasksDualNoGo -0.998774
+mouse    tasksDualGo        dist_ED -0.998913
+mouse  tasksDualNoGo        dist_ED  0.997749
 
 Fixed effects:
-Model failed to converge with max|grad| = 0.0225755 (tol = 0.002, component 1)
+Model failed to converge with max|grad| = 0.00976406 (tol = 0.002, component 1)
 
 Linear mixed model fit by maximum likelihood  ['lmerMod']
 Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
@@ -1496,26 +1723,54 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 480	 Groups: {'mouse': 4.0}
 
-Log-likelihood: -140.183 	 AIC: 312.365
+Log-likelihood: -116.704 	 AIC: 265.409
 
 Random effects:
 
                 Name    Var    Std
-mouse    (Intercept)  2.173  1.474
-mouse    tasksDualGo  0.422  0.649
-mouse  tasksDualNoGo  0.076  0.276
-mouse        dist_ED  0.001  0.037
+mouse    (Intercept)  0.455  0.674
+mouse    tasksDualGo  0.221  0.470
+mouse  tasksDualNoGo  0.000  0.014
+mouse        dist_ED  0.394  0.628
+
+                 IV1            IV2   Corr
+mouse    (Intercept)    tasksDualGo  1.000
+mouse    (Intercept)  tasksDualNoGo -0.884
+mouse    (Intercept)        dist_ED  1.000
+mouse    tasksDualGo  tasksDualNoGo -0.873
+mouse    tasksDualGo        dist_ED  1.000
+mouse  tasksDualNoGo        dist_ED -0.881
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.0114473 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 480	 Groups: {'mouse': 4.0}
+
+Log-likelihood: -140.217 	 AIC: 312.434
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  2.223  1.491
+mouse    tasksDualGo  0.426  0.653
+mouse  tasksDualNoGo  0.072  0.268
+mouse        dist_ED  0.000  0.006
 
                  IV1            IV2   Corr
 mouse    (Intercept)    tasksDualGo -1.000
 mouse    (Intercept)  tasksDualNoGo -1.000
-mouse    (Intercept)        dist_ED -0.988
+mouse    (Intercept)        dist_ED  0.671
 mouse    tasksDualGo  tasksDualNoGo  1.000
-mouse    tasksDualGo        dist_ED  0.988
-mouse  tasksDualNoGo        dist_ED  0.990
+mouse    tasksDualGo        dist_ED -0.670
+mouse  tasksDualNoGo        dist_ED -0.655
 
 Fixed effects:
-Model failed to converge with max|grad| = 0.0555658 (tol = 0.002, component 1)
+Model failed to converge with max|grad| = 0.0806336 (tol = 0.002, component 1)
 
 Linear mixed model fit by maximum likelihood  ['lmerMod']
 Formula: behavior~tasks*dist_ED+(1+tasks+dist_ED|mouse)
@@ -1524,23 +1779,23 @@ Family: binomial	 Inference: parametric
 
 Number of observations: 288	 Groups: {'mouse': 3.0}
 
-Log-likelihood: -62.266 	 AIC: 156.533
+Log-likelihood: -62.542 	 AIC: 157.085
 
 Random effects:
 
                 Name    Var    Std
-mouse    (Intercept)  4.987  2.233
-mouse    tasksDualGo  3.339  1.827
-mouse  tasksDualNoGo  1.922  1.386
-mouse        dist_ED  0.210  0.458
+mouse    (Intercept)  5.175  2.275
+mouse    tasksDualGo  3.697  1.923
+mouse  tasksDualNoGo  1.985  1.409
+mouse        dist_ED  0.155  0.394
 
                  IV1            IV2   Corr
 mouse    (Intercept)    tasksDualGo -1.000
 mouse    (Intercept)  tasksDualNoGo -1.000
-mouse    (Intercept)        dist_ED  0.999
+mouse    (Intercept)        dist_ED  0.998
 mouse    tasksDualGo  tasksDualNoGo  1.000
-mouse    tasksDualGo        dist_ED -0.999
-mouse  tasksDualNoGo        dist_ED -0.999
+mouse    tasksDualGo        dist_ED -0.998
+mouse  tasksDualNoGo        dist_ED -0.998
 
 Fixed effects:
 #+end_example
@@ -1579,9 +1834,9 @@ for i, key in enumerate(keys):
         result = coefs[coefs.day==day]
 
         if i==0:
-            df.append(-result.Estimate[key])
+            df.append(result.Estimate[key])
         else:
-            df.append(-result.Estimate['dist_ED'] - result.Estimate[key])
+            df.append(result.Estimate['dist_ED'] + result.Estimate[key])
 
         if result['P-val'][key]<0.001:
             plt.text(day,   1.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
@@ -1599,7 +1854,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_47.png]]
+[[./figures/landscape/figure_49.png]]
 
 #+begin_src ipython
 
@@ -1615,7 +1870,7 @@ plt.show()
 
   results = []
   data = y.copy()
-  data = data[data.mouse != 'JawsM18']
+  # data = data[data.mouse != 'JawsM18']
 
   formula = 'behavior ~ dist_ED + (1 + dist_ED | mouse)'
 
@@ -1636,15 +1891,15 @@ Formula: behavior~dist_ED+(1+dist_ED|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 576	 Groups: {'mouse': 4.0}
+Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -396.449 	 AIC: 802.898
+Log-likelihood: -459.334 	 AIC: 928.668
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.006  0.079
-mouse      dist_ED  0.102  0.320
+mouse  (Intercept)  0.026  0.160
+mouse      dist_ED  0.072  0.268
 
                IV1      IV2  Corr
 mouse  (Intercept)  dist_ED   1.0
@@ -1657,34 +1912,78 @@ Formula: behavior~dist_ED+(1+dist_ED|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 576	 Groups: {'mouse': 4.0}
+Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -343.401 	 AIC: 696.803
+Log-likelihood: -382.697 	 AIC: 775.394
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.894  0.946
-mouse      dist_ED  0.067  0.259
+mouse  (Intercept)  1.125  1.061
+mouse      dist_ED  0.420  0.648
 
                IV1      IV2  Corr
-mouse  (Intercept)  dist_ED  -1.0
+mouse  (Intercept)  dist_ED   1.0
 
 Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
 Linear mixed model fit by maximum likelihood  ['lmerMod']
 Formula: behavior~dist_ED+(1+dist_ED|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 576	 Groups: {'mouse': 4.0}
+Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -315.460 	 AIC: 640.919
+Log-likelihood: -344.557 	 AIC: 699.115
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.193  0.439
-mouse      dist_ED  0.000  0.010
+mouse  (Intercept)  0.248  0.498
+mouse      dist_ED  0.003  0.058
+
+               IV1      IV2  Corr
+mouse  (Intercept)  dist_ED   1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -246.041 	 AIC: 502.082
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  1.291  1.136
+mouse      dist_ED  0.028  0.169
+
+               IV1      IV2  Corr
+mouse  (Intercept)  dist_ED   1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: behavior~dist_ED+(1+dist_ED|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -241.380 	 AIC: 492.760
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  1.025  1.012
+mouse      dist_ED  0.044  0.210
 
                IV1      IV2  Corr
 mouse  (Intercept)  dist_ED  -1.0
@@ -1697,60 +1996,18 @@ Formula: behavior~dist_ED+(1+dist_ED|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 576	 Groups: {'mouse': 4.0}
+Number of observations: 288	 Groups: {'mouse': 3.0}
 
-Log-likelihood: -234.938 	 AIC: 479.875
-
-Random effects:
-
-              Name    Var    Std
-mouse  (Intercept)  1.058  1.029
-mouse      dist_ED  0.011  0.104
-
-               IV1      IV2  Corr
-mouse  (Intercept)  dist_ED  -1.0
-
-Fixed effects:
-boundary (singular) fit: see help('isSingular')
-
-Linear mixed model fit by maximum likelihood  ['lmerMod']
-Formula: behavior~dist_ED+(1+dist_ED|mouse)
-
-Family: binomial	 Inference: parametric
-
-Number of observations: 576	 Groups: {'mouse': 4.0}
-
-Log-likelihood: -233.002 	 AIC: 476.004
+Log-likelihood: -70.467 	 AIC: 150.934
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.413  0.643
-mouse      dist_ED  0.011  0.106
+mouse  (Intercept)  0.541  0.735
+mouse      dist_ED  0.343  0.586
 
                IV1      IV2  Corr
-mouse  (Intercept)  dist_ED  -1.0
-
-Fixed effects:
-boundary (singular) fit: see help('isSingular')
-
-Linear mixed model fit by maximum likelihood  ['lmerMod']
-Formula: behavior~dist_ED+(1+dist_ED|mouse)
-
-Family: binomial	 Inference: parametric
-
-Number of observations: 192	 Groups: {'mouse': 2.0}
-
-Log-likelihood: -59.436 	 AIC: 128.872
-
-Random effects:
-
-              Name  Var  Std
-mouse  (Intercept)  0.0  0.0
-mouse      dist_ED  0.0  0.0
-
-               IV1      IV2 Corr
-mouse  (Intercept)  dist_ED
+mouse  (Intercept)  dist_ED   1.0
 
 Fixed effects:
 #+end_example
@@ -1789,9 +2046,9 @@ for i, key in enumerate(keys):
         result = coefs[coefs.day==day]
 
         if i==0:
-            df.append(-result.Estimate[key])
+            df.append(result.Estimate[key])
         else:
-            df.append(-result.Estimate['dist_ED'] - result.Estimate[key])
+            df.append(result.Estimate['dist_ED'] + result.Estimate[key])
 
         if result['P-val'][key]<0.001:
             plt.text(day,  0.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
@@ -1809,14 +2066,13 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_51.png]]
+[[./figures/landscape/figure_53.png]]
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
-
 
 ** overlaps ~ tasks
 
@@ -1827,8 +2083,6 @@ plt.show()
   results = []
   data = y.copy()
   # data = data[data.mouse != 'JawsM18']
-  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
-
 
   formula = 'dist_ED ~ tasks + (1 + tasks | mouse)'
 
@@ -1842,8 +2096,6 @@ plt.show()
 
 #+RESULTS:
 #+begin_example
-boundary (singular) fit: see help('isSingular')
-
 Linear mixed model fit by REML [’lmerMod’]
 Formula: dist_ED~tasks+(1+tasks|mouse)
 
@@ -1851,20 +2103,20 @@ Family: gaussian	 Inference: parametric
 
 Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -255.172 	 AIC: 530.344
+Log-likelihood: -250.256 	 AIC: 520.512
 
 Random effects:
 
                    Name    Var    Std
-mouse       (Intercept)  0.049  0.221
-mouse       tasksDualGo  0.035  0.187
-mouse     tasksDualNoGo  0.019  0.136
-Residual                 0.118  0.344
+mouse       (Intercept)  0.042  0.205
+mouse       tasksDualGo  0.065  0.256
+mouse     tasksDualNoGo  0.009  0.095
+Residual                 0.116  0.341
 
                IV1            IV2   Corr
-mouse  (Intercept)    tasksDualGo  0.856
-mouse  (Intercept)  tasksDualNoGo -0.871
-mouse  tasksDualGo  tasksDualNoGo -1.000
+mouse  (Intercept)    tasksDualGo  0.689
+mouse  (Intercept)  tasksDualNoGo  0.057
+mouse  tasksDualGo  tasksDualNoGo  0.558
 
 Fixed effects:
 boundary (singular) fit: see help('isSingular')
@@ -1876,22 +2128,24 @@ Family: gaussian	 Inference: parametric
 
 Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -183.091 	 AIC: 386.182
+Log-likelihood: -195.331 	 AIC: 410.661
 
 Random effects:
 
                    Name    Var    Std
-mouse       (Intercept)  0.103  0.321
-mouse       tasksDualGo  0.013  0.113
-mouse     tasksDualNoGo  0.029  0.172
-Residual                 0.094  0.307
+mouse       (Intercept)  0.099  0.314
+mouse       tasksDualGo  0.013  0.116
+mouse     tasksDualNoGo  0.024  0.156
+Residual                 0.098  0.313
 
                IV1            IV2   Corr
-mouse  (Intercept)    tasksDualGo  0.246
-mouse  (Intercept)  tasksDualNoGo -0.299
+mouse  (Intercept)    tasksDualGo  0.337
+mouse  (Intercept)  tasksDualNoGo -0.270
 mouse  tasksDualGo  tasksDualNoGo -0.998
 
 Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
 Linear mixed model fit by REML [’lmerMod’]
 Formula: dist_ED~tasks+(1+tasks|mouse)
 
@@ -1899,20 +2153,20 @@ Family: gaussian	 Inference: parametric
 
 Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -175.478 	 AIC: 370.955
+Log-likelihood: -154.862 	 AIC: 329.724
 
 Random effects:
 
                    Name    Var    Std
-mouse       (Intercept)  0.093  0.304
-mouse       tasksDualGo  0.042  0.204
-mouse     tasksDualNoGo  0.024  0.156
-Residual                 0.092  0.303
+mouse       (Intercept)  0.112  0.335
+mouse       tasksDualGo  0.035  0.187
+mouse     tasksDualNoGo  0.001  0.036
+Residual                 0.087  0.295
 
                IV1            IV2   Corr
-mouse  (Intercept)    tasksDualGo  0.714
-mouse  (Intercept)  tasksDualNoGo -0.441
-mouse  tasksDualGo  tasksDualNoGo -0.511
+mouse  (Intercept)    tasksDualGo  0.594
+mouse  (Intercept)  tasksDualNoGo  0.932
+mouse  tasksDualGo  tasksDualNoGo  0.844
 
 Fixed effects:
 Linear mixed model fit by REML [’lmerMod’]
@@ -1922,20 +2176,20 @@ Family: gaussian	 Inference: parametric
 
 Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -336.494 	 AIC: 692.988
+Log-likelihood: -308.999 	 AIC: 637.997
 
 Random effects:
 
                    Name    Var    Std
-mouse       (Intercept)  0.103  0.321
-mouse       tasksDualGo  0.072  0.268
-mouse     tasksDualNoGo  0.027  0.165
-Residual                 0.150  0.387
+mouse       (Intercept)  0.117  0.342
+mouse       tasksDualGo  0.089  0.299
+mouse     tasksDualNoGo  0.025  0.157
+Residual                 0.138  0.371
 
                IV1            IV2   Corr
-mouse  (Intercept)    tasksDualGo -0.897
-mouse  (Intercept)  tasksDualNoGo  0.427
-mouse  tasksDualGo  tasksDualNoGo -0.157
+mouse  (Intercept)    tasksDualGo -0.904
+mouse  (Intercept)  tasksDualNoGo  0.104
+mouse  tasksDualGo  tasksDualNoGo  0.133
 
 Fixed effects:
 boundary (singular) fit: see help('isSingular')
@@ -1947,20 +2201,20 @@ Family: gaussian	 Inference: parametric
 
 Number of observations: 672	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -438.518 	 AIC: 897.036
+Log-likelihood: -443.367 	 AIC: 906.733
 
 Random effects:
 
                    Name    Var    Std
-mouse       (Intercept)  0.140  0.374
-mouse       tasksDualGo  0.048  0.218
-mouse     tasksDualNoGo  0.054  0.232
-Residual                 0.203  0.451
+mouse       (Intercept)  0.133  0.364
+mouse       tasksDualGo  0.043  0.206
+mouse     tasksDualNoGo  0.076  0.275
+Residual                 0.206  0.454
 
                IV1            IV2   Corr
-mouse  (Intercept)    tasksDualGo  0.062
-mouse  (Intercept)  tasksDualNoGo -0.456
-mouse  tasksDualGo  tasksDualNoGo -0.916
+mouse  (Intercept)    tasksDualGo  0.143
+mouse  (Intercept)  tasksDualNoGo -0.565
+mouse  tasksDualGo  tasksDualNoGo -0.897
 
 Fixed effects:
 boundary (singular) fit: see help('isSingular')
@@ -1972,15 +2226,15 @@ Family: gaussian	 Inference: parametric
 
 Number of observations: 288	 Groups: {'mouse': 3.0}
 
-Log-likelihood: -144.040 	 AIC: 308.080
+Log-likelihood: -151.457 	 AIC: 322.915
 
 Random effects:
 
                    Name    Var    Std
-mouse       (Intercept)  0.320  0.566
-mouse       tasksDualGo  0.010  0.101
-mouse     tasksDualNoGo  0.013  0.112
-Residual                 0.148  0.384
+mouse       (Intercept)  0.403  0.635
+mouse       tasksDualGo  0.021  0.143
+mouse     tasksDualNoGo  0.009  0.097
+Residual                 0.155  0.394
 
                IV1            IV2  Corr
 mouse  (Intercept)    tasksDualGo  -1.0
@@ -2012,53 +2266,6 @@ rands = pd.concat(rands)
 #+RESULTS:
 
 #+begin_src ipython
-print(coefs)
-#+end_src
-
-#+RESULTS:
-#+begin_example
-               Estimate    2.5_ci   97.5_ci        SE        DF    T-stat  \
-(Intercept)    0.096171 -0.103089  0.295432  0.101665  3.928968  0.945959
-tasksDualGo    0.120419 -0.056211  0.297049  0.090119  3.757202  1.336225
-tasksDualNoGo -0.113380 -0.248949  0.022190  0.069169  3.713611 -1.639156
-(Intercept)   -0.112150 -0.396269  0.171968  0.144961  3.960589 -0.773658
-tasksDualGo    0.111786 -0.002866  0.226438  0.058497  3.867105  1.910970
-tasksDualNoGo -0.148228 -0.309518  0.013063  0.082293  3.826729 -1.801230
-(Intercept)   -0.019188 -0.289237  0.250861  0.137783  3.954611 -0.139263
-tasksDualGo    0.044459 -0.143596  0.232514  0.095948  3.771685  0.463363
-tasksDualNoGo -0.139101 -0.287986  0.009785  0.075963  3.878412 -1.831157
-(Intercept)   -0.050090 -0.336016  0.235837  0.145883  3.937412 -0.343355
-tasksDualGo    0.014229 -0.232145  0.260603  0.125703  3.791353  0.113195
-tasksDualNoGo -0.153372 -0.316456  0.009712  0.083208  4.061240 -1.843249
-(Intercept)   -0.111878 -0.445527  0.221771  0.170232  3.998996 -0.657209
-tasksDualGo    0.278822  0.069636  0.488007  0.106729  3.874560  2.612420
-tasksDualNoGo -0.213824 -0.433719  0.006070  0.112193  3.879097 -1.905860
-(Intercept)   -0.219734 -0.864720  0.425252  0.329081  2.000340 -0.667720
-tasksDualGo    0.087952 -0.070060  0.245964  0.080620  2.566928  1.090949
-tasksDualNoGo -0.094619 -0.261613  0.072375  0.085203  2.432701 -1.110518
-
-                  P-val Sig  day
-(Intercept)    0.398634        1
-tasksDualGo    0.256655        1
-tasksDualNoGo  0.181983        1
-(Intercept)    0.482717        2
-tasksDualGo    0.131047        2
-tasksDualNoGo  0.149266        2
-(Intercept)    0.896046        3
-tasksDualGo    0.668571        3
-tasksDualNoGo  0.143279        3
-(Intercept)    0.748880        4
-tasksDualGo    0.915614        4
-tasksDualNoGo  0.137994        4
-(Intercept)    0.546948        5
-tasksDualGo    0.061206   .    5
-tasksDualNoGo  0.131580        5
-(Intercept)    0.573037        6
-tasksDualGo    0.367003        6
-tasksDualNoGo  0.364390        6
-#+end_example
-
-#+begin_src ipython
 plt.figure(figsize=(15, 5))
 colors = ['red', 'blue', 'green', 'k']
 space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .1
@@ -2076,11 +2283,11 @@ for i, key in enumerate(keys):
             df.append(result.Estimate['(Intercept)'] + result.Estimate[key])
 
         if result['P-val'][key]<0.001:
-            plt.text(day,  0.1 + i * 0.5, '***', ha='center', va='bottom', color=colors[i])
+            plt.text(day,  0.1 + i * 0.05, '***', ha='center', va='bottom', color=colors[i])
         elif result['P-val'][key]<0.01:
-            plt.text(day,   0.1 + i * 0.5, '**', ha='center', va='bottom', color=colors[i])
+            plt.text(day,   0.1 + i * 0.05, '**', ha='center', va='bottom', color=colors[i])
         elif result['P-val'][key]<0.05:
-            plt.text(day,   0.1 + i * 0.5, '*', ha='center', va='bottom', color=colors[i])
+            plt.text(day,   0.1 + i * 0.05, '*', ha='center', va='bottom', color=colors[i])
 
 
     plt.plot(np.arange(1, 7), df, '-o', color=colors[i])
@@ -2091,7 +2298,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_51.png]]
+[[./figures/landscape/figure_57.png]]
 
 #+begin_src ipython
 
@@ -2107,7 +2314,6 @@ plt.show()
 
   results = []
   data = y.copy()
-  data['sample_LD'] = -(2*data.sample_odor-1) * data['sample_LD']
   # data = data[data.mouse != 'ACCM04']
 
   formula = 'dist_ED ~ day + (1 | mouse)'
@@ -2127,52 +2333,19 @@ Family: gaussian	 Inference: parametric
 
 Number of observations: 3648	 Groups: {'mouse': 5.0}
 
-Log-likelihood: -2405.459 	 AIC: 4826.917
+Log-likelihood: -2450.747 	 AIC: 4917.494
 
 Random effects:
 
                  Name    Var    Std
-mouse     (Intercept)  0.021  0.143
-Residual               0.216  0.465
+mouse     (Intercept)  0.018  0.134
+Residual               0.222  0.471
 
 No random effect correlations specified
 
 Fixed effects:
 #+end_example
 
-#+begin_src ipython
-print(glm.summary())
-#+end_src
-
-#+RESULTS:
-#+begin_example
-Linear mixed model fit by REML [’lmerMod’]
-Formula: dist_ED~day+(1|mouse)
-
-Family: gaussian	 Inference: parametric
-
-Number of observations: 3648	 Groups: {'mouse': 5.0}
-
-Log-likelihood: -2405.459 	 AIC: 4826.917
-
-Random effects:
-
-                 Name    Var    Std
-mouse     (Intercept)  0.021  0.143
-Residual               0.216  0.465
-
-No random effect correlations specified
-
-Fixed effects:
-
-             Estimate  2.5_ci  97.5_ci     SE        DF  T-stat  P-val  Sig
-(Intercept)     0.086  -0.045    0.216  0.067     4.506   1.284  0.261
-day2           -0.189  -0.238   -0.139  0.025  3637.985  -7.442  0.000  ***
-day3           -0.117  -0.167   -0.067  0.025  3637.985  -4.609  0.000  ***
-day4           -0.147  -0.197   -0.098  0.025  3637.985  -5.806  0.000  ***
-day5           -0.240  -0.289   -0.190  0.025  3637.985  -9.446  0.000  ***
-day6           -0.257  -0.324   -0.190  0.034  3641.998  -7.557  0.000  ***
-#+end_example
 
 #+begin_src ipython
 print(glm.coefs.Estimate.keys())
@@ -2213,7 +2386,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_56.png]]
+[[./figures/landscape/figure_61.png]]
 
 #+begin_src ipython
 

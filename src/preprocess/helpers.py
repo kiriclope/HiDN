@@ -6,6 +6,7 @@ from sklearn.preprocessing import MinMaxScaler
 from oasis.functions import deconvolve
 from src.common import constants as gv
 from joblib import Parallel, delayed
+from scipy.signal import butter, filtfilt
 
 # from scipy.signal import savgol_filter, detrend
 
@@ -181,6 +182,22 @@ def preprocess_X_S1_X_S2(
     else:
         return X_scale[: X_S1.shape[0]], X_scale[X_S1.shape[0] :]
 
+def low_pass(signal):
+
+    # Define the sampling rate and cutoff frequency
+    sampling_rate = 6  # Hz
+    cutoff_freq = 0.01  # Hz
+
+    # Normalize the cutoff frequency with respect to Nyquist frequency
+    nyquist = 0.5 * sampling_rate
+    normal_cutoff = cutoff_freq / nyquist
+
+    # Create a Butterworth low-pass filter
+    b, a = butter(N=4, Wn=normal_cutoff, btype='low', analog=False)
+
+    # Apply the filter along the last axis
+    return filtfilt(b, a, signal, axis=-1)
+
 
 def preprocess_X(
     X,
@@ -195,6 +212,8 @@ def preprocess_X(
     # X = savgol_filter(X, int(np.ceil(gv.frame_rate/2.0) * 2 + 1), polyorder = gv.SAVGOL_ORDER, deriv=0, axis=-1, mode='mirror')
     if scaler=="mean":
         X_scale = X - X.mean((0,-1))[np.newaxis, ..., np.newaxis]
+    elif scaler=="lowpass":
+        X_scale = low_pass(X)
     elif scaler == "standard":
         X_scale, center, scale = standard_scaler_BL(
             X, center, scale, avg_mean, avg_noise

@@ -581,7 +581,7 @@ def get_classification(model, RETURN='overlaps', **options):
   # ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
 
   kwargs = {
-      'mouse': 'ChRM04', 'laser': 0,
+      'mouse': 'JawsM15', 'laser': 0,
       'trials': '', 'reload': 0, 'data_type': 'dF',
       'prescreen': None, 'pval': 0.05,
       'preprocess': False, 'scaler_BL': 'robust',
@@ -595,10 +595,10 @@ def get_classification(model, RETURN='overlaps', **options):
       'multilabel':0,
   }
 
-  # kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'middle', 'last']
   options = set_options(**kwargs)
-  days = np.arange(1, options['n_days']+1)
-  # days = ['first', 'middle', 'last']
+  # days = np.arange(1, options['n_days']+1)
+  days = ['first', 'middle', 'last']
 
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
   options['scoring'] = safe_roc_auc
@@ -642,11 +642,12 @@ options['verbose'] = 1
 
 #+begin_src ipython
 from sklearn.linear_model import LogisticRegression
-# net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
-net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
+net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+options['l1_ratio'] = 0.95
+net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100)
 # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001, multi_class='multinomial')
 
-params = {'net__C': np.logspace(-4, 4, 10)}
+params = {'net__C': np.logspace(-4, 4, 20)}
 
 options['n_jobs'] = -1
 options['verbose'] = 0
@@ -659,9 +660,23 @@ options['verbose'] = 1
 ** fit
 
 #+begin_src ipython
+mice = ['ChRM04', 'JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+mice = ['ACCM03', 'ACCM04']
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+for mouse in mice:
   overlaps_sample = []
   overlaps_dist = []
   overlaps_choice = []
+
+  options['mouse'] = mouse
+  options = set_options(**options)
+
+  if len(options['days']) >3:
+    days = np.arange(1, options['n_days']+1)
 
   for task in tasks:
     options['task'] = task
@@ -671,200 +686,217 @@ options['verbose'] = 1
     overlaps_choice_task = []
 
     for day in days:
-        options['day'] = day
+      options['day'] = day
 
-        options['features'] = 'sample'
-        options['epochs'] = ['ED']
-        overlaps = get_classification(model, RETURN='overlaps', **options)
-        overlaps_sample_task.append(overlaps)
+      options['features'] = 'sample'
+      options['epochs'] = ['ED']
+      overlaps = get_classification(model, RETURN='overlaps', **options)
 
-        options['reload'] = 0
-        options['features'] = 'distractor'
-        options['epochs'] = ['MD']
-        overlaps = get_classification(model, RETURN='overlaps', **options)
-        overlaps_dist_task.append(overlaps)
+      if (day == 'last') and ('ACC' in mouse):
+        overlaps = np.stack((overlaps, np.array(overlaps) * np.nan))
+        print(overlaps.shape)
+      overlaps_sample_task.append(overlaps)
 
-        # options['features'] = 'choice'
-        # options['epochs'] = ['CHOICE']
-        # overlaps = get_classification(model, RETURN='overlaps', **options)
-        # overlaps_choice_task.append(overlaps)
+      options['reload'] = 0
+      options['features'] = 'distractor'
+      options['epochs'] = ['MD']
+      overlaps = get_classification(model, RETURN='overlaps', **options)
+
+      if (day == 'last') and ('ACC' in mouse):
+        overlaps = np.stack((overlaps, np.array(overlaps) * np.nan))
+        print(overlaps.shape)
+
+      overlaps_dist_task.append(overlaps)
+
+      # options['features'] = 'choice'
+      # options['epochs'] = ['CHOICE']
+      # overlaps = get_classification(model, RETURN='overlaps', **options)
+      # overlaps_choice_task.append(overlaps)
 
     overlaps_sample.append(overlaps_sample_task)
     overlaps_dist.append(overlaps_dist_task)
     # overlaps_choice.append(overlaps_choice_task)
+
+  overlaps_save = np.stack((overlaps_sample, overlaps_dist))
+
+  if len(days) > 3:
+    name = 'overlaps_tasks_days'
+  else:
+    name = 'overlaps_tasks'
+
+  pkl_save(overlaps_save, '%s_%s_%.2f_l1_ratio%s' % (options['mouse'], name, options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+
     #+end_src
 
 #+RESULTS:
+:RESULTS:
+# [goto error]
+: Elapsed (with compilation) = 0h 0m 11s
+: multiple days 0 2 2
+: X_S1 (128, 361, 84) X_S2 (128, 361, 84)
+: multiple days 0 2 2
+: X_S1 (64, 361, 84) X_S2 (64, 361, 84)
+:END:
+
+* Labels
+
+#+begin_src ipython
+options['mouse'] = 'JawsM15'
+print(days)
+if len(days) > 3:
+     name = 'overlaps_tasks_days'
+else:
+     name = 'overlaps_tasks'
+
+filename = '%s_%s_%.2f_l1_ratio%s.pkl' % (options['mouse'], name, options['l1_ratio'], options['fname'])
+print(filename)
+
+try:
+      overlaps = pkl_load(filename, path="../data/%s/" % options['mouse'])
+      print('overlaps', overlaps.shape)
+except:
+      print('file not found')
+#+end_src
+
+#+RESULTS:
+: ['first', 'middle', 'last']
+: JawsM15_overlaps_tasks_0.95_l1_ratio.pkl
+: overlaps (2, 3, 3, 64, 84, 1)
+
+#+begin_src ipython
+overlaps_sample = overlaps[0]
+overlaps_dist = overlaps[1]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+overlaps_sample = np.array(overlaps_sample)
+print(overlaps_sample.shape)
+
+overlaps_dist = np.array(overlaps_dist)
+print(overlaps_dist.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 5, 64, 84, 1)
+: (3, 5, 64, 84, 1)
+
+#+begin_src ipython
+import pandas as pd
+
+options = set_options(**options)
+if len(days)>3:
+    days = np.arange(1, options['n_days']+1)
+
+print(days)
+
+options['trials'] = ''
+options['verbose'] = 0
+options['features'] = 'sample'
+
+X_days, y_days = get_X_y_days(**options)
+
+df = []
+for task in tasks:
+    options['task'] = task
+    df2 = []
+    for day in days:
+        options['day'] = day
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
+        df2.append(y)
+    df.append(pd.concat(df2))
+y = pd.concat(df)
+
+print(y.shape)
+
+y['behavior'] = y['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+y['pair'] = y['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+#+end_src
+
+#+RESULTS:
 #+begin_example
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+['first', 'middle', 'last']
 multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 11s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
 multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
 multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 19s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
 multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 11s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
 multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
 multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 18s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
 multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
 multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
 multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 19s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 11s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 19s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 11s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 19s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 20s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 11s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 19s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 20s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-X (64, 693, 84) y (64,)
-Elapsed (with compilation) = 0h 0m 10s
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-X (128, 693, 84) y (128,)
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-Elapsed (with compilation) = 0h 0m 20s
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+(960, 8)
 #+end_example
 
 #+begin_src ipython
-print(overlaps_sample[2][2].shape)
+sample  = np.array(overlaps_sample)[..., 0].reshape(-1, 84)
+dist  = np.array(overlaps_dist)[..., 0].reshape(-1, 84)
 #+end_src
 
 #+RESULTS:
-: (64, 84)
 
 #+begin_src ipython
-overlaps_save = np.stack((overlaps_sample, overlaps_dist))
-# overlaps_save = np.stack((overlaps_sample, overlaps_dist, overlaps_choice))
-print(overlaps_save.shape)
+y['sample'] = sample.tolist()
+y['sample'] = y['sample'].apply(np.array)
+y['sample'] = -(2*y.sample_odor-1) * y['sample']
 
-if len(days) == 3:
-    name = 'overlaps_tasks_days'
-else:
-    name = 'overlaps_tasks_'
+options['epochs'] = ['STIM']
+y['sample_STIM'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
 
-pkl_save(overlaps_save, '%s_%s_%.2f_l1_ratio%s' % (options['mouse'], name, options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+options['epochs'] = ['ED']
+y['sample_ED'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['MD']
+y['sample_MD'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['LD']
+y['sample_LD'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
 #+end_src
 
 #+RESULTS:
-: (2, 3, 3, 64, 84, 1)
-: JawsM15_overlaps_tasks_days_0.95_l1_ratio
 
+#+begin_src ipython
+y['dist'] = dist.tolist()
+y['dist'] = y['dist'].apply(np.array)
+# y['dist'] = (2*y.dist_odor-1) * y['dist']
+
+options['epochs'] = ['STIM']
+y['dist_STIM'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['ED']
+y['dist_ED'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['MD']
+y['dist_MD'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+options['epochs'] = ['LD']
+y['dist_LD'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+print(dist.shape)
+#+end_src
+
+#+RESULTS:
+: (960, 84)
+
+#+begin_src ipython
+pkl_save(y, 'y_%s' % options['mouse'])
+#+end_src
+
+#+RESULTS:
+: y_ACCM04
 
 * Pickle
-
-#+begin_src ipython
-#pkl_save(y, 'y_ACCM04')
-#+end_src
-
-#+RESULTS:
 
 #+begin_src ipython
 import pandas as pd
@@ -918,8 +950,8 @@ except:
 #+end_src
 
 #+RESULTS:
-: JawsM15_overlaps_tasks_0.95_l1_ratio.pkl
-: overlaps (2, 3, 3, 64, 84, 1)
+: JawsM15_overlaps_tasks__0.95_l1_ratio.pkl
+: overlaps (2, 3, 6, 32, 84, 1)
 
 #+begin_src ipython
 overlaps_sample = overlaps[0]
@@ -929,7 +961,7 @@ print(overlaps_sample.shape)
 #+end_src
 
 #+RESULTS:
-: (3, 3, 64, 84, 1)
+: (3, 6, 32, 84, 1)
 
 #+begin_src ipython
 overlaps_sample = np.array(overlaps_sample)
@@ -940,8 +972,8 @@ print(overlaps_dist.shape)
 #+end_src
 
 #+RESULTS:
-: (3, 3, 64, 84, 1)
-: (3, 3, 64, 84, 1)
+: (3, 6, 32, 84, 1)
+: (3, 6, 32, 84, 1)
 
 #+begin_src ipython
   cmap = plt.get_cmap('Blues')
@@ -1013,10 +1045,7 @@ print(overlaps_dist.shape)
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-[[./figures/landscape/figure_28.png]]
-:END:
+[[./figures/landscape/figure_36.png]]
 
 #+begin_src ipython
 import pandas as pd
@@ -1041,24 +1070,21 @@ y = pd.concat(df)
 
 #+RESULTS:
 #+begin_example
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-multiple days 0 2 2
-X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
 #+end_example
 
 #+begin_src ipython
