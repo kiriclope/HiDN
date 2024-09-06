@@ -1,0 +1,103 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/bin/python
+
+
+* Fit
+
+
+#+begin_src ipython
+from sklearn.linear_model import LogisticRegression
+
+class LogisticRegressionWrapper:
+    def __init__(self, *args, **kwargs):
+        self.model = LogisticRegression(*args, **kwargs)
+
+    def fit(self, X, y):
+        self.model.fit(X, y)
+        return self
+
+    def predict(self, X):
+        # Instead of predicting, we return the input X
+        return np.dot(X, self.model.coef_.ravel()).mean()
+
+    def predict_proba(self, X):
+        return np.dot(X, self.model.coef_.ravel()).mean()
+
+    def score(self, X, y):
+        return self.model.score(X, y)
+
+    def get_params(self, deep=True):
+        return self.model.get_params(deep)
+
+    def set_params(self, **params):
+        self.model.set_params(**params)
+        return self
+
+# Example usage
+# X and y should be your data features and labels
+# X, y = ...
+# wrapper = LogisticRegressionWrapper()
+# wrapper.fit(X, y)
+# y_pred = wrapper.predict(X)  # This will return X
+# y_proba = wrapper.predict_proba(X)  # This will return the predicted probabilities
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.datasets import make_classification
+from sklearn.metrics import make_scorer
+
+# Step 1: Create synthetic data
+X, y = make_classification(n_samples=100, n_features=30, random_state=42)
+
+# Step 2: Define the custom scorer
+def custom_scorer(estimator, X_test, y_test):
+    coef = estimator.coef_.flatten()  # Get coefficients of the trained model
+    dot_product = np.dot(X_test, coef)
+    print(X_test.shape)
+    return np.mean(dot_product)
+
+# Step 3: Convert the custom scorer to sk-learn scorer
+# dot_product_scorer = make_scorer(custom_scorer, greater_is_better=True)
+
+# Step 4: Initialize the logistic regression model
+logistic_regression = LogisticRegression()
+
+# Step 5: Apply cross-validation with the custom scorer
+scores = cross_val_score(logistic_regression, X, y, cv=5, scoring=custom_scorer)
+
+# Step 6: Print the results
+print(f'Custom dot product cross-validation scores: {scores}')
+print(f'Average dot product score: {np.mean(scores)}')
+#+end_src
+
+#+RESULTS:
+: (20, 30)
+: (20, 30)
+: (20, 30)
+: (20, 30)
+: (20, 30)
+: Custom dot product cross-validation scores: [ 0.05367912  0.3548708  -0.09461352  0.43671397 -1.01361928]
+: Average dot product score: -0.05259377976318023

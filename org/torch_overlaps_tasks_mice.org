@@ -1,83 +1,6 @@
 #+STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
 
-Use pymer 4
-Look at incorrect trials vs correct trials, trial by trial
-
-#+begin_src ipython
-from sklearn.linear_model import LogisticRegression
-
-class LogisticRegressionWrapper:
-    def __init__(self, *args, **kwargs):
-        self.model = LogisticRegression(*args, **kwargs)
-
-    def fit(self, X, y):
-        self.model.fit(X, y)
-        return self
-
-    def predict(self, X):
-        # Instead of predicting, we return the input X
-        return np.dot(X, self.model.coef_.ravel()).mean()
-
-    def predict_proba(self, X):
-        return np.dot(X, self.model.coef_.ravel()).mean()
-
-    def score(self, X, y):
-        return self.model.score(X, y)
-
-    def get_params(self, deep=True):
-        return self.model.get_params(deep)
-
-    def set_params(self, **params):
-        self.model.set_params(**params)
-        return self
-
-# Example usage
-# X and y should be your data features and labels
-# X, y = ...
-# wrapper = LogisticRegressionWrapper()
-# wrapper.fit(X, y)
-# y_pred = wrapper.predict(X)  # This will return X
-# y_proba = wrapper.predict_proba(X)  # This will return the predicted probabilities
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import numpy as np
-from sklearn.model_selection import cross_val_score
-from sklearn.datasets import make_classification
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import make_scorer
-
-# Define the custom scoring function
-def custom_scorer(y_pred, y, clf):
-    # `clf.coef_` assumes a single class classification or binary classification,
-    # shape (1, n_features) or (n_features,)
-    # `np.dot` computes dot product of X and coefficients
-    # print(clf.coef_.shape)
-    return y_pred
-
-# Create an example dataset
-X, y = make_classification(n_samples=100, n_features=20, random_state=42)
-
-# Create the logistic regression classifier
-model = LogisticRegressionWrapper()
-model.fit(X, y)
-
-# Convert the scoring function into a scorer that can be used by scikit-learn
-my_scorer = make_scorer(custom_scorer, greater_is_better=True, clf=model, needs_proba=True)
-
-# Example of using the custom scorer in cross-validation
-scores = cross_val_score(model, X, y, cv=5, scoring=my_scorer)
-print("Custom Scorer results:", scores)
-
-#+end_src
-
-#+RESULTS:
-: Custom Scorer results: [nan nan nan nan nan]
-
-
 * Notebook Settings
 
 #+begin_src ipython
@@ -415,6 +338,8 @@ print("Custom Scorer results:", scores)
               print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
 
           return self.scores
+
+
 #+end_src
 
 #+RESULTS:
@@ -685,16 +610,19 @@ for mouse in mice:
     overlaps_dist_task = []
     overlaps_choice_task = []
 
+    days = ['last']
     for day in days:
       options['day'] = day
 
       options['features'] = 'sample'
       options['epochs'] = ['ED']
       overlaps = get_classification(model, RETURN='overlaps', **options)
+      print('overlaps', overlaps.shape)
 
       if (day == 'last') and ('ACC' in mouse):
-        overlaps = np.stack((overlaps, np.array(overlaps) * np.nan))
-        print(overlaps.shape)
+        overlaps = np.hstack((overlaps, np.array(overlaps) * np.nan))
+        print('overlaps', overlaps.shape)
+
       overlaps_sample_task.append(overlaps)
 
       options['reload'] = 0
@@ -703,7 +631,7 @@ for mouse in mice:
       overlaps = get_classification(model, RETURN='overlaps', **options)
 
       if (day == 'last') and ('ACC' in mouse):
-        overlaps = np.stack((overlaps, np.array(overlaps) * np.nan))
+        overlaps = np.hstack((overlaps, np.array(overlaps) * np.nan))
         print(overlaps.shape)
 
       overlaps_dist_task.append(overlaps)
@@ -729,14 +657,132 @@ for mouse in mice:
     #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-: Elapsed (with compilation) = 0h 0m 11s
-: multiple days 0 2 2
-: X_S1 (128, 361, 84) X_S2 (128, 361, 84)
-: multiple days 0 2 2
-: X_S1 (64, 361, 84) X_S2 (64, 361, 84)
-:END:
+#+begin_example
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 361, 84) X_S2 (32, 361, 84)
+X (64, 361, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 7s
+overlaps (64, 84, 1)
+overlaps (64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 361, 84) X_S2 (64, 361, 84)
+X (128, 361, 84) y (128,)
+DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 361, 84) X_S2 (32, 361, 84)
+Elapsed (with compilation) = 0h 0m 11s
+(64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 361, 84) X_S2 (32, 361, 84)
+X (64, 361, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 7s
+overlaps (64, 84, 1)
+overlaps (64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 361, 84) X_S2 (64, 361, 84)
+X (128, 361, 84) y (128,)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 361, 84) X_S2 (32, 361, 84)
+Elapsed (with compilation) = 0h 0m 11s
+(64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 361, 84) X_S2 (32, 361, 84)
+X (64, 361, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 7s
+overlaps (64, 84, 1)
+overlaps (64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 361, 84) X_S2 (64, 361, 84)
+X (128, 361, 84) y (128,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 361, 84) X_S2 (32, 361, 84)
+Elapsed (with compilation) = 0h 0m 11s
+(64, 168, 1)
+ACCM03_overlaps_tasks_0.95_l1_ratio
+Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X (64, 113, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 4s
+overlaps (64, 84, 1)
+overlaps (64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
+X (128, 113, 84) y (128,)
+DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+Elapsed (with compilation) = 0h 0m 6s
+(64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X (64, 113, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 4s
+overlaps (64, 84, 1)
+overlaps (64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
+X (128, 113, 84) y (128,)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+Elapsed (with compilation) = 0h 0m 6s
+(64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+X (64, 113, 84) y (64,)
+Elapsed (with compilation) = 0h 0m 5s
+overlaps (64, 84, 1)
+overlaps (64, 168, 1)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (64, 113, 84) X_S2 (64, 113, 84)
+X (128, 113, 84) y (128,)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+multiple days 0 2 2
+X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+Elapsed (with compilation) = 0h 0m 5s
+(64, 168, 1)
+ACCM04_overlaps_tasks_0.95_l1_ratio
+#+end_example
+
+#+begin_src ipython
+print(np.array(overlaps_dist[0][0]).shape)
+#+end_src
+
+#+RESULTS:
+: (128, 84, 1)
+
+#+begin_src ipython
+print(np.stack((overlaps, overlaps)).shape)
+#+end_src
+
+#+RESULTS:
+: (4, 64, 84, 1)
 
 * Labels
 
@@ -869,7 +915,6 @@ y['sample_LD'] = y['sample'].apply(lambda x: avg_epochs(np.array(x), **options))
 #+begin_src ipython
 y['dist'] = dist.tolist()
 y['dist'] = y['dist'].apply(np.array)
-# y['dist'] = (2*y.dist_odor-1) * y['dist']
 
 options['epochs'] = ['STIM']
 y['dist_STIM'] = y['dist'].apply(lambda x: avg_epochs(np.array(x), **options))

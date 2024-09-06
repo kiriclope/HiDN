@@ -1,0 +1,675 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session mne :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from time import perf_counter
+
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+  from sklearn.decomposition import PCA
+
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.decode.classifiers import safeSelector
+  from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  params = { 'net__alpha': np.logspace(-4, 4, 10),
+             # 'net__l1_ratio': np.linspace(0, 1, 10),
+             # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+            }
+
+  # ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
+
+  kwargs = {
+      'mouse': 'JawsM15', 'laser': 0,
+      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 3, 'n_repeats': 32,
+      'class_weight': 0,
+      'multilabel':0,
+  }
+
+  kwargs['days'] = ['first', 'middle', 'last']
+  options = set_options(**kwargs)
+  # days = np.arange(1, options['n_days']+1)
+  days = ['first', 'middle', 'last']
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  options['hp_scoring'] = safe_roc_auc
+  options['n_jobs'] = 30
+#+end_src
+
+#+RESULTS:
+
+* Dual Data
+** Parameters
+
+#+begin_src ipython
+import numpy as np
+from sklearn.model_selection import train_test_split
+from time import perf_counter
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+# Function to map values
+def map_values(row):
+    if np.isnan(row['dist_odor']):
+        return np.nan
+    return row['sample_odor'] * 2 + row['dist_odor']
+
+# Apply the function to each row
+
+def convert_seconds(seconds):
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    return h, m, s
+
+def y_to_arr(y, **options):
+    if options['task'] == 'Dual':
+        y['labels'] = y.apply(map_values, axis=1)
+        y = y.labels.dropna().to_numpy()
+    elif options['features'] == 'sample':
+        y = y.sample_odor.dropna().to_numpy()
+    elif options['features'] == 'distractor':
+        y = y.dist_odor.dropna().to_numpy()
+    elif options['features'] == 'choice':
+        y = y.choice.to_numpy()
+
+    # y[y==-1] = 0
+
+    return y
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+DEVICE = 'cuda:0'
+mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+N_NEURONS = [668, 693, 444, 361, 113]
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+params = { 'net__alpha': np.logspace(-4, 4, 10),
+            # 'net__l1_ratio': np.linspace(0, 1, 10),
+            # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+        }
+
+kwargs = {
+    'mouse': 'JawsM15',
+    'trials': '', 'reload': 0, 'data_type': 'df',
+    'preprocess': True, 'scaler_BL': 'robust',
+    'avg_noise':True, 'unit_var_BL': True,
+    'random_state': None, 'T_WINDOW': 0.0,
+    'l1_ratio': 0.95,
+    'n_comp': None, 'scaler': None,
+    'bootstrap': 0, 'n_boots': 32,
+    'n_splits': 3, 'n_repeats': 8,
+    'class_weight': 0,
+    'multilabel': 0,
+}
+
+options = set_options(**kwargs)
+# days = np.arange(1,  options['n_days']+1)
+# days = np.arange(1,  2)
+
+safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+
+options['hp_scoring'] = safe_roc_auc
+options['n_jobs'] = 30
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.linear_model import LogisticRegression
+# net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
+
+params = {'net__C': np.logspace(-4, 4, 10)}
+params = {}
+
+options['n_jobs'] = -1
+options['verbose'] = 0
+from src.torch.classificationCV import ClassificationCV
+model = ClassificationCV(net, params, **options)
+options['verbose'] = 1
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1):
+    coef = estimator.named_steps["net"].coef_.flatten()
+    if IF_SIGN:
+        dot_product = (2*y_test -1) * np.dot(X_test, coef) / np.linalg.norm(coef)
+    else:
+        dot_product = -np.dot(X_test, coef) / np.linalg.norm(coef)
+
+    return dot_product.mean()
+
+
+options['scoring'] = overlaps_scorer
+# options['hp_scoring'] = 'overlaps_scorer'
+#+end_src
+
+#+RESULTS:
+
+** Sample Overlap
+
+#+begin_src ipython
+    X_days, y_days = get_X_y_days(**options)
+
+    options['day'] = 'last'
+    options['features'] = 'sample'
+#+end_src
+
+#+RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+: PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+
+*** DPA
+#+begin_src ipython
+    options['task'] = 'DPA'
+
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    y = y_to_arr(y, **options)
+
+    print('X', X.shape, 'y', y.shape)
+#+end_src
+
+#+RESULTS:
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
+: multiple days 0 3 0
+: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+: X (96, 693, 84) y (96,)
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+X_avg = avg_epochs(X, **options).astype('float32')
+y_avg = y.copy()
+print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 693)
+: (1, 96, 693)
+: X_avg (96, 693) y_avg (96,)
+
+#+begin_src ipython
+model.fit(X_avg, y_avg)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+scores_DPA = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1)
+print('scores', scores_DPA.shape)
+#+end_src
+
+#+RESULTS:
+: X_test==X True
+: X (96, 693, 84) y (96,) y2 (96,)
+: scores (24, 84, 84)
+
+*** DualGo
+
+#+begin_src ipython
+    options['task'] = 'DualGo'
+
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    y = y_to_arr(y, **options)
+
+    print('X', X.shape, 'y', y.shape)
+#+end_src
+
+#+RESULTS:
+: DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
+: multiple days 0 3 0
+: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+: X (96, 693, 84) y (96,)
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+X_avg = avg_epochs(X, **options).astype('float32')
+y_avg = y.copy()
+print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 693)
+: (1, 96, 693)
+: X_avg (96, 693) y_avg (96,)
+
+#+begin_src ipython
+model.fit(X_avg, y_avg)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+scores_DualGo = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1)
+print('scores', scores_DualGo.shape)
+#+end_src
+
+#+RESULTS:
+: X_test==X True
+: X (96, 693, 84) y (96,) y2 (96,)
+: scores (24, 84, 84)
+
+*** DualNoGo
+
+#+begin_src ipython
+    options['task'] = 'DualNoGo'
+
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    y = y_to_arr(y, **options)
+
+    print('X', X.shape, 'y', y.shape)
+#+end_src
+
+#+RESULTS:
+: DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
+: multiple days 0 3 0
+: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+: X (96, 693, 84) y (96,)
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+X_avg = avg_epochs(X, **options).astype('float32')
+y_avg = y.copy()
+print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 693)
+: (1, 96, 693)
+: X_avg (96, 693) y_avg (96,)
+
+#+begin_src ipython
+model.fit(X_avg, y_avg)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+scores_DualNoGo = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1)
+print('scores', scores_DualNoGo.shape)
+#+end_src
+
+#+RESULTS:
+: X_test==X True
+: X (96, 693, 84) y (96,) y2 (96,)
+: scores (24, 84, 84)
+
+*** Summary
+
+#+begin_src ipython
+scores = np.stack((scores_DPA, scores_DualGo, scores_DualNoGo), axis=1)
+print(scores.shape)
+#+end_src
+
+#+RESULTS:
+: (24, 3, 84, 84)
+
+** Distractor Overlap
+
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
+    coef = estimator.named_steps["net"].coef_.flatten()
+    if IF_SIGN:
+        dot_product = (2*y_test -1) * np.dot(X_test, coef) / np.linalg.norm(coef)
+    else:
+        dot_product = -np.dot(X_test, coef) / np.linalg.norm(coef)
+
+    return dot_product.mean()
+
+
+options['scoring'] = overlaps_scorer
+# options['hp_scoring'] = 'overlaps_scorer'
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+    X_days, y_days = get_X_y_days(**options)
+    options['task'] = 'Dual'
+    options['day'] = 'last'
+#+end_src
+
+#+RESULTS:
+
+*** Dual
+
+#+begin_src ipython
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    y = y_to_arr(y, **options)
+    print('X', X.shape, 'y', y.shape)
+    print(np.sum(y==2))
+#+end_src
+
+#+RESULTS:
+: multiple days 0 2 2
+: X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+: X (128, 693, 84) y (128,)
+: 32
+
+#+begin_src ipython
+options['epochs'] = ['MD']
+X_avg = avg_epochs(X, **options).astype('float32')
+y_avg = y.copy()
+
+y_avg[y_avg==2]=0
+y_avg[y_avg==3]=1
+
+print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (128, 693)
+: (1, 128, 693)
+: X_avg (128, 693) y_avg (128,)
+
+#+begin_src ipython
+model.fit(X_avg, y_avg)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+scores_dual = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1)
+print('scores', scores_dual.shape)
+#+end_src
+
+#+RESULTS:
+: X_test==X True
+: X (128, 693, 84) y (128,) y2 (128,)
+: scores (24, 2, 84, 84)
+
+*** DPA
+#+begin_src ipython
+    options['task'] = 'DPA'
+    X_DPA, y_DPA = get_X_y_S1_S2(X_days, y_days, **options)
+    y_DPA = y_to_arr(y_DPA, **options)
+    print('X_DPA', X_DPA.shape, 'y_DPA', y_DPA.shape)
+#+end_src
+
+#+RESULTS:
+: multiple days 0 2 2
+: X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+: X_DPA (64, 693, 84) y_DPA (64,)
+
+#+begin_src ipython
+scores_DPA = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1, IF_COMPO=1, X_test=X_DPA, y_test=y_DPA)
+print(scores_DPA.shape)
+#+end_src
+
+#+RESULTS:
+: X (128, 693, 84) y (128,) y2 (64,)
+: scores (24, 1, 84, 84)
+: (24, 84, 84)
+
+#+begin_src ipython
+# print(np.array(scores_DPA)[:, np.newaxis].shape)
+# A = np.array(scores_DPA)[:, np.newaxis]
+#+end_src
+
+#+RESULTS:
+
+
+*** summary
+#+begin_src ipython
+scores = np.concatenate((scores_DPA[:, np.newaxis], scores_dual), axis=1)
+print(scores.shape)
+#+end_src
+
+#+RESULTS:
+: (24, 3, 84, 84)
+
+* Plots
+
+#+begin_src ipython
+  from mpl_toolkits.axes_grid1 import make_axes_locatable
+  def plot_mat(X, ax, axis=0):
+    im = ax.imshow(
+        X,
+        interpolation="lanczos",
+        origin="lower",
+        cmap="jet",
+        extent=[0, 14, 0, 14],
+        vmin=0,
+        vmax=1.0,
+    )
+
+    add_vdashed(ax)
+    ax.set_xlim([2, 12])
+    ax.set_xticks([2, 4, 6, 8, 10, 12])
+    ax.set_ylim([2, 12])
+    ax.set_yticks([2, 4, 6, 8, 10, 12])
+
+    ax.set_xlabel("Testing Time (s)")
+    ax.set_ylabel("Training Time (s)")
+
+    divider = make_axes_locatable(ax)
+    # Append an axes to the right of ax, with 5% width of ax
+    cax_divider = divider.append_axes("right", size="5%", pad=0.05)
+
+    # Create the colorbar in the new axes (cax_divider)
+    cb = plt.colorbar(im, cax=cax_divider)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, 1.5*height])
+  plot_mat(np.abs(scores.mean(0)[0]), ax[0])
+  plot_mat(np.abs(scores.mean(0)[1]), ax[1])
+  plot_mat(np.abs(scores.mean(0)[2]), ax[2])
+  #+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+#+begin_src ipython
+plt.plot(np.linspace(0, 14, 84), np.diag(scores.mean(0)[0]), 'r')
+plt.plot(np.linspace(0, 14, 84), np.diag(scores.mean(0)[1]), 'b')
+plt.plot(np.linspace(0, 14, 84), np.diag(scores.mean(0)[2]), 'g')
+plt.xlabel('Time (s)')
+plt.ylabel('Dist. Overlap')
+add_vlines()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_35.png]]
+
+#+begin_src ipython
+scores_MD = np.swapaxes(scores.copy(), -1, -2)
+scores_MD = avg_epochs(scores_MD, **options)
+print(scores_MD.shape)
+#+end_src
+
+#+RESULTS:
+: (24, 3, 84)
+: (1, 24, 3, 84)
+: (24, 3, 84)
+
+#+begin_src ipython
+from scipy.stats import sem, t
+
+mean_scores = np.mean(scores_MD, axis=0)
+stderr_scores = sem(scores_MD, axis=0)
+
+# Calculate confidence intervals (95%)
+confidence = 0.95
+n = scores_MD.shape[0]
+h = stderr_scores * t.ppf((1 + confidence) / 2., n-1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from scipy.stats import bootstrap
+def my_boots_ci(X, statfunc, n_samples=10000, method="BCa", alpha=0.05, axis=0):
+    boots_samples = bootstrap(
+        (X,),
+        statistic=statfunc,
+        n_resamples=n_samples,
+        method=method,
+        confidence_level=1.0 - alpha,
+        vectorized=True,
+        axis=axis,
+    )
+
+    # print(boots_samples)
+
+    ci = np.array([boots_samples.confidence_interval.low, boots_samples.confidence_interval.high])
+    
+    mean_boots = np.mean(boots_samples.bootstrap_distribution, axis=axis)
+    
+    ci[0] = mean_boots - ci[0]
+    ci[1] = ci[1] - mean_boots
+    
+    return ci
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from scipy.stats import bootstrap
+
+def my_boots_ci(X, statfunc, n_samples=10000, method="BCa", alpha=0.05, axis=0):
+    boots_samples = bootstrap(
+        (X,),
+        statistic=statfunc,
+        n_resamples=n_samples,
+        method=method,
+        confidence_level=1.0 - alpha,
+        vectorized=True,
+        axis=axis,
+    )
+
+    # print(boots_samples)
+
+    ci = np.array([boots_samples.confidence_interval.low, boots_samples.confidence_interval.high])
+    print(ci.shape)
+    mean_boots = np.mean(boots_samples.bootstrap_distribution, axis=-1)
+    print(mean_boots.shape)
+    ci[0] = mean_boots - ci[0]
+    ci[1] = ci[1] - mean_boots
+    
+    return ci
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+ci = my_boots_ci(scores_MD, np.mean, n_samples=100000)
+#+end_src
+
+#+RESULTS:
+: (2, 3, 84)
+: (3, 84)
+
+#+begin_src ipython
+colors = ['r', 'b', 'g']
+for i in range(len(colors)):
+    plt.plot(np.linspace(0, 14, 84), scores_MD.mean(0)[i], colors[i])
+    plt.fill_between(np.linspace(0, 14, 84), scores_MD.mean(0)[i] - ci[0, i],
+                     scores_MD.mean(0)[i] + ci[1, i], alpha=0.1, color=colors[i])
+
+plt.xlabel('Time (s)')
+plt.ylabel('Dist. Overlap')
+plt.xlim([0, 12])
+add_vlines()
+plt.show()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_41.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

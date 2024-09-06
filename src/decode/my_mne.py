@@ -8,7 +8,7 @@
 
 import datetime as dt
 import numbers
-
+import copy
 import numpy as np
 from mne.fixes import BaseEstimator, _get_check_scoring, is_classifier
 from mne.parallel import parallel_func
@@ -453,6 +453,7 @@ def cross_val_multiscore(
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
     cv_iter = list(cv.split(X, y, groups))
     scorer = check_scoring(estimator, scoring=scoring)
+
     # We clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
     # Note: this parallelization is implemented using MNE Parallel
@@ -514,7 +515,6 @@ def _fit_and_score(
     start_time = dt.datetime.now()
 
     X_train, y_train = _safe_split(estimator, X, y, train)
-    X_test, y_test = _safe_split(estimator, X, y, test, train)
 
     try:
         if y_train is None:
@@ -562,6 +562,110 @@ def _fit_and_score(
     return ret
 
 @verbose
+def my_cross_val_compo_score(
+    estimator,
+    X,
+    X2,
+    y=None,
+    y2=None,
+    groups=None,
+    scoring=None,
+    cv=None,
+    n_jobs=None,
+    verbose=None,
+    fit_params=None,
+    pre_dispatch="2*n_jobs",
+):
+    # This code is copied from sklearn
+
+    from sklearn.base import clone
+    from sklearn.model_selection._split import check_cv
+    from sklearn.utils import indexable
+
+    check_scoring = _get_check_scoring()
+
+    X, y, groups = indexable(X, y, groups)
+
+    cv = check_cv(cv, y, classifier=is_classifier(estimator))
+
+    cv_train = list(cv.split(X, y, groups))
+    cv_test = list(cv.split(X2, y2, groups))
+
+    try:
+        y[y==2] = 0
+        y[y==3] = 1
+    except:
+        pass
+
+    print('X', X.shape, 'y', y.shape, 'y2', y2.shape)
+
+    try:
+        scorer = check_scoring(estimator, scoring=scoring)
+    except:
+        scorer = scoring
+
+    parallel, p_func, n_jobs = parallel_func(
+        _fit_and_compo_score, n_jobs, pre_dispatch=pre_dispatch
+    )
+
+    scores = parallel(
+        p_func(
+            estimator=clone(estimator),
+            X_train=X[train],
+            X_test=X2[test],
+            y_train=y[train],
+            train=train,
+            y_test=y2[test],
+            scorer=scorer,
+            verbose=verbose,
+            fit_params=fit_params,
+       )
+        for (train, _), (_, test) in zip(cv_train, cv_test)
+    )
+
+    print('scores', np.array(scores).shape())
+
+    return np.array(scores)[:, 0, ...]  # flatten over joblib output.
+
+# This verbose is necessary to properly set the verbosity level
+# during parallelization
+@verbose
+def _fit_and_compo_score(
+    estimator,
+    X_train,
+    X_test,
+    y_train,
+    train,
+    y_test,
+    scorer,
+    fit_params,
+    return_train_score=False,
+    verbose=None,
+):
+    """Fit estimator and compute scores for a given dataset split."""
+    from mne.fixes import _check_fit_params
+
+    # Adjust length of sample weights
+    fit_params = fit_params if fit_params is not None else {}
+    fit_params = _check_fit_params(X_train, fit_params, train)
+
+    # if parameters is not None:
+    #     estimator.set_params(**parameters)
+
+    if y_train is None:
+        estimator.fit(X_train, **fit_params)
+    else:
+        estimator.fit(X_train, y_train, **fit_params)
+
+        if return_train_score:
+            train_score = _score(estimator, X_train, y_train, scorer)
+
+    test_score = _score(estimator, X_test, y_test, scorer)
+    ret = [train_score, test_score] if return_train_score else [test_score]
+
+    return ret
+
+@verbose
 def my_cross_val_multiscore(
     estimator,
     X,
@@ -576,66 +680,6 @@ def my_cross_val_multiscore(
     fit_params=None,
     pre_dispatch="2*n_jobs",
 ):
-    """Evaluate a score by cross-validation.
-
-    Parameters
-    ----------
-    estimator : instance of sklearn.base.BaseEstimator
-        The object to use to fit the data.
-        Must implement the 'fit' method.
-    X : array-like, shape (n_samples, n_dimensional_features,)
-        The data to fit. Can be, for example a list, or an array at least 2d.
-    y : array-like, shape (n_samples, n_targets,)
-        The target variable to try to predict in the case of
-        supervised learning.
-    groups : array-like, with shape (n_samples,)
-        Group labels for the samples used while splitting the dataset into
-        train/test set.
-    scoring : str, callable | None
-        A string (see model evaluation documentation) or
-        a scorer callable object / function with signature
-        ``scorer(estimator, X, y)``.
-        Note that when using an estimator which inherently returns
-        multidimensional output - in particular, SlidingEstimator
-        or GeneralizingEstimator - you should set the scorer
-        there, not here.
-    cv : int, cross-validation generator | iterable
-        Determines the cross-validation splitting strategy.
-        Possible inputs for cv are:
-
-        - None, to use the default 5-fold cross validation,
-        - integer, to specify the number of folds in a ``(Stratified)KFold``,
-        - An object to be used as a cross-validation generator.
-        - An iterable yielding train, test splits.
-
-        For integer/None inputs, if the estimator is a classifier and ``y`` is
-        either binary or multiclass,
-        :class:`sklearn.model_selection.StratifiedKFold` is used. In all
-        other cases, :class:`sklearn.model_selection.KFold` is used.
-    %(n_jobs)s
-    %(verbose)s
-    fit_params : dict, optional
-        Parameters to pass to the fit method of the estimator.
-    pre_dispatch : int, or str, optional
-        Controls the number of jobs that get dispatched during parallel
-        execution. Reducing this number can be useful to avoid an
-        explosion of memory consumption when more jobs get dispatched
-        than CPUs can process. This parameter can be:
-
-        - None, in which case all the jobs are immediately
-          created and spawned. Use this for lightweight and
-          fast-running jobs, to avoid delays due to on-demand
-          spawning of the jobs
-        - An int, giving the exact number of total jobs that are
-          spawned
-        - A string, giving an expression as a function of n_jobs,
-          as in '2*n_jobs'
-
-    Returns
-    -------
-    scores : array of float, shape (n_splits,) | shape (n_splits, n_scores)
-        Array of scores of the estimator for each run of the cross validation.
-    """
     # This code is copied from sklearn
 
     from sklearn.base import clone
@@ -648,14 +692,31 @@ def my_cross_val_multiscore(
 
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
     cv_iter = list(cv.split(X, y, groups))
-    scorer = check_scoring(estimator, scoring=scoring)
+
+    y2 = y.copy()
+
+    try:
+        y[y==2] = 0
+        y[y==3] = 1
+    except:
+        pass
+
+    print('X', X.shape, 'y', y.shape, 'y2', y2.shape)
+
+    try:
+        scorer = check_scoring(estimator, scoring=scoring)
+    except:
+        scorer = scoring
+
     # We clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
     # Note: this parallelization is implemented using MNE Parallel
     parallel, p_func, n_jobs = parallel_func(
         _my_fit_and_score, n_jobs, pre_dispatch=pre_dispatch
     )
+
     position = hasattr(estimator, "position")
+
     scores = parallel(
         p_func(
             estimator=clone(estimator),
@@ -672,6 +733,7 @@ def my_cross_val_multiscore(
         )
         for ii, (train, test) in enumerate(cv_iter)
     )
+
     return np.array(scores)[:, 0, ...]  # flatten over joblib output.
 
 
@@ -716,11 +778,22 @@ def _my_fit_and_score(
     X_train, y_train = _safe_split(estimator, X, y, train)
     X_test, y_test = _safe_split(estimator, X2, y2, test, train)
 
+    # print('train', X_train.shape, 'test', X_test.shape)
+
     try:
+        # X_train = np.nanmean(X_train[...,
+        #                              np.array([33, 34, 35, 36, 37, 38])]
+        #                      , axis=-1)[..., np.newaxis]
+
         if y_train is None:
             estimator.fit(X_train, **fit_params)
         else:
             estimator.fit(X_train, y_train, **fit_params)
+
+        # if X_train.shape[-1] != X_test.shape[-1]:
+        #     print('copy estimators')
+        #     estimators = [copy.deepcopy(estimator.estimators_[0]) for _ in range(X_test.shape[-1])]
+        #     estimator.estimators_ = estimators
 
     except Exception as e:
         # Note fit time as time until error
@@ -748,6 +821,7 @@ def _my_fit_and_score(
         fit_duration = dt.datetime.now() - start_time
         test_score = _score(estimator, X_test, y_test, scorer)
         score_duration = dt.datetime.now() - start_time - fit_duration
+
         if return_train_score:
             train_score = _score(estimator, X_train, y_train, scorer)
 
@@ -770,8 +844,24 @@ def _score(estimator, X_test, y_test, scorer):
     """
     if y_test is None:
         score = scorer(estimator, X_test)
+    elif np.sum(y_test==2) !=0:
+        idx_Go = (y_test==0) | (y_test==2)
+
+        y = y_test.copy()
+        y[y==2] = 0
+        y[y==3] = 1
+
+        # print(y[idx_Go].shape, y[~idx_Go].shape)
+
+        # score = scorer(estimator, X_test[idx_Go], y[idx_Go])
+
+        score = [scorer(estimator, X_test[idx_Go], y[idx_Go]),
+                 scorer(estimator, X_test[~idx_Go], y[~idx_Go])]
+
     else:
         score = scorer(estimator, X_test, y_test)
+
+
     if hasattr(score, "item"):
         try:
             # e.g. unwrap memmapped scalars

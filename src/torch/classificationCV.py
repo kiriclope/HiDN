@@ -1,3 +1,4 @@
+import copy
 from time import perf_counter
 from sklearn.base import clone
 from sklearn.ensemble import BaggingClassifier
@@ -6,8 +7,8 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
 from sklearn.decomposition import PCA
 
-from mne.decoding import SlidingEstimator, cross_val_multiscore
-from src.decode.my_mne import my_cross_val_multiscore
+from mne.decoding import SlidingEstimator, GeneralizingEstimator, cross_val_multiscore
+from src.decode.my_mne import my_cross_val_multiscore, my_cross_val_compo_score
 
 
 def convert_seconds(seconds):
@@ -32,7 +33,7 @@ class ClassificationCV:
         pipe.append(("net", net))
         self.model = Pipeline(pipe)
 
-        self.num_features = kwargs["num_features"]
+        self.hp_scoring = kwargs["hp_scoring"]
         self.scoring = kwargs["scoring"]
 
         if kwargs["n_splits"] == -1:
@@ -51,17 +52,12 @@ class ClassificationCV:
         if self.verbose:
             print("Fitting hyperparameters ...")
 
-        try:
-            self.model["net"].module__num_features = self.num_features
-        except:
-            pass
-
         grid = GridSearchCV(
             self.model,
             self.params,
             refit=True,
             cv=self.cv,
-            scoring=self.scoring,
+            scoring=self.hp_scoring,
             n_jobs=self.n_jobs,
         )
         grid.fit(X.astype("float32"), y.astype("float32"))
@@ -179,34 +175,49 @@ class ClassificationCV:
 
         return np.array(overlaps_list).mean(0)
 
-    def get_cv_scores(self, X, y, scoring, cv=None, X_test=None, y_test=None):
+    def get_cv_scores(self, X, y, scoring, cv=None, X_test=None, y_test=None, IF_GEN=0, IF_COMPO=0):
         if cv is None:
             cv = self.cv
         if X_test is None:
             X_test = X
             y_test = y
+            print('X_test==X', True)
 
         start = perf_counter()
         if self.verbose:
             print("Computing cv scores ...")
 
-        estimator = SlidingEstimator(
-            clone(self.best_model), n_jobs=1, scoring=scoring, verbose=False
-        )
+        if IF_GEN==0:
+            self.estimator = SlidingEstimator(
+                copy.deepcopy(self.best_model), n_jobs=1, scoring=scoring, verbose=False
+            )
+        else:
+            self.estimator = GeneralizingEstimator(copy.deepcopy(self.best_model), n_jobs=1, scoring=scoring, verbose=False)
 
         # self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
         #                                    cv=cv, n_jobs=-1, verbose=False)
-
-        self.scores = my_cross_val_multiscore(
-            estimator,
-            X.astype("float32"),
-            X_test.astype("float32"),
-            y.astype("float32"),
-            y_test.astype("float32"),
-            cv=cv,
-            n_jobs=-1,
-            verbose=False,
-        )
+        if IF_COMPO:
+            self.scores = my_cross_val_compo_score(
+                self.estimator,
+                X.astype("float32"),
+                X_test.astype("float32"),
+                y.astype("float32"),
+                y_test,
+                cv=cv,
+                n_jobs=-1,
+                verbose=False,
+            )
+        else:
+            self.scores = my_cross_val_multiscore(
+                self.estimator,
+                X.astype("float32"),
+                X_test.astype("float32"),
+                y.astype("float32"),
+                y_test,
+                cv=cv,
+                n_jobs=-1,
+                verbose=False,
+            )
 
         end = perf_counter()
         if self.verbose:

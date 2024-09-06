@@ -159,27 +159,49 @@ def safe_roc_auc_score(y_true, y_score, multi_class='ovr'):
             }
 
   kwargs = {
-      'mouse': 'AP02',
-      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'mouse': 'JawsM15',
+      'trials': '', 'reload': 0, 'data_type': 'raw',
       'preprocess': True, 'scaler_BL': 'robust',
       'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
       'bootstrap': 0, 'n_boots': 32,
-      'n_splits': 3, 'n_repeats': 1,
+      'n_splits': 3, 'n_repeats': 8,
       'class_weight': 0,
-      'multilabel': 1,
+      'multilabel': 0,
   }
 
   options = set_options(**kwargs)
-  days = np.arange(1,  options['n_days']+1)
+  # days = np.arange(1,  options['n_days']+1)
   # days = np.arange(1,  2)
 
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
 
-  options['scoring'] = safe_roc_auc
+  options['hp_scoring'] = safe_roc_auc
   options['n_jobs'] = 30
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test):
+    coef = estimator.named_steps["net"].coef_.flatten()
+    # dot_product = -(2*y_test -1) * np.dot(X_test, coef)
+    dot_product = np.dot(X_test, coef) / np.linalg.norm(coef)
+    return np.mean(dot_product)
+
+options['scoring'] = overlaps_scorer
+# options['hp_scoring'] = 'overlaps_scorer'
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.metrics import f1_score
+
+uni_f1 = make_scorer(f1_score, pos_label=1, average='micro')
+# options['scorer'] = uni_f1
 #+end_src
 
 #+RESULTS:
@@ -217,7 +239,7 @@ def safe_roc_auc_score(y_true, y_score, multi_class='ovr'):
 #+begin_src ipython
   from sklearn.linear_model import LogisticRegression
   # net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
-  net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001, multi_class='multinomial')
+  net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
 
   params = {'net__C': np.logspace(-4, 4, 10)}
   params = {}
@@ -236,26 +258,28 @@ scores_sample = []
 scores_dist = []
 scores_choice = []
 
+tasks = ['Dual']
+
 for task in tasks:
     options['task'] = task
 
     scores_sample_task = []
     scores_dist_task = []
     scores_choice_task = []
-
+    days = ['first', 'last']
     for day in days:
         options['day'] = day
 
         options['class_weight'] = 1
-        options['features'] = 'sample'
-        options['epochs'] = ['ED']
-        scores = get_classification(model, RETURN='scores', **options)
-        scores_sample_task.append(scores)
-
-        # options['features'] = 'distractor'
-        # options['epochs'] = ['MD']
+        # options['features'] = 'sample'
+        # options['epochs'] = ['ED']
         # scores = get_classification(model, RETURN='scores', **options)
-        # scores_dist_task.append(scores)
+        # scores_sample_task.append(scores)
+
+        options['features'] = 'distractor'
+        options['epochs'] = ['MD']
+        scores = get_classification(model, RETURN='', **options)
+        scores_dist_task.append(scores)
 
         # options['class_weight'] = 1
         # options['features'] = 'choice'
@@ -263,239 +287,68 @@ for task in tasks:
         # scores = get_classification(model, RETURN='scores', **options)
         # scores_choice_task.append(scores)
 
-    scores_sample.append(scores_sample_task)
-    # scores_dist.append(scores_dist_task)
+    # scores_sample.append(scores_sample_task)
+    scores_dist.append(scores_dist_task)
     # scores_choice.append(scores_choice_task)
 
-scores_save = np.array(scores_sample)
+# scores_save = np.array(scores_sample)
 # scores_save = np.stack((scores_sample, scores_dist))
 # scores_save = np.stack((scores_sample, scores_dist, scores_choice))
-print(scores_save.shape)
-pkl_save(scores_save, '%s_scores_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+# print(scores_save.shape)
+# pkl_save(scores_save, '%s_scores_tasks_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+
     #+end_src
 
 #+RESULTS:
 #+begin_example
-Loading files from /home/leon/dual_task/dual_data/data/AP02
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
-X_S1 (12, 702, 115) X_S2 (12, 702, 115)
-X_S3 (12, 702, 115) X_S4 (12, 702, 115)
-X (48, 702, 115) y (48,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days 0 3 0
+X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+X (192, 693, 84) y (192,)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 22s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 18s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 22s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 20s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 22s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 7 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 20s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 8 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 20s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 9 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 20s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DPA TRIALS  DAYS 10 LASER 0
-X_S1 (8, 702, 115) X_S2 (8, 702, 115)
-X_S3 (8, 702, 115) X_S4 (8, 702, 115)
-X (32, 702, 115) y (32,)
-Elapsed (with compilation) = 0h 0m 21s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
-X_S1 (24, 702, 115) X_S2 (24, 702, 115)
-X_S3 (24, 702, 115) X_S4 (24, 702, 115)
-X (96, 702, 115) y (96,)
-Elapsed (with compilation) = 0h 0m 35s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 28s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 29s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 31s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 7 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 8 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 9 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS 10 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
-X_S1 (24, 702, 115) X_S2 (24, 702, 115)
-X_S3 (24, 702, 115) X_S4 (24, 702, 115)
-X (96, 702, 115) y (96,)
-Elapsed (with compilation) = 0h 0m 35s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 31s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 30s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 24s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 7 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 8 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 24s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 9 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 29s
-Loading files from /home/leon/dual_task/dual_data/data/AP02
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 10 LASER 0
-X_S1 (16, 702, 115) X_S2 (16, 702, 115)
-X_S3 (16, 702, 115) X_S4 (16, 702, 115)
-X (64, 702, 115) y (64,)
-Elapsed (with compilation) = 0h 0m 27s
-(3, 10, 3, 115)
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days 0 3 0
+X_S1 (96, 693, 84) X_S2 (96, 693, 84)
+X (192, 693, 84) y (192,)
 #+end_example
 
-    #+begin_src ipython
-scores_sample = np.array(scores_sample)
-print(scores_sample.shape)
+                            #+begin_src ipython
+scores_dist = np.array(scores_dist)
+print(scores_dist.shape)
     #+end_src
 
 #+RESULTS:
-: (3, 10, 3, 115)
+: (1, 2)
+
+    #+begin_src ipython
+color = ['r', 'b', 'g']
+for i in range(3):
+    # plt.plot(np.linspace(0, 14, 84), -scores_dist[i, -1, 1], color=color[i]);
+    plt.plot(np.linspace(0, 14, 84), -scores_dist[i, 0].mean(-2), color=color[i]);
+    plt.plot(np.linspace(0, 14, 84), -scores_dist[i, 1].mean(-2), color=color[i]);
+add_vlines()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+IndexError                                Traceback (most recent call last)
+Cell In[16], line 4
+      1 color = ['r', 'b', 'g']
+      2 for i in range(3):
+      3     # plt.plot(np.linspace(0, 14, 84), -scores_dist[i, -1, 1], color=color[i]);
+----> 4     plt.plot(np.linspace(0, 14, 84), -scores_dist[i, 0].mean(-2), color=color[i]);
+      5     plt.plot(np.linspace(0, 14, 84), -scores_dist[i, 1].mean(-2), color=color[i]);
+      6 add_vlines()
+
+IndexError: too many indices for array: array is 1-dimensional, but 2 were indexed
+#+end_example
+:END:
 
 * Scores
 
@@ -510,8 +363,8 @@ print(scores_sample.shape)
 #+end_src
 
 #+RESULTS:
-: AP02_scores_tasks_0.95_l1_ratio.pkl
-: scores (3, 10, 3, 115)
+: JawsM15_scores_tasks_0.95_l1_ratio.pkl
+: scores (3, 6, 3, 84)
 
 #+begin_src ipython
   scores_sample = scores[0]
@@ -520,7 +373,6 @@ print(scores_sample.shape)
     #+end_src
 
 #+RESULTS:
-: da63f3d2-747f-43ef-9a4f-38ccf1cccf1e
 
   #+begin_src ipython
       options['epochs'] = ['LD']
@@ -552,7 +404,39 @@ print(scores_sample.shape)
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/c235122dfdf2db929a5b6f8cb619100b2f1d4f91.png]]
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+AxisError                                 Traceback (most recent call last)
+Cell In[14], line 9
+      7 for i in range(options['n_days']):
+      8     sample_epoch = avg_epochs(scores_sample[task][i], **options)
+----> 9     sample_avg.append(sample_epoch.mean(0))
+     10     sample_ci.append(get_bootstrap_ci(sample_epoch))
+     12 sample_avg = np.array(sample_avg)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:106, in _mean(a, axis, dtype, out, keepdims, where)
+    102 arr = asanyarray(a)
+    104 is_float16_result = False
+--> 106 rcount = _count_reduce_items(arr, axis, keepdims=keepdims, where=where)
+    107 if rcount == 0 if where is True else umr_any(rcount == 0, axis=None):
+    108     warnings.warn("Mean of empty slice.", RuntimeWarning, stacklevel=2)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/_methods.py:77, in _count_reduce_items(arr, axis, keepdims, where)
+     75     items = 1
+     76     for ax in axis:
+---> 77         items *= arr.shape[mu.normalize_axis_index(ax, arr.ndim)]
+     78     items = nt.intp(items)
+     79 else:
+     80     # TODO: Optimize case when `where` is broadcast along a non-reduction
+     81     # axis and full sum is more excessive than needed.
+     82
+     83     # guarded to protect circular imports
+
+AxisError: axis 0 is out of bounds for array of dimension 0
+#+end_example
+:END:
 
 #+begin_src ipython
   options['epochs'] = ['LD']
@@ -582,7 +466,19 @@ print(scores_sample.shape)
 #+end_src
 
 #+RESULTS:
-: 0f73b541-a712-4919-a873-feb9457c9d18
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[15], line 6
+:       4 dist_ci = []
+:       5 for i in range(options['n_days']):
+: ----> 6     dist_epoch = avg_epochs(scores_dist[task][i], **options)
+:       7     dist_avg.append(np.nanmean(dist_epoch, axis=0))
+:       8     dist_ci.append(get_bootstrap_ci(dist_epoch))
+:
+: NameError: name 'scores_dist' is not defined
+:END:
 
 #+begin_src ipython
   options['epochs'] = ['LD']
@@ -611,7 +507,52 @@ print(scores_sample.shape)
 #+end_src
 
 #+RESULTS:
-: 65f3cddb-577d-4349-940b-0957197a5931
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[16], line 8
+      6     choice_epoch = avg_epochs(scores_choice[task][i], **options)
+      7     choice_avg.append(np.nanmean(choice_epoch, axis=0))
+----> 8     choice_ci.append(get_bootstrap_ci(choice_epoch))
+     10 choice_avg = np.array(choice_avg)
+     11 choice_ci = np.array(choice_ci).T
+
+Cell In[6], line 4, in get_bootstrap_ci(data, statistic, confidence_level, n_resamples, random_state)
+      3 def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+----> 4     result = bootstrap((data,), statistic)
+      5     ci_lower, ci_upper = result.confidence_interval
+      6     return np.array([ci_lower, ci_upper])
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:608, in bootstrap(data, statistic, n_resamples, batch, vectorized, paired, axis, confidence_level, alternative, method, bootstrap_result, random_state)
+    283 r"""
+    284 Compute a two-sided bootstrap confidence interval of a statistic.
+    285
+   (...)
+    605
+    606 """
+    607 # Input validation
+--> 608 args = _bootstrap_iv(data, statistic, vectorized, paired, axis,
+    609                      confidence_level, alternative, n_resamples, batch,
+    610                      method, bootstrap_result, random_state)
+    611 (data, statistic, vectorized, paired, axis, confidence_level,
+    612  alternative, n_resamples, batch, method, bootstrap_result,
+    613  random_state) = args
+    615 theta_hat_b = ([] if bootstrap_result is None
+    616                else [bootstrap_result.bootstrap_distribution])
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/scipy/stats/_resampling.py:190, in _bootstrap_iv(data, statistic, vectorized, paired, axis, confidence_level, alternative, n_resamples, batch, method, bootstrap_result, random_state)
+    188 sample = np.atleast_1d(sample)
+    189 if sample.shape[axis_int] <= 1:
+--> 190     raise ValueError("each sample in `data` must contain two or more "
+    191                      "observations along `axis`.")
+    192 sample = np.moveaxis(sample, axis_int, -1)
+    193 data_iv.append(sample)
+
+ValueError: each sample in `data` must contain two or more observations along `axis`.
+#+end_example
+:END:
 
 * Scores mice
 
