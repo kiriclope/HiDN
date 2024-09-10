@@ -293,9 +293,10 @@ def preprocess_df(X, y, **kwargs):
 
 def avg_epochs(X, axis=-1, **kwargs):
     X_avg = np.nanmean(X, axis=axis)
-    print(X_avg.shape)
+    # print(X_avg.shape)
+
     X_epochs = np.empty(tuple([len(kwargs["epochs"])]) + X_avg.shape)
-    print(X_epochs.shape)
+    # print(X_epochs.shape)
     for i_epoch, epoch in enumerate(kwargs["epochs"]):
         if epoch == "BL":
             X_BL = np.nanmean(X[..., kwargs["bins_BL"]], axis=axis)

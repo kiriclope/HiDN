@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session mne :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -38,27 +38,15 @@
   import matplotlib.pyplot as plt
   from time import perf_counter
 
-  import torch
-  import torch.nn as nn
-  import torch.optim as optim
-  from skorch import NeuralNetClassifier
-
   from sklearn.base import clone
   from sklearn.metrics import make_scorer, roc_auc_score
-  from sklearn.ensemble import BaggingClassifier
   from sklearn.preprocessing import StandardScaler, RobustScaler
-  from sklearn.pipeline import Pipeline
-  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
-  from sklearn.decomposition import PCA
-
-  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
 
   from src.common.plot_utils import add_vlines, add_vdashed
   from src.common.options import set_options
   from src.stats.bootstrap import my_boots_ci
-  from src.decode.bump import decode_bump, circcvl
   from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-  from src.decode.classifiers import safeSelector
   from src.preprocess.helpers import avg_epochs
 #+end_src
 
@@ -90,7 +78,7 @@
   # ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
 
   kwargs = {
-      'mouse': 'JawsM15', 'laser': 0,
+      'mouse': 'ACCM04', 'laser': 0,
       'trials': '', 'reload': 0, 'data_type': 'dF',
       'prescreen': None, 'pval': 0.05,
       'preprocess': False, 'scaler_BL': 'robust',
@@ -116,19 +104,6 @@
 
 #+RESULTS:
 
-* Dual Data
-** Parameters
-
-#+begin_src ipython
-import numpy as np
-from sklearn.model_selection import train_test_split
-from time import perf_counter
-from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-from src.preprocess.helpers import avg_epochs
-#+end_src
-
-#+RESULTS:
-
 #+begin_src ipython
 # Function to map values
 def map_values(row):
@@ -137,7 +112,6 @@ def map_values(row):
     return row['sample_odor'] * 2 + row['dist_odor']
 
 # Apply the function to each row
-
 def convert_seconds(seconds):
     h = seconds // 3600
     m = (seconds % 3600) // 60
@@ -155,46 +129,7 @@ def y_to_arr(y, **options):
     elif options['features'] == 'choice':
         y = y.choice.to_numpy()
 
-    # y[y==-1] = 0
-
     return y
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-DEVICE = 'cuda:0'
-mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-N_NEURONS = [668, 693, 444, 361, 113]
-
-tasks = ['DPA', 'DualGo', 'DualNoGo']
-params = { 'net__alpha': np.logspace(-4, 4, 10),
-            # 'net__l1_ratio': np.linspace(0, 1, 10),
-            # 'net__module__dropout_rate': np.linspace(0, 1, 10),
-        }
-
-kwargs = {
-    'mouse': 'JawsM15',
-    'trials': '', 'reload': 0, 'data_type': 'df',
-    'preprocess': True, 'scaler_BL': 'robust',
-    'avg_noise':True, 'unit_var_BL': True,
-    'random_state': None, 'T_WINDOW': 0.0,
-    'l1_ratio': 0.95,
-    'n_comp': None, 'scaler': None,
-    'bootstrap': 0, 'n_boots': 32,
-    'n_splits': 3, 'n_repeats': 8,
-    'class_weight': 0,
-    'multilabel': 0,
-}
-
-options = set_options(**kwargs)
-# days = np.arange(1,  options['n_days']+1)
-# days = np.arange(1,  2)
-
-safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
-
-options['hp_scoring'] = safe_roc_auc
-options['n_jobs'] = 30
 #+end_src
 
 #+RESULTS:
@@ -233,6 +168,7 @@ options['scoring'] = overlaps_scorer
 
 #+RESULTS:
 
+* Dual Data
 ** Sample Overlap
 
 #+begin_src ipython
@@ -243,10 +179,10 @@ options['scoring'] = overlaps_scorer
 #+end_src
 
 #+RESULTS:
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-: PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR True
+: Loading files from /home/leon/dual_task/dual_data/data/ACCM04
 
 *** DPA
+
 #+begin_src ipython
     options['task'] = 'DPA'
 
@@ -258,9 +194,9 @@ options['scoring'] = overlaps_scorer
 
 #+RESULTS:
 : DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
-: multiple days 0 3 0
-: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-: X (96, 693, 84) y (96,)
+: multiple days 0 2 2
+: X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+: X (64, 113, 84) y (64,)
 
 #+begin_src ipython
 options['epochs'] = ['ED']
@@ -270,9 +206,9 @@ print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
 #+end_src
 
 #+RESULTS:
-: (96, 693)
-: (1, 96, 693)
-: X_avg (96, 693) y_avg (96,)
+: (64, 113)
+: (1, 64, 113)
+: X_avg (64, 113) y_avg (64,)
 
 #+begin_src ipython
 model.fit(X_avg, y_avg)
@@ -287,8 +223,7 @@ print('scores', scores_DPA.shape)
 
 #+RESULTS:
 : X_test==X True
-: X (96, 693, 84) y (96,) y2 (96,)
-: scores (24, 84, 84)
+: scores (96, 84, 84)
 
 *** DualGo
 
@@ -303,9 +238,9 @@ print('scores', scores_DPA.shape)
 
 #+RESULTS:
 : DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-: multiple days 0 3 0
-: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-: X (96, 693, 84) y (96,)
+: multiple days 0 2 2
+: X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+: X (64, 113, 84) y (64,)
 
 #+begin_src ipython
 options['epochs'] = ['ED']
@@ -315,9 +250,9 @@ print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
 #+end_src
 
 #+RESULTS:
-: (96, 693)
-: (1, 96, 693)
-: X_avg (96, 693) y_avg (96,)
+: (64, 113)
+: (1, 64, 113)
+: X_avg (64, 113) y_avg (64,)
 
 #+begin_src ipython
 model.fit(X_avg, y_avg)
@@ -332,8 +267,7 @@ print('scores', scores_DualGo.shape)
 
 #+RESULTS:
 : X_test==X True
-: X (96, 693, 84) y (96,) y2 (96,)
-: scores (24, 84, 84)
+: scores (96, 84, 84)
 
 *** DualNoGo
 
@@ -348,9 +282,9 @@ print('scores', scores_DualGo.shape)
 
 #+RESULTS:
 : DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-: multiple days 0 3 0
-: X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-: X (96, 693, 84) y (96,)
+: multiple days 0 2 2
+: X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+: X (64, 113, 84) y (64,)
 
 #+begin_src ipython
 options['epochs'] = ['ED']
@@ -360,9 +294,9 @@ print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
 #+end_src
 
 #+RESULTS:
-: (96, 693)
-: (1, 96, 693)
-: X_avg (96, 693) y_avg (96,)
+: (64, 113)
+: (1, 64, 113)
+: X_avg (64, 113) y_avg (64,)
 
 #+begin_src ipython
 model.fit(X_avg, y_avg)
@@ -377,8 +311,7 @@ print('scores', scores_DualNoGo.shape)
 
 #+RESULTS:
 : X_test==X True
-: X (96, 693, 84) y (96,) y2 (96,)
-: scores (24, 84, 84)
+: scores (96, 84, 84)
 
 *** Summary
 
@@ -388,9 +321,10 @@ print(scores.shape)
 #+end_src
 
 #+RESULTS:
-: (24, 3, 84, 84)
+: (96, 3, 84, 84)
 
 ** Distractor Overlap
+*** Data
 
 #+begin_src ipython
 def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
@@ -412,14 +346,16 @@ options['scoring'] = overlaps_scorer
 #+begin_src ipython
     X_days, y_days = get_X_y_days(**options)
     options['task'] = 'Dual'
-    options['day'] = 'last'
+    options['day'] = 'first'
 #+end_src
 
 #+RESULTS:
+: Loading files from /home/leon/dual_task/dual_data/data/ACCM04
 
 *** Dual
 
 #+begin_src ipython
+    options['task'] = 'Dual'
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     y = y_to_arr(y, **options)
     print('X', X.shape, 'y', y.shape)
@@ -427,10 +363,11 @@ options['scoring'] = overlaps_scorer
 #+end_src
 
 #+RESULTS:
+: DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
 : multiple days 0 2 2
-: X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-: X (128, 693, 84) y (128,)
-: 32
+: X_S1 (128, 113, 84) X_S2 (128, 113, 84)
+: X (256, 113, 84) y (256,)
+: 64
 
 #+begin_src ipython
 options['epochs'] = ['MD']
@@ -444,9 +381,9 @@ print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
 #+end_src
 
 #+RESULTS:
-: (128, 693)
-: (1, 128, 693)
-: X_avg (128, 693) y_avg (128,)
+: (256, 113)
+: (1, 256, 113)
+: X_avg (256, 113) y_avg (256,)
 
 #+begin_src ipython
 model.fit(X_avg, y_avg)
@@ -455,16 +392,29 @@ model.fit(X_avg, y_avg)
 #+RESULTS:
 
 #+begin_src ipython
-scores_dual = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1)
+scores_dual = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1, cv=LeaveOneOut())
 print('scores', scores_dual.shape)
 #+end_src
 
 #+RESULTS:
 : X_test==X True
-: X (128, 693, 84) y (128,) y2 (128,)
-: scores (24, 2, 84, 84)
+: scores (256, 84, 84)
+
+#+begin_src ipython
+if (scores_dual.shape[0] == 256) or (scores_dual.shape[0]==128):
+        idx_Go = (y==0) | (y==2)
+        scores_Go = scores_dual[idx_Go]
+        scores_NoGo = scores_dual[~idx_Go]
+
+        scores_dual = np.stack((scores_Go, scores_NoGo), 1)
+        print(scores_dual.shape)
+#+end_src
+
+#+RESULTS:
+: (128, 2, 84, 84)
 
 *** DPA
+
 #+begin_src ipython
     options['task'] = 'DPA'
     X_DPA, y_DPA = get_X_y_S1_S2(X_days, y_days, **options)
@@ -473,36 +423,59 @@ print('scores', scores_dual.shape)
 #+end_src
 
 #+RESULTS:
+: DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
 : multiple days 0 2 2
-: X_S1 (32, 693, 84) X_S2 (32, 693, 84)
-: X_DPA (64, 693, 84) y_DPA (64,)
+: X_S1 (64, 113, 84) X_S2 (64, 113, 84)
+: X_DPA (128, 113, 84) y_DPA (128,)
 
 #+begin_src ipython
-scores_DPA = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1, IF_COMPO=1, X_test=X_DPA, y_test=y_DPA)
+scores_DPA = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1, IF_COMPO=1, X_test=X_DPA, y_test=y_DPA, cv=LeaveOneOut())
 print(scores_DPA.shape)
 #+end_src
 
 #+RESULTS:
-: X (128, 693, 84) y (128,) y2 (64,)
-: scores (24, 1, 84, 84)
-: (24, 84, 84)
+: (128, 84, 84)
+
+*** Summary
 
 #+begin_src ipython
-# print(np.array(scores_DPA)[:, np.newaxis].shape)
-# A = np.array(scores_DPA)[:, np.newaxis]
+print(scores_dual.shape)
+print(scores_DPA.shape)
 #+end_src
 
 #+RESULTS:
+: (128, 2, 84, 84)
+: (128, 84, 84)
 
-
-*** summary
 #+begin_src ipython
 scores = np.concatenate((scores_DPA[:, np.newaxis], scores_dual), axis=1)
+# scores = np.stack((scores_DPA, scores_dual), axis=1)
 print(scores.shape)
 #+end_src
 
 #+RESULTS:
-: (24, 3, 84, 84)
+: (128, 3, 84, 84)
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+pkl_save(scores, '%s_scores_%s' % (options['mouse'], options['day']))
+#+end_src
+
+#+RESULTS:
+
 
 * Plots
 
@@ -540,6 +513,9 @@ print(scores.shape)
 #+RESULTS:
 
 #+begin_src ipython
+  scores = distractor_overlaps[0]
+
+  print(scores.shape)
   fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, 1.5*height])
   plot_mat(np.abs(scores.mean(0)[0]), ax[0])
   plot_mat(np.abs(scores.mean(0)[1]), ax[1])
@@ -547,7 +523,10 @@ print(scores.shape)
   #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_34.png]]
+:RESULTS:
+: (128, 3, 84, 84)
+[[./figures/landscape/figure_35.png]]
+:END:
 
 #+begin_src ipython
 plt.plot(np.linspace(0, 14, 84), np.diag(scores.mean(0)[0]), 'r')
@@ -560,7 +539,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_35.png]]
+[[./figures/landscape/figure_36.png]]
 
 #+begin_src ipython
 scores_MD = np.swapaxes(scores.copy(), -1, -2)
@@ -569,9 +548,7 @@ print(scores_MD.shape)
 #+end_src
 
 #+RESULTS:
-: (24, 3, 84)
-: (1, 24, 3, 84)
-: (24, 3, 84)
+: (128, 3, 84)
 
 #+begin_src ipython
 from scipy.stats import sem, t
@@ -603,12 +580,12 @@ def my_boots_ci(X, statfunc, n_samples=10000, method="BCa", alpha=0.05, axis=0):
     # print(boots_samples)
 
     ci = np.array([boots_samples.confidence_interval.low, boots_samples.confidence_interval.high])
-    
+
     mean_boots = np.mean(boots_samples.bootstrap_distribution, axis=axis)
-    
+
     ci[0] = mean_boots - ci[0]
     ci[1] = ci[1] - mean_boots
-    
+
     return ci
 #+end_src
 
@@ -636,7 +613,7 @@ def my_boots_ci(X, statfunc, n_samples=10000, method="BCa", alpha=0.05, axis=0):
     print(mean_boots.shape)
     ci[0] = mean_boots - ci[0]
     ci[1] = ci[1] - mean_boots
-    
+
     return ci
 #+end_src
 
@@ -647,6 +624,7 @@ ci = my_boots_ci(scores_MD, np.mean, n_samples=100000)
 #+end_src
 
 #+RESULTS:
+: (3, 84)
 : (2, 3, 84)
 : (3, 84)
 
@@ -662,11 +640,9 @@ plt.ylabel('Dist. Overlap')
 plt.xlim([0, 12])
 add_vlines()
 plt.show()
-plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_41.png]]
 
 #+begin_src ipython
 

@@ -13,6 +13,7 @@ import numpy as np
 from mne.fixes import BaseEstimator, _get_check_scoring, is_classifier
 from mne.parallel import parallel_func
 from mne.utils import verbose, warn
+from sklearn.model_selection import LeaveOneOut
 
 
 class LinearModel(BaseEstimator):
@@ -585,11 +586,8 @@ def my_cross_val_compo_score(
     check_scoring = _get_check_scoring()
 
     X, y, groups = indexable(X, y, groups)
-
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
-
     cv_train = list(cv.split(X, y, groups))
-    cv_test = list(cv.split(X2, y2, groups))
 
     try:
         y[y==2] = 0
@@ -597,7 +595,11 @@ def my_cross_val_compo_score(
     except:
         pass
 
-    print('X', X.shape, 'y', y.shape, 'y2', y2.shape)
+    cv_test = list(cv.split(X2, y2, groups))
+
+    # print('cv_train', len(cv_train))
+    # print('cv_test', len(cv_test))
+    # print('X', X.shape, 'y', y.shape, 'y2', y2.shape)
 
     try:
         scorer = check_scoring(estimator, scoring=scoring)
@@ -607,6 +609,9 @@ def my_cross_val_compo_score(
     parallel, p_func, n_jobs = parallel_func(
         _fit_and_compo_score, n_jobs, pre_dispatch=pre_dispatch
     )
+
+    # min_length = min(len(cv_train), len(cv_test))
+    # cv_train = cv_train[:min_length]
 
     scores = parallel(
         p_func(
@@ -622,8 +627,6 @@ def my_cross_val_compo_score(
        )
         for (train, _), (_, test) in zip(cv_train, cv_test)
     )
-
-    print('scores', np.array(scores).shape())
 
     return np.array(scores)[:, 0, ...]  # flatten over joblib output.
 
@@ -648,9 +651,6 @@ def _fit_and_compo_score(
     # Adjust length of sample weights
     fit_params = fit_params if fit_params is not None else {}
     fit_params = _check_fit_params(X_train, fit_params, train)
-
-    # if parameters is not None:
-    #     estimator.set_params(**parameters)
 
     if y_train is None:
         estimator.fit(X_train, **fit_params)
@@ -693,15 +693,15 @@ def my_cross_val_multiscore(
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
     cv_iter = list(cv.split(X, y, groups))
 
-    y2 = y.copy()
-
     try:
         y[y==2] = 0
         y[y==3] = 1
     except:
         pass
 
-    print('X', X.shape, 'y', y.shape, 'y2', y2.shape)
+    y2 = y.copy()
+
+    # print('X', X.shape, 'y', y.shape, 'y2', y2.shape)
 
     try:
         scorer = check_scoring(estimator, scoring=scoring)
@@ -734,8 +734,13 @@ def my_cross_val_multiscore(
         for ii, (train, test) in enumerate(cv_iter)
     )
 
-    return np.array(scores)[:, 0, ...]  # flatten over joblib output.
+    # for ii, (train, test) in enumerate(cv_iter):
+    #     for i in range(10):
+    #         print(ii, i,'scores', np.array(scores[ii][0][i]).shape)
 
+    # print('scores', np.array(scores).shape)
+
+    return np.array(scores)[:, 0, ...]  # flatten over joblib output.
 
 # This verbose is necessary to properly set the verbosity level
 # during parallelization
@@ -778,22 +783,13 @@ def _my_fit_and_score(
     X_train, y_train = _safe_split(estimator, X, y, train)
     X_test, y_test = _safe_split(estimator, X2, y2, test, train)
 
-    # print('train', X_train.shape, 'test', X_test.shape)
+    # print('X_test', X_test.shape, 'y_test', y_test.shape)
 
     try:
-        # X_train = np.nanmean(X_train[...,
-        #                              np.array([33, 34, 35, 36, 37, 38])]
-        #                      , axis=-1)[..., np.newaxis]
-
         if y_train is None:
             estimator.fit(X_train, **fit_params)
         else:
             estimator.fit(X_train, y_train, **fit_params)
-
-        # if X_train.shape[-1] != X_test.shape[-1]:
-        #     print('copy estimators')
-        #     estimators = [copy.deepcopy(estimator.estimators_[0]) for _ in range(X_test.shape[-1])]
-        #     estimator.estimators_ = estimators
 
     except Exception as e:
         # Note fit time as time until error
@@ -820,8 +816,8 @@ def _my_fit_and_score(
     else:
         fit_duration = dt.datetime.now() - start_time
         test_score = _score(estimator, X_test, y_test, scorer)
-        score_duration = dt.datetime.now() - start_time - fit_duration
 
+        score_duration = dt.datetime.now() - start_time - fit_duration
         if return_train_score:
             train_score = _score(estimator, X_train, y_train, scorer)
 
@@ -853,11 +849,18 @@ def _score(estimator, X_test, y_test, scorer):
 
         # print(y[idx_Go].shape, y[~idx_Go].shape)
 
-        # score = scorer(estimator, X_test[idx_Go], y[idx_Go])
+        if np.any(idx_Go):
+            score_Go = scorer(estimator, X_test[idx_Go], y[idx_Go])
+        if np.any(~idx_Go):
+            score_NoGo = scorer(estimator, X_test[~idx_Go], y[~idx_Go])
+        if ~np.any(idx_Go):
+            score_Go = np.full_like(score_NoGo, np.nan)
+        if ~np.any(~idx_Go):
+            score_NoGo = np.full_like(score_Go, np.nan)
 
-        score = [scorer(estimator, X_test[idx_Go], y[idx_Go]),
-                 scorer(estimator, X_test[~idx_Go], y[~idx_Go])]
+        # print('Go', score_Go.shape, 'NoGo', score_NoGo.shape)
 
+        score = [score_Go, score_NoGo]
     else:
         score = scorer(estimator, X_test, y_test)
 

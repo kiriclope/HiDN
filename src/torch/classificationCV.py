@@ -1,4 +1,5 @@
 import copy
+import numpy as np
 from time import perf_counter
 from sklearn.base import clone
 from sklearn.ensemble import BaggingClassifier
@@ -16,6 +17,26 @@ def convert_seconds(seconds):
     m = (seconds % 3600) // 60
     s = seconds % 60
     return h, m, s
+
+
+def get_bagged_coefs(clf, n_estimators):
+    coefs_list = []
+    bias_list = []
+    for i in range(n_estimators):
+        model = clf.estimators_[i]
+        try:
+            coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+            bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+        except:
+            coefs = model.named_steps['net'].coef_.T
+            bias = model.named_steps['net'].intercept_.T
+
+        # coefs, bias = rescale_coefs(model, coefs, bias)
+
+        coefs_list.append(coefs)
+        bias_list.append(bias)
+
+    return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
 
 
 class ClassificationCV:
@@ -181,7 +202,7 @@ class ClassificationCV:
         if X_test is None:
             X_test = X
             y_test = y
-            print('X_test==X', True)
+            print('X_test==X_train')
 
         start = perf_counter()
         if self.verbose:
