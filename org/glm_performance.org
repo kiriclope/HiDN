@@ -1,0 +1,2380 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session overlaps :kernel dual_data :exports results :output-dir ./figures/glm :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import pandas as pd
+
+  from time import perf_counter
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.main import get_classification
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+
+#+begin_src ipython
+def pad_with_nans(array, target_shape):
+    result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
+    print(result.shape)
+    slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
+    result[slices] = array[slices]
+    return result
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
+
+
+  def pkl_load(name, path="."):
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  params = { 'net__alpha': np.logspace(-4, 4, 10),
+             # 'net__l1_ratio': np.linspace(0, 1, 10),
+             # 'net__module__dropout_rate': np.linspace(0, 1, 10),
+            }
+
+  # ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
+
+  kwargs = {
+      'mouse': 'ACCM04', 'laser': 0,
+      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 3, 'n_repeats': 32,
+      'class_weight': 0,
+      'multilabel':0,
+  }
+
+  kwargs['days'] = ['first', 'middle', 'last']
+  options = set_options(**kwargs)
+  # days = np.arange(1, options['n_days']+1)
+  days = ['first', 'middle', 'last']
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  options['hp_scoring'] = safe_roc_auc
+  options['n_jobs'] = 30
+#+end_src
+
+#+RESULTS:
+
+* GLM
+** Utils
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[24], line 1
+----> 1 import rpy2.robjects as robjects
+      2 from rpy2.robjects.packages import importr
+      4 # Set the .libPaths in R
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/__init__.py:18
+     15 import rpy2.rinterface as rinterface
+     16 import rpy2.rlike.container as rlc
+---> 18 from rpy2.robjects.robject import RObjectMixin, RObject
+     19 import rpy2.robjects.functions
+     20 from rpy2.robjects.environments import (Environment,
+     21                                         local_context)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/robject.py:11
+      7 import rpy2.rinterface_lib.callbacks
+      9 from rpy2.robjects import conversion
+---> 11 rpy2.rinterface.initr_simple()
+     14 def _add_warn_reticulate_hook():
+     15     msg = """
+     16     WARNING: The R package "reticulate" only fixed recently
+     17     an issue that caused a segfault when used with rpy2:
+   (...)
+     20     the fix.
+     21     """
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface.py:998, in initr_simple()
+    996 """Initialize R's embedded C library."""
+    997 with openrlib.rlock:
+--> 998     status = embedded._initr()
+    999     atexit.register(endr, 0)
+   1000     _rinterface._register_external_symbols()
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface_lib/embedded.py:272, in _initr(interactive, _want_setcallbacks, _c_stack_limit)
+    270     return None
+    271 elif openrlib.R_HOME is None:
+--> 272     raise ValueError('openrlib.R_HOME cannot be None.')
+    273 elif openrlib.rlib.R_NilValue != ffi.NULL:
+    274     msg = ('R was initialized outside of rpy2 (R_NilValue != NULL). '
+    275            'Trying to use it nevertheless.')
+
+ValueError: openrlib.R_HOME cannot be None.
+#+end_example
+:END:
+
+#+begin_src ipython
+import os
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# os.environ['R_HOME'] = '/home/leon/mambaforge/lib/R'
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[12], line 2
+      1 import os
+----> 2 import rpy2.robjects as robjects
+      3 from rpy2.robjects.packages import importr
+      5 # os.environ['R_HOME'] = '/home/leon/mambaforge/lib/R'
+      6
+      7 # Set the .libPaths in R
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/__init__.py:18
+     15 import rpy2.rinterface as rinterface
+     16 import rpy2.rlike.container as rlc
+---> 18 from rpy2.robjects.robject import RObjectMixin, RObject
+     19 import rpy2.robjects.functions
+     20 from rpy2.robjects.environments import (Environment,
+     21                                         local_context)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/robject.py:11
+      7 import rpy2.rinterface_lib.callbacks
+      9 from rpy2.robjects import conversion
+---> 11 rpy2.rinterface.initr_simple()
+     14 def _add_warn_reticulate_hook():
+     15     msg = """
+     16     WARNING: The R package "reticulate" only fixed recently
+     17     an issue that caused a segfault when used with rpy2:
+   (...)
+     20     the fix.
+     21     """
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface.py:998, in initr_simple()
+    996 """Initialize R's embedded C library."""
+    997 with openrlib.rlock:
+--> 998     status = embedded._initr()
+    999     atexit.register(endr, 0)
+   1000     _rinterface._register_external_symbols()
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface_lib/embedded.py:272, in _initr(interactive, _want_setcallbacks, _c_stack_limit)
+    270     return None
+    271 elif openrlib.R_HOME is None:
+--> 272     raise ValueError('openrlib.R_HOME cannot be None.')
+    273 elif openrlib.rlib.R_NilValue != ffi.NULL:
+    274     msg = ('R was initialized outside of rpy2 (R_NilValue != NULL). '
+    275            'Trying to use it nevertheless.')
+
+ValueError: openrlib.R_HOME cannot be None.
+#+end_example
+:END:
+
+#+begin_src ipython
+def generate_colors(N, cmap_name='viridis'):
+    cmap = plt.get_cmap(cmap_name)
+    return cmap(np.linspace(0, 1, N))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_betas(label, feature, intercept, results, random_effects, title):
+
+    colors = generate_colors(random_effects.shape[0], 'plasma')
+    space = np.random.normal(0, .05, random_effects.shape[0])
+
+    if intercept:
+        keys = ['(Intercept)', feature]
+    else:
+        keys = [feature]
+
+    for i, key in enumerate(keys):
+        # print(key)
+        if key == '(Intercept)':
+            try:
+                res = results.Estimate['(Intercept)'] + random_effects['X.Intercept.']
+            except:
+                res = random_effects['X.Intercept.']
+        else:
+            try:
+                res = results.Estimate[key] + random_effects[key]
+            except:
+                res = results.Estimate[key]
+
+        mean_value = res.mean()
+        std_dev = res.std()
+
+        try:
+            if results['P-val'][key]<0.001:
+                plt.text(i,   0, '***', ha='center', va='bottom')
+            elif results['P-val'][key]<0.01:
+                plt.text(i,   0, '**', ha='center', va='bottom')
+            elif results['P-val'][key]<0.05:
+                plt.text(i,   0, '*', ha='center', va='bottom')
+        except:
+            pass
+
+        # Plot individual points
+        plt.scatter(i * np.ones(res.shape[0]) + space, res, color=colors)
+        # Plot mean and stddev as error bars
+        plt.plot(i, mean_value, '_k', ms=20)
+        plt.errorbar(i * np.ones(res.shape[0]),
+                     [mean_value]*len(res),
+                     yerr=[std_dev]*len(res), fmt='-', color='k', capsize=15)
+
+    plt.axhline(y=0, color='black', ls='--')
+    plt.xticks(np.arange(len(keys)), ['Off', 'On'])
+    plt.ylabel('$\\beta_{%s}$' % label)
+    plt.title(title)
+    plt.savefig('beta_response.svg')
+    plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def run_model(formula, family='binomial'):
+
+    print(formula)
+    model = Lmer(formula=formula, data=data, family=family)
+    results = model.fit()
+    print(results)
+    random_effects = model.ranef
+
+    return results, random_effects
+#+end_src
+
+#+RESULTS:
+
+** Loading df
+
+#+begin_src ipython
+name = 'df_sample_overlaps.pkl'
+df_mice = pkl_load(name, path="../data/mice/overlaps")
+#+end_src
+
+#+RESULTS:
+: loading from ../data/mice/overlaps/df_sample_overlaps.pkl.pkl
+
+#+begin_src ipython
+df_mice['performance'] = df_mice['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_mice['pair'] = df_mice['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+df_mice['overlaps_ED'] = df_mice['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+#+end_src
+#+RESULTS:
+
+#+begin_src ipython
+options['epochs'] = ['LD']
+df_mice['overlaps_ED_LD'] = df_mice['overlaps'].apply(lambda x: avg_epochs(np.array(x), **options))
+print(df_mice.head())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+   sample_odor  test_odor        response tasks  laser    day  dist_odor  \
+0          0.0        1.0     correct_rej   DPA    0.0  first        NaN
+1          0.0        0.0  incorrect_miss   DPA    0.0  first        NaN
+2          0.0        1.0    incorrect_fa   DPA    0.0  first        NaN
+3          0.0        0.0     correct_hit   DPA    0.0  first        NaN
+4          0.0        0.0     correct_hit   DPA    0.0  first        NaN
+
+   choice                                           overlaps    mouse  \
+0     0.0  [0.1550261378288269, -0.004751792177557945, 0....  JawsM15
+1     0.0  [0.27010607719421387, 0.27286604046821594, 0.1...  JawsM15
+2     1.0  [0.2741989195346832, 0.2800349295139313, 0.099...  JawsM15
+3     1.0  [0.04006993770599365, -0.022279568016529083, 0...  JawsM15
+4     1.0  [-0.11878115683794022, -0.10868628323078156, -...  JawsM15
+
+   performance  pair                                        overlaps_ED  \
+0            1     0  [-0.040831823729806475, -0.03242062063266834, ...
+1            0     1  [-0.036409814117683306, -0.04942819496823682, ...
+2            0     0  [0.14620230139957535, 0.14509694847381777, 0.2...
+3            1     1  [0.06454119996892081, 0.05002071956793467, 0.1...
+4            1     1  [0.20564468867248958, 0.11796747479173872, 0.0...
+
+   overlaps_ED_LD
+0       -0.259465
+1       -0.447625
+2        0.072540
+3        0.193258
+4        0.395160
+#+end_example
+
+#+begin_src ipython
+print(df_mice.mouse.unique())
+print(df_mice.laser.unique())
+print(df_mice.tasks.unique())
+print(df_mice.day.unique())
+
+print((df_mice.sample_odor==0).mean())
+print((df_mice.sample_odor==1).mean())
+
+print((df_mice.dist_odor==0).mean())
+print((df_mice.dist_odor==1).mean())
+
+print(np.isnan(df_mice.dist_odor).mean())
+#+end_src
+
+#+RESULTS:
+: ['JawsM15']
+: [0.]
+: ['DPA' 'DualGo' 'DualNoGo']
+: ['first' 'middle' 'last']
+: 0.5
+: 0.5
+: 0.3333333333333333
+: 0.3333333333333333
+: 0.3333333333333333
+
+** Performance
+*** Mice Performance across days
+
+#+begin_src ipython
+df_performance = df_mice[['performance', 'day', 'tasks']].groupby([ 'day', 'tasks']).mean()
+print(df_performance)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                 performance
+day    tasks
+first  DPA          0.671875
+       DualGo       0.546875
+       DualNoGo     0.687500
+last   DPA          0.890625
+       DualGo       0.796875
+       DualNoGo     0.812500
+middle DPA          0.921875
+       DualGo       0.734375
+       DualNoGo     0.875000
+#+end_example
+
+#+begin_src ipython
+import seaborn as sns
+sns.lineplot(data=df_mice, x='day', y='performance', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'])
+
+# Set plot labels and title
+plt.xlabel('Day')
+plt.ylabel('Performance')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/glm/figure_19.png]]
+
+*** performance ~ tasks
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ tasks + (1 + tasks | mouse)'
+
+  results = []
+  data = df.copy()
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[25], line 10
+:       7 results = []
+:       8 data = df.copy()
+: ---> 10 glm = Lmer(formula=formula, data=data, family='binomial')
+:      11 result = glm.fit()
+:      12 print(result)
+:
+: NameError: name 'Lmer' is not defined
+:END:
+
+#+begin_src ipython
+print(result.Estimate)
+#+end_src
+
+#+RESULTS:
+: (Intercept)      1.545
+: tasksDualGo     -0.329
+: tasksDualNoGo   -0.129
+: Name: Estimate, dtype: float64
+
+#+begin_src ipython
+print(result['P-val'])
+#+end_src
+
+#+RESULTS:
+: (Intercept)      0.000
+: tasksDualGo      0.050
+: tasksDualNoGo    0.307
+: Name: P-val, dtype: float64
+
+#+begin_src ipython
+random_effects = glm.ranef
+print(random_effects.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['X.Intercept.', 'tasksDualGo', 'tasksDualNoGo'], dtype='object')
+
+#+begin_src ipython
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .5
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+# keys = result.Estimate.keys()
+
+for i, key in enumerate(keys):
+     if key == '(Intercept)':
+          res = result.Estimate['(Intercept)']+ random_effects['X.Intercept.']
+     else:
+          res = result.Estimate['(Intercept)'] + result.Estimate[key] + random_effects[key]
+
+     mean_value = res.mean()
+     std_dev = res.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   0.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   0.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   0.51, '*', ha='center', va='bottom')
+     elif np.round(result['P-val'][key], 2) == 0.05:
+          plt.text(i,   0.51, '.', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(res.shape[0]) + space, res, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(res.shape[0]), [mean_value]*len(res), yerr=[std_dev]*len(res), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylabel('$\\beta_{Tasks}$')
+plt.xticks(rotation=45, ha='right', fontsize=10) # 'ha' stands for horizontal alignment
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_26.png]]
+
+*** performance ~ tasks * days
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ tasks * day + (1 + tasks | mouse)'
+
+  results = []
+  data = df.copy()
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1783.314 	 AIC: 3596.628
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.375  0.612
+mouse    tasksDualGo  0.092  0.303
+mouse  tasksDualNoGo  0.015  0.121
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo -0.314
+mouse  (Intercept)  tasksDualNoGo -0.968
+mouse  tasksDualGo  tasksDualNoGo  0.542
+
+Fixed effects:
+
+                         Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  \
+(Intercept)                 0.808   0.230    1.386  0.295  2.243      1.259
+tasksDualGo                -0.220  -0.620    0.180  0.204  0.803      0.538
+tasksDualNoGo              -0.047  -0.364    0.270  0.162  0.954      0.695
+daylast                     1.652   1.214    2.089  0.223  5.216      3.367
+daymiddle                   1.163   0.831    1.495  0.169  3.199      2.296
+tasksDualGo:daylast        -0.141  -0.729    0.446  0.300  0.868      0.482
+tasksDualNoGo:daylast      -0.346  -0.934    0.242  0.300  0.708      0.393
+tasksDualGo:daymiddle      -0.333  -0.779    0.112  0.227  0.716      0.459
+tasksDualNoGo:daymiddle    -0.096  -0.559    0.367  0.236  0.909      0.572
+
+                         OR_97.5_ci   Prob  Prob_2.5_ci  Prob_97.5_ci  Z-stat  \
+(Intercept)                   3.999  0.692        0.557         0.800   2.740
+tasksDualGo                   1.197  0.445        0.350         0.545  -1.078
+tasksDualNoGo                 1.310  0.488        0.410         0.567  -0.292
+daylast                       8.081  0.839        0.771         0.890   7.395
+daymiddle                     4.458  0.762        0.697         0.817   6.872
+tasksDualGo:daylast           1.563  0.465        0.325         0.610  -0.472
+tasksDualNoGo:daylast         1.274  0.414        0.282         0.560  -1.153
+tasksDualGo:daymiddle         1.118  0.417        0.315         0.528  -1.467
+tasksDualNoGo:daymiddle       1.443  0.476        0.364         0.591  -0.406
+
+                         P-val  Sig
+(Intercept)              0.006   **
+tasksDualGo              0.281
+tasksDualNoGo            0.770
+daylast                  0.000  ***
+daymiddle                0.000  ***
+tasksDualGo:daylast      0.637
+tasksDualNoGo:daylast    0.249
+tasksDualGo:daymiddle    0.142
+tasksDualNoGo:daymiddle  0.685
+#+end_example
+
+#+begin_src ipython
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .5
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+# keys = result.Estimate.keys()
+
+for i, key in enumerate(keys):
+     if key == '(Intercept)':
+          res = result.Estimate['(Intercept)']+ random_effects['X.Intercept.']
+     else:
+          res = result.Estimate['(Intercept)']+ result.Estimate[key] + random_effects[key]
+
+     mean_value = res.mean()
+     std_dev = res.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   0.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   0.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   0.51, '*', ha='center', va='bottom')
+     elif np.round(result['P-val'][key], 2) == 0.05:
+          plt.text(i,   0.51, '.', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(res.shape[0]) + space, res, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(res.shape[0]), [mean_value]*len(res), yerr=[std_dev]*len(res), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylabel('$\\beta_{Tasks}$')
+plt.xticks(rotation=45, ha='right', fontsize=10) # 'ha' stands for horizontal alignment
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_28.png]]
+
+#+begin_src ipython
+colors = ['blue', 'green', 'red', 'purple', 'orange']
+space = np.array([-0.1,-0.05, 0.0, 0.05, 0.1]) * .5
+
+keys = ['(Intercept)', 'tasksDualGo', 'tasksDualNoGo']
+# keys = result.Estimate.keys()
+
+for i, key in enumerate(keys):
+     if key == '(Intercept)':
+          res = result.Estimate['(Intercept)']+ random_effects['X.Intercept.']
+     else:
+          res = result.Estimate[key] + random_effects[key]
+
+     mean_value = res.mean()
+     std_dev = res.std()
+
+     if result['P-val'][key]<0.001:
+          plt.text(i,   0.51, '***', ha='center', va='bottom')
+     elif result['P-val'][key]<0.01:
+          plt.text(i,   0.51, '**', ha='center', va='bottom')
+     elif result['P-val'][key]<0.05:
+          plt.text(i,   0.51, '*', ha='center', va='bottom')
+     elif np.round(result['P-val'][key], 2) == 0.05:
+          plt.text(i,   0.51, '.', ha='center', va='bottom')
+
+     # Plot individual points
+     plt.scatter(i * np.ones(res.shape[0]) + space, res, color=colors)
+     # Plot mean and stddev as error bars
+     plt.plot(i, mean_value, '_k', ms=20)
+     plt.errorbar(i * np.ones(res.shape[0]), [mean_value]*len(res), yerr=[std_dev]*len(res), fmt='-', linestyle='None', color='k', capsize=15)
+
+plt.axhline(y=0, color='black', linestyle='--')
+plt.xticks(np.arange(len(keys)), keys)
+plt.ylabel('$\\beta_{Tasks}$')
+plt.xticks(rotation=45, ha='right', fontsize=10) # 'ha' stands for horizontal alignment
+plt.show()
+#+end_src
+
+#+begin_src ipython
+plot_betas(label, feature, intercept, results, random_effects, title)
+#+end_src
+
+** Overlaps
+*** Sample
+**** Plots
+
+#+begin_src ipython
+name = 'df_distractor_mice'
+df_mice = pkl_load(name, path="../data/overlaps")
+df_mice['performance'] = df_mice['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_mice['pair'] = df_mice['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+df_mice['day'] = df_mice['day'].apply(lambda x: 'first' if x < 3 else ('middle' if x < 5 else 'last'))
+print(df_mice.head())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+loading from ../data/overlaps/df_distractor_mice.pkl
+   index  sample_odor  test_odor      response tasks  laser    day  dist_odor  \
+0      6          0.0        0.0   correct_hit   DPA    0.0  first        NaN
+1      9          0.0        0.0   correct_hit   DPA    0.0  first        NaN
+2     10          0.0        1.0  incorrect_fa   DPA    0.0  first        NaN
+3     18          0.0        1.0  incorrect_fa   DPA    0.0  first        NaN
+4     26          0.0        1.0  incorrect_fa   DPA    0.0  first        NaN
+
+   choice                                      overlaps_diag  \
+0     1.0  [0.11676032841205597, -0.03953419625759125, -0...
+1     1.0  [0.12259367108345032, -0.018929380923509598, 0...
+2     1.0  [-0.18104955554008484, 0.09383393079042435, 0....
+3     1.0  [-0.12184631824493408, 0.1557987630367279, -0....
+4     1.0  [-0.07315205782651901, 0.04572875425219536, 0....
+
+                                         overlaps_MD   mouse  behavior  pair  \
+0  [0.03378348393986622, 0.010957124157963941, -0...  ChRM04         1     1
+1  [0.012054286897182465, 0.04256816146274408, 0....  ChRM04         1     1
+2  [-0.04626151639968157, 0.06041626073420048, -0...  ChRM04         0     0
+3  [-0.05099838972091675, -0.07124164483199517, -...  ChRM04         0     0
+4  [0.034752229073395334, -0.06487469980493188, -...  ChRM04         0     0
+
+   performance
+0            1
+1            1
+2            0
+3            0
+4            0
+#+end_example
+
+#+begin_src ipython
+duplicates = df_overlaps.index.duplicated()
+if duplicates.any():
+    print("Found duplicate indices. Resetting index...")
+
+    # Reset the index to remove duplicates
+    df_overlaps = df_overlaps.reset_index(drop=True)
+#+end_src
+
+#+RESULTS:
+: Found duplicate indices. Resetting index...
+
+#+begin_src ipython
+options['epochs'] = ['LD']
+df_mice['SOLD'] = df_mice['overlaps_ED'].apply(lambda x: avg_epochs(np.array(x), **options))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import seaborn as sns
+sns.lineplot(data=df_mice, x='day', y='SOLD', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'])
+
+plt.xlabel('Day')
+plt.ylabel('Late Sample Overlap')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+#+begin_src ipython
+df = df_mice[df_mice.tasks=='DualGo'].copy()
+
+# Group by 'day' and compute the mean overlaps for each day
+mean_overlaps_by_day = df.groupby('day')['overlaps_ED'].apply(lambda x: np.mean(np.stack(x), axis=0))
+
+# Prepare data for plotting
+mean_overlaps_df = pd.DataFrame(mean_overlaps_by_day.tolist(), index=mean_overlaps_by_day.index)
+
+# Plotting
+for idx, row in mean_overlaps_df.iterrows():
+    plt.plot(np.linspace(0, 14, 84), row, label=f"Day {idx}")
+
+plt.xlabel('Time (s)')
+plt.ylabel('Overlap')
+plt.legend(fontsize=10)
+add_vlines()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_35.png]]
+
+**** glm
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ overlaps_ED_LD + (1 + overlaps_ED_LD | mouse)'
+
+  results = []
+  data = df.copy()
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+,**NOTE**: Column for 'residuals' not created in model.data, but saved in model.resid only. This is because you have rows with NaNs in your data.
+
+,**NOTE** Column for 'fits' not created in model.data, but saved in model.fits only. This is because you have rows with NaNs in your data.
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD+(1+overlaps_ED_LD|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1902.013 	 AIC: 3814.026
+
+Random effects:
+
+                 Name    Var    Std
+mouse     (Intercept)  0.314  0.560
+mouse  overlaps_ED_LD  0.001  0.032
+
+               IV1             IV2  Corr
+mouse  (Intercept)  overlaps_ED_LD  -1.0
+
+Fixed effects:
+
+                Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  \
+(Intercept)        1.379   0.879    1.878  0.255  3.969      2.410
+overlaps_ED_LD     0.083  -0.062    0.228  0.074  1.086      0.939
+
+                OR_97.5_ci   Prob  Prob_2.5_ci  Prob_97.5_ci  Z-stat  P-val  \
+(Intercept)          6.539  0.799        0.707         0.867   5.413  0.000
+overlaps_ED_LD       1.256  0.521        0.484         0.557   1.116  0.264
+
+                Sig
+(Intercept)     ***
+overlaps_ED_LD
+#+end_example
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ overlaps_ED_LD * day * tasks + (1 + day + tasks | mouse)'
+
+  results = []
+  data = df.copy()
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Model failed to converge with max|grad| = 0.00718484 (tol = 0.002, component 1)
+
+,**NOTE**: Column for 'residuals' not created in model.data, but saved in model.resid only. This is because you have rows with NaNs in your data.
+
+,**NOTE** Column for 'fits' not created in model.data, but saved in model.fits only. This is because you have rows with NaNs in your data.
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*day*tasks+(1+day+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1762.525 	 AIC: 3591.050
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.229  0.478
+mouse        daylast  0.564  0.751
+mouse      daymiddle  0.193  0.440
+mouse    tasksDualGo  0.104  0.322
+mouse  tasksDualNoGo  0.016  0.127
+
+               IV1            IV2   Corr
+mouse  (Intercept)        daylast  0.150
+mouse  (Intercept)      daymiddle  0.872
+mouse  (Intercept)    tasksDualGo -0.223
+mouse  (Intercept)  tasksDualNoGo -0.928
+mouse      daylast      daymiddle  0.583
+mouse      daylast    tasksDualGo -0.410
+mouse      daylast  tasksDualNoGo -0.322
+mouse    daymiddle    tasksDualGo -0.527
+mouse    daymiddle  tasksDualNoGo -0.951
+mouse  tasksDualGo  tasksDualNoGo  0.568
+
+Fixed effects:
+
+                                        Estimate  2.5_ci  97.5_ci     SE  \
+(Intercept)                                0.758   0.286    1.229  0.240
+overlaps_ED_LD                             0.301  -0.109    0.712  0.209
+daylast                                    1.867   1.049    2.684  0.417
+daymiddle                                  1.423   0.887    1.959  0.273
+tasksDualGo                               -0.195  -0.604    0.214  0.209
+tasksDualNoGo                             -0.032  -0.348    0.285  0.162
+overlaps_ED_LD:daylast                    -0.118  -0.943    0.706  0.421
+overlaps_ED_LD:daymiddle                  -0.186  -0.894    0.523  0.361
+overlaps_ED_LD:tasksDualGo                -0.386  -0.921    0.149  0.273
+overlaps_ED_LD:tasksDualNoGo              -0.160  -0.661    0.341  0.256
+daylast:tasksDualGo                       -0.216  -0.820    0.389  0.309
+daymiddle:tasksDualGo                     -0.414  -0.870    0.042  0.233
+daylast:tasksDualNoGo                     -0.394  -0.997    0.210  0.308
+daymiddle:tasksDualNoGo                   -0.139  -0.613    0.334  0.242
+overlaps_ED_LD:daylast:tasksDualGo         0.161  -0.932    1.254  0.558
+overlaps_ED_LD:daymiddle:tasksDualGo       0.298  -0.551    1.146  0.433
+overlaps_ED_LD:daylast:tasksDualNoGo       0.011  -1.069    1.091  0.551
+overlaps_ED_LD:daymiddle:tasksDualNoGo     0.185  -0.735    1.105  0.469
+
+                                           OR  OR_2.5_ci  OR_97.5_ci   Prob  \
+(Intercept)                             2.134      1.332       3.418  0.681
+overlaps_ED_LD                          1.352      0.897       2.037  0.575
+daylast                                 6.467      2.855      14.644  0.866
+daymiddle                               4.150      2.429       7.092  0.806
+tasksDualGo                             0.822      0.546       1.238  0.451
+tasksDualNoGo                           0.969      0.706       1.330  0.492
+overlaps_ED_LD:daylast                  0.888      0.389       2.026  0.470
+overlaps_ED_LD:daymiddle                0.831      0.409       1.687  0.454
+overlaps_ED_LD:tasksDualGo              0.680      0.398       1.161  0.405
+overlaps_ED_LD:tasksDualNoGo            0.852      0.516       1.406  0.460
+daylast:tasksDualGo                     0.806      0.440       1.476  0.446
+daymiddle:tasksDualGo                   0.661      0.419       1.043  0.398
+daylast:tasksDualNoGo                   0.675      0.369       1.233  0.403
+daymiddle:tasksDualNoGo                 0.870      0.542       1.397  0.465
+overlaps_ED_LD:daylast:tasksDualGo      1.174      0.394       3.503  0.540
+overlaps_ED_LD:daymiddle:tasksDualGo    1.347      0.576       3.147  0.574
+overlaps_ED_LD:daylast:tasksDualNoGo    1.011      0.343       2.978  0.503
+overlaps_ED_LD:daymiddle:tasksDualNoGo  1.203      0.479       3.019  0.546
+
+                                        Prob_2.5_ci  Prob_97.5_ci  Z-stat  \
+(Intercept)                                   0.571         0.774   3.151
+overlaps_ED_LD                                0.473         0.671   1.441
+daylast                                       0.741         0.936   4.476
+daymiddle                                     0.708         0.876   5.206
+tasksDualGo                                   0.353         0.553  -0.937
+tasksDualNoGo                                 0.414         0.571  -0.196
+overlaps_ED_LD:daylast                        0.280         0.670  -0.281
+overlaps_ED_LD:daymiddle                      0.290         0.628  -0.513
+overlaps_ED_LD:tasksDualGo                    0.285         0.537  -1.414
+overlaps_ED_LD:tasksDualNoGo                  0.340         0.584  -0.627
+daylast:tasksDualGo                           0.306         0.596  -0.699
+daymiddle:tasksDualGo                         0.295         0.511  -1.778
+daylast:tasksDualNoGo                         0.270         0.552  -1.279
+daymiddle:tasksDualNoGo                       0.351         0.583  -0.576
+overlaps_ED_LD:daylast:tasksDualGo            0.282         0.778   0.288
+overlaps_ED_LD:daymiddle:tasksDualGo          0.366         0.759   0.688
+overlaps_ED_LD:daylast:tasksDualNoGo          0.256         0.749   0.020
+overlaps_ED_LD:daymiddle:tasksDualNoGo        0.324         0.751   0.394
+
+                                        P-val  Sig
+(Intercept)                             0.002   **
+overlaps_ED_LD                          0.150
+daylast                                 0.000  ***
+daymiddle                               0.000  ***
+tasksDualGo                             0.349
+tasksDualNoGo                           0.845
+overlaps_ED_LD:daylast                  0.778
+overlaps_ED_LD:daymiddle                0.608
+overlaps_ED_LD:tasksDualGo              0.157
+overlaps_ED_LD:tasksDualNoGo            0.531
+daylast:tasksDualGo                     0.485
+daymiddle:tasksDualGo                   0.075    .
+daylast:tasksDualNoGo                   0.201
+daymiddle:tasksDualNoGo                 0.565
+overlaps_ED_LD:daylast:tasksDualGo      0.773
+overlaps_ED_LD:daymiddle:tasksDualGo    0.492
+overlaps_ED_LD:daylast:tasksDualNoGo    0.984
+overlaps_ED_LD:daymiddle:tasksDualNoGo  0.694
+#+end_example
+
+#+begin_src ipython
+print(glm.coefs)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                                        Estimate    2.5_ci   97.5_ci  \
+(Intercept)                             0.757792  0.286496  1.229088
+overlaps_ED_LD                          0.301466 -0.108574  0.711506
+daylast                                 1.866642  1.049242  2.684041
+daymiddle                               1.423176  0.887424  1.958928
+tasksDualGo                            -0.195445 -0.604480  0.213590
+tasksDualNoGo                          -0.031679 -0.348322  0.284964
+overlaps_ED_LD:daylast                 -0.118342 -0.942892  0.706208
+overlaps_ED_LD:daymiddle               -0.185521 -0.893861  0.522819
+overlaps_ED_LD:tasksDualGo             -0.385983 -0.921083  0.149116
+overlaps_ED_LD:tasksDualNoGo           -0.160270 -0.661396  0.340855
+daylast:tasksDualGo                    -0.215555 -0.820304  0.389194
+daymiddle:tasksDualGo                  -0.413601 -0.869539  0.042337
+daylast:tasksDualNoGo                  -0.393621 -0.996800  0.209557
+daymiddle:tasksDualNoGo                -0.139107 -0.612713  0.334499
+overlaps_ED_LD:daylast:tasksDualGo      0.160536 -0.932481  1.253553
+overlaps_ED_LD:daymiddle:tasksDualGo    0.297739 -0.550993  1.146472
+overlaps_ED_LD:daylast:tasksDualNoGo    0.010979 -1.069128  1.091085
+overlaps_ED_LD:daymiddle:tasksDualNoGo  0.184944 -0.735095  1.104983
+
+                                              SE        OR  OR_2.5_ci  \
+(Intercept)                             0.240462  2.133560   1.331752
+overlaps_ED_LD                          0.209208  1.351839   0.897112
+daylast                                 0.417048  6.466543   2.855486
+daymiddle                               0.273348  4.150281   2.428865
+tasksDualGo                             0.208695  0.822469   0.546359
+tasksDualNoGo                           0.161556  0.968818   0.705872
+overlaps_ED_LD:daylast                  0.420697  0.888392   0.389500
+overlaps_ED_LD:daymiddle                0.361405  0.830671   0.409073
+overlaps_ED_LD:tasksDualGo              0.273015  0.679782   0.398088
+overlaps_ED_LD:tasksDualNoGo            0.255681  0.851913   0.516130
+daylast:tasksDualGo                     0.308551  0.806094   0.440298
+daymiddle:tasksDualGo                   0.232626  0.661265   0.419145
+daylast:tasksDualNoGo                   0.307750  0.674610   0.369059
+daymiddle:tasksDualNoGo                 0.241640  0.870135   0.541879
+overlaps_ED_LD:daylast:tasksDualGo      0.557672  1.174140   0.393576
+overlaps_ED_LD:daymiddle:tasksDualGo    0.433035  1.346811   0.576377
+overlaps_ED_LD:daylast:tasksDualNoGo    0.551085  1.011039   0.343308
+overlaps_ED_LD:daymiddle:tasksDualNoGo  0.469416  1.203151   0.479460
+
+                                        OR_97.5_ci      Prob  Prob_2.5_ci  \
+(Intercept)                               3.418111  0.680874     0.571138
+overlaps_ED_LD                            2.037056  0.574801     0.472883
+daylast                                  14.644155  0.866069     0.740629
+daymiddle                                 7.091722  0.805836     0.708358
+tasksDualGo                               1.238115  0.451294     0.353320
+tasksDualNoGo                             1.329714  0.492081     0.413789
+overlaps_ED_LD:daylast                    2.026293  0.470449     0.280317
+overlaps_ED_LD:daymiddle                  1.686775  0.453752     0.290314
+overlaps_ED_LD:tasksDualGo                1.160807  0.404685     0.284737
+overlaps_ED_LD:tasksDualNoGo              1.406150  0.460018     0.340426
+daylast:tasksDualGo                       1.475791  0.446319     0.305699
+daymiddle:tasksDualGo                     1.043246  0.398049     0.295350
+daylast:tasksDualNoGo                     1.233132  0.402846     0.269571
+daymiddle:tasksDualNoGo                   1.397241  0.465279     0.351441
+overlaps_ED_LD:daylast:tasksDualGo        3.502765  0.540048     0.282422
+overlaps_ED_LD:daymiddle:tasksDualGo      3.147070  0.573890     0.365634
+overlaps_ED_LD:daylast:tasksDualNoGo      2.977504  0.502745     0.255569
+overlaps_ED_LD:daymiddle:tasksDualNoGo    3.019173  0.546105     0.324078
+
+                                        Prob_97.5_ci    Z-stat         P-val  \
+(Intercept)                                 0.773659  3.151404  1.624877e-03
+overlaps_ED_LD                              0.670734  1.440986  1.495887e-01
+daylast                                     0.936078  4.475841  7.611110e-06
+daymiddle                                   0.876417  5.206463  1.924736e-07
+tasksDualGo                                 0.553195 -0.936508  3.490116e-01
+tasksDualNoGo                               0.570763 -0.196086  8.445426e-01
+overlaps_ED_LD:daylast                      0.669563 -0.281300  7.784799e-01
+overlaps_ED_LD:daymiddle                    0.627807 -0.513334  6.077176e-01
+overlaps_ED_LD:tasksDualGo                  0.537210 -1.413782  1.574260e-01
+overlaps_ED_LD:tasksDualNoGo                0.584398 -0.626837  5.307659e-01
+daylast:tasksDualGo                         0.596089 -0.698604  4.847998e-01
+daymiddle:tasksDualGo                       0.510583 -1.777970  7.540885e-02
+daylast:tasksDualNoGo                       0.552198 -1.279030  2.008866e-01
+daymiddle:tasksDualNoGo                     0.582854 -0.575677  5.648332e-01
+overlaps_ED_LD:daylast:tasksDualGo          0.777914  0.287868  7.734475e-01
+overlaps_ED_LD:daymiddle:tasksDualGo        0.758866  0.687565  4.917268e-01
+overlaps_ED_LD:daylast:tasksDualNoGo        0.748586  0.019922  9.841052e-01
+overlaps_ED_LD:daymiddle:tasksDualNoGo      0.751193  0.393988  6.935903e-01
+
+                                        Sig
+(Intercept)                              **
+overlaps_ED_LD
+daylast                                 ***
+daymiddle                               ***
+tasksDualGo
+tasksDualNoGo
+overlaps_ED_LD:daylast
+overlaps_ED_LD:daymiddle
+overlaps_ED_LD:tasksDualGo
+overlaps_ED_LD:tasksDualNoGo
+daylast:tasksDualGo
+daymiddle:tasksDualGo                     .
+daylast:tasksDualNoGo
+daymiddle:tasksDualNoGo
+overlaps_ED_LD:daylast:tasksDualGo
+overlaps_ED_LD:daymiddle:tasksDualGo
+overlaps_ED_LD:daylast:tasksDualNoGo
+overlaps_ED_LD:daymiddle:tasksDualNoGo
+#+end_example
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ overlaps_ED_LD * tasks + (1 + tasks | mouse)'
+
+  results = []
+  data = df.copy()
+  for day in df.day.unique():
+      data = df[df.day==day]
+      glm = Lmer(formula=formula, data=data, family='binomial')
+      glm.fit()
+      results.append(glm)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*tasks+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 1344	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -864.385 	 AIC: 1752.769
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.211  0.460
+mouse    tasksDualGo  0.000  0.005
+mouse  tasksDualNoGo  0.014  0.117
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo   1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo  -1.0
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*tasks+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 1344	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -588.714 	 AIC: 1201.429
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.907  0.952
+mouse    tasksDualGo  0.286  0.535
+mouse  tasksDualNoGo  0.028  0.166
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo -0.673
+mouse  (Intercept)  tasksDualNoGo -0.999
+mouse  tasksDualGo  tasksDualNoGo  0.643
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.00981686 (tol = 0.002, component 1)
+
+**NOTE**: Column for 'residuals' not created in model.data, but saved in model.resid only. This is because you have rows with NaNs in your data.
+
+**NOTE** Column for 'fits' not created in model.data, but saved in model.fits only. This is because you have rows with NaNs in your data.
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*tasks+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 960	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -315.228 	 AIC: 654.457
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  2.085  1.444
+mouse    tasksDualGo  0.385  0.621
+mouse  tasksDualNoGo  0.493  0.702
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+print(results[1].coefs)
+#+end_src
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# Assuming you already have model and model.coef()
+coefficients = {
+    'coef': model.coefs['Estimate'],
+    'lower_ci': model.coefs['2.5_ci'],
+    'upper_ci': model.coefs['97.5_ci'],
+    'p_value': model.coefs['P-val']
+}
+
+df_coefs = pd.DataFrame(coefficients)
+
+# Determine significance markers
+def significance_marker(p):
+    if p < 0.001:
+        return '**'
+    elif p < 0.01:
+        return '*'
+    elif p < 0.05:
+        return '*'
+    elif p < 0.1:
+        return '.'
+    else:
+        return ''
+
+df_coefs['marker'] = df_coefs['p_value'].apply(significance_marker)
+
+#  Plot coefficients with error bars and significance markers
+plt.figure(figsize=(10, 6))
+plt.errorbar(df_coefs.index, df_coefs['coef'], yerr=[df_coefs['coef'] - df_coefs['lower_ci'], df_coefs['upper_ci'] - df_coefs['coef']], fmt='o')
+plt.axhline(y=0, color='grey', linestyle='--')
+plt.xlabel('Coefficient')
+plt.ylabel('Estimate')
+# plt.title('Coefficient Estimates with 95% Confidence Intervals')
+plt.xticks(rotation=45, ha='right', fontsize=10)
+plt.tight_layout()
+
+# Add significance markers
+for i, (coef, marker) in enumerate(zip(df_coefs['coef'], df_coefs['marker'])):
+    plt.text(i, coef+1, f'{marker}', fontsize=22, ha='center', va='bottom')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_42.png]]
+
+#+begin_src ipython
+import pandas as pd
+
+# Assuming you have the list of results from all sessions
+combined_results = []
+
+for i, result in enumerate(results):
+    coefficients = {
+        'coef': result.coefs['Estimate'],
+        'lower_ci': result.coefs['2.5_ci'],
+        'upper_ci': result.coefs['97.5_ci'],
+        'p_value': result.coefs['P-val'],
+        'day': df.day.unique()[i]  # Add a session identifier
+    }
+    df_result = pd.DataFrame(coefficients)
+    combined_results.append(df_result)
+
+df_combined = pd.concat(combined_results)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(df_combined)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                                  coef  lower_ci  upper_ci   p_value     day
+(Intercept)                   0.745663  0.285682  1.205645  0.001487   first
+overlaps_ED_LD                0.315733 -0.091350  0.722817  0.128475   first
+tasksDualGo                  -0.182578 -0.488422  0.123267  0.241991   first
+tasksDualNoGo                -0.031592 -0.354120  0.290936  0.847756   first
+overlaps_ED_LD:tasksDualGo   -0.389952 -0.922347  0.142443  0.151124   first
+overlaps_ED_LD:tasksDualNoGo -0.182707 -0.680380  0.314967  0.471805   first
+(Intercept)                   2.249341  1.326763  3.171918  0.000002  middle
+overlaps_ED_LD                0.119874 -0.478781  0.718529  0.694718  middle
+tasksDualGo                  -0.752127 -1.432248 -0.072006  0.030199  middle
+tasksDualNoGo                -0.211258 -0.747756  0.325240  0.440245  middle
+overlaps_ED_LD:tasksDualGo   -0.095274 -0.769920  0.579371  0.781942  middle
+overlaps_ED_LD:tasksDualNoGo  0.017094 -0.779287  0.813474  0.966443  middle
+(Intercept)                   2.915941  1.448605  4.383278  0.000098    last
+overlaps_ED_LD                0.173329 -0.549904  0.896563  0.638553    last
+tasksDualGo                  -0.719469 -1.722542  0.283603  0.159779    last
+tasksDualNoGo                -0.781504 -1.809899  0.246891  0.136375    last
+overlaps_ED_LD:tasksDualGo   -0.243494 -1.212435  0.725446  0.622339    last
+overlaps_ED_LD:tasksDualNoGo -0.135101 -1.083779  0.813578  0.780155    last
+#+end_example
+
+#+begin_src ipython
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Filter the DataFrame for 'overlaps_ED_LD' coefficients
+df_filtered = df_combined[df_combined.index.get_level_values(0) == 'overlaps_ED_LD']
+
+# Create the plot
+# plt.figure(figsize=(12, 8))
+sns.lineplot(data=df_filtered, x='day', y='coef', marker='o', ci=None)
+
+# Add error bars for confidence intervals
+plt.errorbar(df_filtered['day'], df_filtered['coef'],
+             yerr=[df_filtered['coef'] - df_filtered['lower_ci'],
+                   df_filtered['upper_ci'] - df_filtered['coef']],
+             fmt='o', color='b', capsize=5)
+
+# Define significance markers
+def significance_marker(p):
+    if p < 0.001:
+        return '***'
+    elif p < 0.01:
+        return '**'
+    elif p < 0.05:
+        return '*'
+    elif p < 0.1:
+        return '.'
+    else:
+        return ''
+
+# Add significance markers to the plot
+for index, row in df_filtered.iterrows():
+    plt.text(row['day'], row['coef'], significance_marker(row['p_value']),
+             fontsize=12, ha='center', va='bottom')
+
+# Customize the plot
+plt.axhline(y=0, color='grey', linestyle='--')
+plt.xlabel('Day')
+plt.ylabel('Coefficient (overlaps_ED_LD)')
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_46.png]]
+
+*** Distractor
+**** Plots
+
+#+begin_src ipython
+name = 'df_distractor_overlaps'
+df_mice = pkl_load(name, path="../data/mice/overlaps")
+df_mice['performance'] = df_mice['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_mice['pair'] = df_mice['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+print(df_mice.head())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+loading from ../data/mice/overlaps/df_distractor_overlaps.pkl
+   sample_odor  test_odor        response tasks  laser    day  dist_odor  \
+0          0.0        1.0     correct_rej   DPA    0.0  first        NaN
+1          0.0        0.0  incorrect_miss   DPA    0.0  first        NaN
+2          0.0        1.0    incorrect_fa   DPA    0.0  first        NaN
+3          0.0        0.0     correct_hit   DPA    0.0  first        NaN
+4          0.0        0.0     correct_hit   DPA    0.0  first        NaN
+
+   choice                                           overlaps    mouse  \
+0     0.0  [0.051369622349739075, -0.16439734399318695, 0...  JawsM15
+1     0.0  [0.1022411435842514, 0.17366893589496613, 0.02...  JawsM15
+2     1.0  [0.14755448698997498, 0.21186557412147522, -0....  JawsM15
+3     1.0  [-0.1233757883310318, -0.15986157953739166, -0...  JawsM15
+4     1.0  [-0.01724367029964924, -0.11547389626502991, 0...  JawsM15
+
+   performance  pair
+0            1     0
+1            0     1
+2            0     0
+3            1     1
+4            1     1
+#+end_example
+
+#+begin_src ipython
+duplicates = df_overlaps.index.duplicated()
+if duplicates.any():
+    print("Found duplicate indices. Resetting index...")
+
+    # Reset the index to remove duplicates
+    df_overlaps = df_overlaps.reset_index(drop=True)
+#+end_src
+
+#+RESULTS:
+: Found duplicate indices. Resetting index...
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+df_mice['SOLD'] = df_mice['overlaps_MD'].apply(lambda x: avg_epochs(np.array(x), **options))
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3790, in Index.get_loc(self, key)
+   3789 try:
+-> 3790     return self._engine.get_loc(casted_key)
+   3791 except KeyError as err:
+
+File index.pyx:152, in pandas._libs.index.IndexEngine.get_loc()
+
+File index.pyx:181, in pandas._libs.index.IndexEngine.get_loc()
+
+File pandas/_libs/hashtable_class_helper.pxi:7080, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+File pandas/_libs/hashtable_class_helper.pxi:7088, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+KeyError: 'overlaps_MD'
+
+The above exception was the direct cause of the following exception:
+
+KeyError                                  Traceback (most recent call last)
+Cell In[274], line 2
+      1 options['epochs'] = ['ED']
+----> 2 df_mice['SOLD'] = df_mice['overlaps_MD'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py:3893, in DataFrame.__getitem__(self, key)
+   3891 if self.columns.nlevels > 1:
+   3892     return self._getitem_multilevel(key)
+-> 3893 indexer = self.columns.get_loc(key)
+   3894 if is_integer(indexer):
+   3895     indexer = [indexer]
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3797, in Index.get_loc(self, key)
+   3792     if isinstance(casted_key, slice) or (
+   3793         isinstance(casted_key, abc.Iterable)
+   3794         and any(isinstance(x, slice) for x in casted_key)
+   3795     ):
+   3796         raise InvalidIndexError(key)
+-> 3797     raise KeyError(key) from err
+   3798 except TypeError:
+   3799     # If we have a listlike key, _check_indexing_error will raise
+   3800     #  InvalidIndexError. Otherwise we fall through and re-raise
+   3801     #  the TypeError.
+   3802     self._check_indexing_error(key)
+
+KeyError: 'overlaps_MD'
+#+end_example
+:END:
+
+#+begin_src ipython
+import seaborn as sns
+sns.lineplot(data=df_mice, x='day', y='SOLD', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'])
+
+plt.xlabel('Day')
+plt.ylabel('Late Sample Overlap')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+#+begin_src ipython
+df = df_mice[df_mice.tasks=='DualGo'].copy()
+
+# Group by 'day' and compute the mean overlaps for each day
+mean_overlaps_by_day = df.groupby('day')['overlaps_ED'].apply(lambda x: np.mean(np.stack(x), axis=0))
+
+# Prepare data for plotting
+mean_overlaps_df = pd.DataFrame(mean_overlaps_by_day.tolist(), index=mean_overlaps_by_day.index)
+
+# Plotting
+for idx, row in mean_overlaps_df.iterrows():
+    plt.plot(np.linspace(0, 14, 84), row, label=f"Day {idx}")
+
+plt.xlabel('Time (s)')
+plt.ylabel('Overlap')
+plt.legend(fontsize=10)
+add_vlines()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_35.png]]
+
+**** glm
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ overlaps_MD_ED + (1 + overlaps_MD_ED | mouse)'
+
+  results = []
+  data = df.copy()
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+RRuntimeError                             Traceback (most recent call last)
+Cell In[282], line 11
+      8 data = df.copy()
+     10 glm = Lmer(formula=formula, data=data, family='binomial')
+---> 11 result = glm.fit()
+     12 print(result)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pymer4/models/Lmer.py:440, in Lmer.fit(self, conf_int, n_boot, factors, permute, ordered, verbose, REML, rank, rank_group, rank_exclude_cols, no_warnings, control, old_optimizer, **kwargs)
+    438         _fam = self.family
+    439     lmc = robjects.r(f"glmerControl({control})")
+--> 440     self.model_obj = lmer.glmer(
+    441         self.formula,
+    442         data=data,
+    443         family=_fam,
+    444         control=lmc,
+    445         contrasts=contrasts,
+    446     )
+    448 # Store design matrix and get number of IVs for inference
+    449 design_matrix = stats.model_matrix(self.model_obj)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/functions.py:208, in SignatureTranslatedFunction.__call__(self, *args, **kwargs)
+    206         v = kwargs.pop(k)
+    207         kwargs[r_k] = v
+--> 208 return (super(SignatureTranslatedFunction, self)
+    209         .__call__(*args, **kwargs))
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/robjects/functions.py:131, in Function.__call__(self, *args, **kwargs)
+    129     else:
+    130         new_kwargs[k] = cv.py2rpy(v)
+--> 131 res = super(Function, self).__call__(*new_args, **new_kwargs)
+    132 res = cv.rpy2py(res)
+    133 return res
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface_lib/conversion.py:45, in _cdata_res_to_rinterface.<locals>._(*args, **kwargs)
+     44 def _(*args, **kwargs):
+---> 45     cdata = function(*args, **kwargs)
+     46     # TODO: test cdata is of the expected CType
+     47     return _cdata_to_rinterface(cdata)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/rpy2/rinterface.py:817, in SexpClosure.__call__(self, *args, **kwargs)
+    810     res = rmemory.protect(
+    811         openrlib.rlib.R_tryEval(
+    812             call_r,
+    813             call_context.__sexp__._cdata,
+    814             error_occured)
+    815     )
+    816     if error_occured[0]:
+--> 817         raise embedded.RRuntimeError(_rinterface._geterrmessage())
+    818 return res
+
+RRuntimeError: Error: grouping factors must have > 1 sampled level
+#+end_example
+:END:
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ overlaps_ED_LD * day * tasks + (1 + day + tasks | mouse)'
+
+  results = []
+  data = df.copy()
+
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Model failed to converge with max|grad| = 0.00718484 (tol = 0.002, component 1)
+
+,**NOTE**: Column for 'residuals' not created in model.data, but saved in model.resid only. This is because you have rows with NaNs in your data.
+
+,**NOTE** Column for 'fits' not created in model.data, but saved in model.fits only. This is because you have rows with NaNs in your data.
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*day*tasks+(1+day+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1762.525 	 AIC: 3591.050
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.229  0.478
+mouse        daylast  0.564  0.751
+mouse      daymiddle  0.193  0.440
+mouse    tasksDualGo  0.104  0.322
+mouse  tasksDualNoGo  0.016  0.127
+
+               IV1            IV2   Corr
+mouse  (Intercept)        daylast  0.150
+mouse  (Intercept)      daymiddle  0.872
+mouse  (Intercept)    tasksDualGo -0.223
+mouse  (Intercept)  tasksDualNoGo -0.928
+mouse      daylast      daymiddle  0.583
+mouse      daylast    tasksDualGo -0.410
+mouse      daylast  tasksDualNoGo -0.322
+mouse    daymiddle    tasksDualGo -0.527
+mouse    daymiddle  tasksDualNoGo -0.951
+mouse  tasksDualGo  tasksDualNoGo  0.568
+
+Fixed effects:
+
+                                        Estimate  2.5_ci  97.5_ci     SE  \
+(Intercept)                                0.758   0.286    1.229  0.240
+overlaps_ED_LD                             0.301  -0.109    0.712  0.209
+daylast                                    1.867   1.049    2.684  0.417
+daymiddle                                  1.423   0.887    1.959  0.273
+tasksDualGo                               -0.195  -0.604    0.214  0.209
+tasksDualNoGo                             -0.032  -0.348    0.285  0.162
+overlaps_ED_LD:daylast                    -0.118  -0.943    0.706  0.421
+overlaps_ED_LD:daymiddle                  -0.186  -0.894    0.523  0.361
+overlaps_ED_LD:tasksDualGo                -0.386  -0.921    0.149  0.273
+overlaps_ED_LD:tasksDualNoGo              -0.160  -0.661    0.341  0.256
+daylast:tasksDualGo                       -0.216  -0.820    0.389  0.309
+daymiddle:tasksDualGo                     -0.414  -0.870    0.042  0.233
+daylast:tasksDualNoGo                     -0.394  -0.997    0.210  0.308
+daymiddle:tasksDualNoGo                   -0.139  -0.613    0.334  0.242
+overlaps_ED_LD:daylast:tasksDualGo         0.161  -0.932    1.254  0.558
+overlaps_ED_LD:daymiddle:tasksDualGo       0.298  -0.551    1.146  0.433
+overlaps_ED_LD:daylast:tasksDualNoGo       0.011  -1.069    1.091  0.551
+overlaps_ED_LD:daymiddle:tasksDualNoGo     0.185  -0.735    1.105  0.469
+
+                                           OR  OR_2.5_ci  OR_97.5_ci   Prob  \
+(Intercept)                             2.134      1.332       3.418  0.681
+overlaps_ED_LD                          1.352      0.897       2.037  0.575
+daylast                                 6.467      2.855      14.644  0.866
+daymiddle                               4.150      2.429       7.092  0.806
+tasksDualGo                             0.822      0.546       1.238  0.451
+tasksDualNoGo                           0.969      0.706       1.330  0.492
+overlaps_ED_LD:daylast                  0.888      0.389       2.026  0.470
+overlaps_ED_LD:daymiddle                0.831      0.409       1.687  0.454
+overlaps_ED_LD:tasksDualGo              0.680      0.398       1.161  0.405
+overlaps_ED_LD:tasksDualNoGo            0.852      0.516       1.406  0.460
+daylast:tasksDualGo                     0.806      0.440       1.476  0.446
+daymiddle:tasksDualGo                   0.661      0.419       1.043  0.398
+daylast:tasksDualNoGo                   0.675      0.369       1.233  0.403
+daymiddle:tasksDualNoGo                 0.870      0.542       1.397  0.465
+overlaps_ED_LD:daylast:tasksDualGo      1.174      0.394       3.503  0.540
+overlaps_ED_LD:daymiddle:tasksDualGo    1.347      0.576       3.147  0.574
+overlaps_ED_LD:daylast:tasksDualNoGo    1.011      0.343       2.978  0.503
+overlaps_ED_LD:daymiddle:tasksDualNoGo  1.203      0.479       3.019  0.546
+
+                                        Prob_2.5_ci  Prob_97.5_ci  Z-stat  \
+(Intercept)                                   0.571         0.774   3.151
+overlaps_ED_LD                                0.473         0.671   1.441
+daylast                                       0.741         0.936   4.476
+daymiddle                                     0.708         0.876   5.206
+tasksDualGo                                   0.353         0.553  -0.937
+tasksDualNoGo                                 0.414         0.571  -0.196
+overlaps_ED_LD:daylast                        0.280         0.670  -0.281
+overlaps_ED_LD:daymiddle                      0.290         0.628  -0.513
+overlaps_ED_LD:tasksDualGo                    0.285         0.537  -1.414
+overlaps_ED_LD:tasksDualNoGo                  0.340         0.584  -0.627
+daylast:tasksDualGo                           0.306         0.596  -0.699
+daymiddle:tasksDualGo                         0.295         0.511  -1.778
+daylast:tasksDualNoGo                         0.270         0.552  -1.279
+daymiddle:tasksDualNoGo                       0.351         0.583  -0.576
+overlaps_ED_LD:daylast:tasksDualGo            0.282         0.778   0.288
+overlaps_ED_LD:daymiddle:tasksDualGo          0.366         0.759   0.688
+overlaps_ED_LD:daylast:tasksDualNoGo          0.256         0.749   0.020
+overlaps_ED_LD:daymiddle:tasksDualNoGo        0.324         0.751   0.394
+
+                                        P-val  Sig
+(Intercept)                             0.002   **
+overlaps_ED_LD                          0.150
+daylast                                 0.000  ***
+daymiddle                               0.000  ***
+tasksDualGo                             0.349
+tasksDualNoGo                           0.845
+overlaps_ED_LD:daylast                  0.778
+overlaps_ED_LD:daymiddle                0.608
+overlaps_ED_LD:tasksDualGo              0.157
+overlaps_ED_LD:tasksDualNoGo            0.531
+daylast:tasksDualGo                     0.485
+daymiddle:tasksDualGo                   0.075    .
+daylast:tasksDualNoGo                   0.201
+daymiddle:tasksDualNoGo                 0.565
+overlaps_ED_LD:daylast:tasksDualGo      0.773
+overlaps_ED_LD:daymiddle:tasksDualGo    0.492
+overlaps_ED_LD:daylast:tasksDualNoGo    0.984
+overlaps_ED_LD:daymiddle:tasksDualNoGo  0.694
+#+end_example
+
+#+begin_src ipython
+print(glm.coefs)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                                        Estimate    2.5_ci   97.5_ci  \
+(Intercept)                             0.757792  0.286496  1.229088
+overlaps_ED_LD                          0.301466 -0.108574  0.711506
+daylast                                 1.866642  1.049242  2.684041
+daymiddle                               1.423176  0.887424  1.958928
+tasksDualGo                            -0.195445 -0.604480  0.213590
+tasksDualNoGo                          -0.031679 -0.348322  0.284964
+overlaps_ED_LD:daylast                 -0.118342 -0.942892  0.706208
+overlaps_ED_LD:daymiddle               -0.185521 -0.893861  0.522819
+overlaps_ED_LD:tasksDualGo             -0.385983 -0.921083  0.149116
+overlaps_ED_LD:tasksDualNoGo           -0.160270 -0.661396  0.340855
+daylast:tasksDualGo                    -0.215555 -0.820304  0.389194
+daymiddle:tasksDualGo                  -0.413601 -0.869539  0.042337
+daylast:tasksDualNoGo                  -0.393621 -0.996800  0.209557
+daymiddle:tasksDualNoGo                -0.139107 -0.612713  0.334499
+overlaps_ED_LD:daylast:tasksDualGo      0.160536 -0.932481  1.253553
+overlaps_ED_LD:daymiddle:tasksDualGo    0.297739 -0.550993  1.146472
+overlaps_ED_LD:daylast:tasksDualNoGo    0.010979 -1.069128  1.091085
+overlaps_ED_LD:daymiddle:tasksDualNoGo  0.184944 -0.735095  1.104983
+
+                                              SE        OR  OR_2.5_ci  \
+(Intercept)                             0.240462  2.133560   1.331752
+overlaps_ED_LD                          0.209208  1.351839   0.897112
+daylast                                 0.417048  6.466543   2.855486
+daymiddle                               0.273348  4.150281   2.428865
+tasksDualGo                             0.208695  0.822469   0.546359
+tasksDualNoGo                           0.161556  0.968818   0.705872
+overlaps_ED_LD:daylast                  0.420697  0.888392   0.389500
+overlaps_ED_LD:daymiddle                0.361405  0.830671   0.409073
+overlaps_ED_LD:tasksDualGo              0.273015  0.679782   0.398088
+overlaps_ED_LD:tasksDualNoGo            0.255681  0.851913   0.516130
+daylast:tasksDualGo                     0.308551  0.806094   0.440298
+daymiddle:tasksDualGo                   0.232626  0.661265   0.419145
+daylast:tasksDualNoGo                   0.307750  0.674610   0.369059
+daymiddle:tasksDualNoGo                 0.241640  0.870135   0.541879
+overlaps_ED_LD:daylast:tasksDualGo      0.557672  1.174140   0.393576
+overlaps_ED_LD:daymiddle:tasksDualGo    0.433035  1.346811   0.576377
+overlaps_ED_LD:daylast:tasksDualNoGo    0.551085  1.011039   0.343308
+overlaps_ED_LD:daymiddle:tasksDualNoGo  0.469416  1.203151   0.479460
+
+                                        OR_97.5_ci      Prob  Prob_2.5_ci  \
+(Intercept)                               3.418111  0.680874     0.571138
+overlaps_ED_LD                            2.037056  0.574801     0.472883
+daylast                                  14.644155  0.866069     0.740629
+daymiddle                                 7.091722  0.805836     0.708358
+tasksDualGo                               1.238115  0.451294     0.353320
+tasksDualNoGo                             1.329714  0.492081     0.413789
+overlaps_ED_LD:daylast                    2.026293  0.470449     0.280317
+overlaps_ED_LD:daymiddle                  1.686775  0.453752     0.290314
+overlaps_ED_LD:tasksDualGo                1.160807  0.404685     0.284737
+overlaps_ED_LD:tasksDualNoGo              1.406150  0.460018     0.340426
+daylast:tasksDualGo                       1.475791  0.446319     0.305699
+daymiddle:tasksDualGo                     1.043246  0.398049     0.295350
+daylast:tasksDualNoGo                     1.233132  0.402846     0.269571
+daymiddle:tasksDualNoGo                   1.397241  0.465279     0.351441
+overlaps_ED_LD:daylast:tasksDualGo        3.502765  0.540048     0.282422
+overlaps_ED_LD:daymiddle:tasksDualGo      3.147070  0.573890     0.365634
+overlaps_ED_LD:daylast:tasksDualNoGo      2.977504  0.502745     0.255569
+overlaps_ED_LD:daymiddle:tasksDualNoGo    3.019173  0.546105     0.324078
+
+                                        Prob_97.5_ci    Z-stat         P-val  \
+(Intercept)                                 0.773659  3.151404  1.624877e-03
+overlaps_ED_LD                              0.670734  1.440986  1.495887e-01
+daylast                                     0.936078  4.475841  7.611110e-06
+daymiddle                                   0.876417  5.206463  1.924736e-07
+tasksDualGo                                 0.553195 -0.936508  3.490116e-01
+tasksDualNoGo                               0.570763 -0.196086  8.445426e-01
+overlaps_ED_LD:daylast                      0.669563 -0.281300  7.784799e-01
+overlaps_ED_LD:daymiddle                    0.627807 -0.513334  6.077176e-01
+overlaps_ED_LD:tasksDualGo                  0.537210 -1.413782  1.574260e-01
+overlaps_ED_LD:tasksDualNoGo                0.584398 -0.626837  5.307659e-01
+daylast:tasksDualGo                         0.596089 -0.698604  4.847998e-01
+daymiddle:tasksDualGo                       0.510583 -1.777970  7.540885e-02
+daylast:tasksDualNoGo                       0.552198 -1.279030  2.008866e-01
+daymiddle:tasksDualNoGo                     0.582854 -0.575677  5.648332e-01
+overlaps_ED_LD:daylast:tasksDualGo          0.777914  0.287868  7.734475e-01
+overlaps_ED_LD:daymiddle:tasksDualGo        0.758866  0.687565  4.917268e-01
+overlaps_ED_LD:daylast:tasksDualNoGo        0.748586  0.019922  9.841052e-01
+overlaps_ED_LD:daymiddle:tasksDualNoGo      0.751193  0.393988  6.935903e-01
+
+                                        Sig
+(Intercept)                              **
+overlaps_ED_LD
+daylast                                 ***
+daymiddle                               ***
+tasksDualGo
+tasksDualNoGo
+overlaps_ED_LD:daylast
+overlaps_ED_LD:daymiddle
+overlaps_ED_LD:tasksDualGo
+overlaps_ED_LD:tasksDualNoGo
+daylast:tasksDualGo
+daymiddle:tasksDualGo                     .
+daylast:tasksDualNoGo
+daymiddle:tasksDualNoGo
+overlaps_ED_LD:daylast:tasksDualGo
+overlaps_ED_LD:daymiddle:tasksDualGo
+overlaps_ED_LD:daylast:tasksDualNoGo
+overlaps_ED_LD:daymiddle:tasksDualNoGo
+#+end_example
+
+#+begin_src ipython
+  df = df_mice.copy()
+  df['tasks'] = df['tasks'].astype('category')
+  df['day'] = df['day'].astype('category')
+
+  formula = 'performance ~ overlaps_ED_LD * tasks + (1 + tasks | mouse)'
+
+  results = []
+  data = df.copy()
+  for day in df.day.unique():
+      data = df[df.day==day]
+      glm = Lmer(formula=formula, data=data, family='binomial')
+      glm.fit()
+      results.append(glm)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*tasks+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 1344	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -864.385 	 AIC: 1752.769
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.211  0.460
+mouse    tasksDualGo  0.000  0.005
+mouse  tasksDualNoGo  0.014  0.117
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo   1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo  -1.0
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*tasks+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 1344	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -588.714 	 AIC: 1201.429
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.907  0.952
+mouse    tasksDualGo  0.286  0.535
+mouse  tasksDualNoGo  0.028  0.166
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo -0.673
+mouse  (Intercept)  tasksDualNoGo -0.999
+mouse  tasksDualGo  tasksDualNoGo  0.643
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.00981686 (tol = 0.002, component 1)
+
+**NOTE**: Column for 'residuals' not created in model.data, but saved in model.resid only. This is because you have rows with NaNs in your data.
+
+**NOTE** Column for 'fits' not created in model.data, but saved in model.fits only. This is because you have rows with NaNs in your data.
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_ED_LD*tasks+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 960	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -315.228 	 AIC: 654.457
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  2.085  1.444
+mouse    tasksDualGo  0.385  0.621
+mouse  tasksDualNoGo  0.493  0.702
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+print(results[1].coefs)
+#+end_src
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# Assuming you already have model and model.coef()
+coefficients = {
+    'coef': model.coefs['Estimate'],
+    'lower_ci': model.coefs['2.5_ci'],
+    'upper_ci': model.coefs['97.5_ci'],
+    'p_value': model.coefs['P-val']
+}
+
+df_coefs = pd.DataFrame(coefficients)
+
+# Determine significance markers
+def significance_marker(p):
+    if p < 0.001:
+        return '**'
+    elif p < 0.01:
+        return '*'
+    elif p < 0.05:
+        return '*'
+    elif p < 0.1:
+        return '.'
+    else:
+        return ''
+
+df_coefs['marker'] = df_coefs['p_value'].apply(significance_marker)
+
+#  Plot coefficients with error bars and significance markers
+plt.figure(figsize=(10, 6))
+plt.errorbar(df_coefs.index, df_coefs['coef'], yerr=[df_coefs['coef'] - df_coefs['lower_ci'], df_coefs['upper_ci'] - df_coefs['coef']], fmt='o')
+plt.axhline(y=0, color='grey', linestyle='--')
+plt.xlabel('Coefficient')
+plt.ylabel('Estimate')
+# plt.title('Coefficient Estimates with 95% Confidence Intervals')
+plt.xticks(rotation=45, ha='right', fontsize=10)
+plt.tight_layout()
+
+# Add significance markers
+for i, (coef, marker) in enumerate(zip(df_coefs['coef'], df_coefs['marker'])):
+    plt.text(i, coef+1, f'{marker}', fontsize=22, ha='center', va='bottom')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_42.png]]
+
+#+begin_src ipython
+import pandas as pd
+
+# Assuming you have the list of results from all sessions
+combined_results = []
+
+for i, result in enumerate(results):
+    coefficients = {
+        'coef': result.coefs['Estimate'],
+        'lower_ci': result.coefs['2.5_ci'],
+        'upper_ci': result.coefs['97.5_ci'],
+        'p_value': result.coefs['P-val'],
+        'day': df.day.unique()[i]  # Add a session identifier
+    }
+    df_result = pd.DataFrame(coefficients)
+    combined_results.append(df_result)
+
+df_combined = pd.concat(combined_results)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(df_combined)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                                  coef  lower_ci  upper_ci   p_value     day
+(Intercept)                   0.745663  0.285682  1.205645  0.001487   first
+overlaps_ED_LD                0.315733 -0.091350  0.722817  0.128475   first
+tasksDualGo                  -0.182578 -0.488422  0.123267  0.241991   first
+tasksDualNoGo                -0.031592 -0.354120  0.290936  0.847756   first
+overlaps_ED_LD:tasksDualGo   -0.389952 -0.922347  0.142443  0.151124   first
+overlaps_ED_LD:tasksDualNoGo -0.182707 -0.680380  0.314967  0.471805   first
+(Intercept)                   2.249341  1.326763  3.171918  0.000002  middle
+overlaps_ED_LD                0.119874 -0.478781  0.718529  0.694718  middle
+tasksDualGo                  -0.752127 -1.432248 -0.072006  0.030199  middle
+tasksDualNoGo                -0.211258 -0.747756  0.325240  0.440245  middle
+overlaps_ED_LD:tasksDualGo   -0.095274 -0.769920  0.579371  0.781942  middle
+overlaps_ED_LD:tasksDualNoGo  0.017094 -0.779287  0.813474  0.966443  middle
+(Intercept)                   2.915941  1.448605  4.383278  0.000098    last
+overlaps_ED_LD                0.173329 -0.549904  0.896563  0.638553    last
+tasksDualGo                  -0.719469 -1.722542  0.283603  0.159779    last
+tasksDualNoGo                -0.781504 -1.809899  0.246891  0.136375    last
+overlaps_ED_LD:tasksDualGo   -0.243494 -1.212435  0.725446  0.622339    last
+overlaps_ED_LD:tasksDualNoGo -0.135101 -1.083779  0.813578  0.780155    last
+#+end_example
+
+#+begin_src ipython
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Filter the DataFrame for 'overlaps_ED_LD' coefficients
+df_filtered = df_combined[df_combined.index.get_level_values(0) == 'overlaps_ED_LD']
+
+# Create the plot
+# plt.figure(figsize=(12, 8))
+sns.lineplot(data=df_filtered, x='day', y='coef', marker='o', ci=None)
+
+# Add error bars for confidence intervals
+plt.errorbar(df_filtered['day'], df_filtered['coef'],
+             yerr=[df_filtered['coef'] - df_filtered['lower_ci'],
+                   df_filtered['upper_ci'] - df_filtered['coef']],
+             fmt='o', color='b', capsize=5)
+
+# Define significance markers
+def significance_marker(p):
+    if p < 0.001:
+        return '***'
+    elif p < 0.01:
+        return '**'
+    elif p < 0.05:
+        return '*'
+    elif p < 0.1:
+        return '.'
+    else:
+        return ''
+
+# Add significance markers to the plot
+for index, row in df_filtered.iterrows():
+    plt.text(row['day'], row['coef'], significance_marker(row['p_value']),
+             fontsize=12, ha='center', va='bottom')
+
+# Customize the plot
+plt.axhline(y=0, color='grey', linestyle='--')
+plt.xlabel('Day')
+plt.ylabel('Coefficient (overlaps_ED_LD)')
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_46.png]]
+
+
+*** Distractor
+
+#+begin_src ipython
+name = 'df_distractor_overlaps'
+df_overlaps = pkl_load(name, path="../data/mice/overlaps")
+df_overlaps['performance'] = df_overlaps['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_overlaps['pair'] = df_overlaps['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+print(df_overlaps.head())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+loading from ../data/mice/overlaps/df_distractor_overlaps.pkl
+   sample_odor  test_odor        response tasks  laser    day  dist_odor  \
+0          0.0        1.0     correct_rej   DPA    0.0  first        NaN
+1          0.0        0.0  incorrect_miss   DPA    0.0  first        NaN
+2          0.0        1.0    incorrect_fa   DPA    0.0  first        NaN
+3          0.0        0.0     correct_hit   DPA    0.0  first        NaN
+4          0.0        0.0     correct_hit   DPA    0.0  first        NaN
+
+   choice                                           overlaps    mouse  \
+0     0.0  [0.051369622349739075, -0.16439734399318695, 0...  JawsM15
+1     0.0  [0.1022411435842514, 0.17366893589496613, 0.02...  JawsM15
+2     1.0  [0.14755448698997498, 0.21186557412147522, -0....  JawsM15
+3     1.0  [-0.1233757883310318, -0.15986157953739166, -0...  JawsM15
+4     1.0  [-0.01724367029964924, -0.11547389626502991, 0...  JawsM15
+
+   performance  pair
+0            1     0
+1            0     1
+2            0     0
+3            1     1
+4            1     1
+#+end_example
+
+#+begin_src ipython
+duplicates = df_overlaps.index.duplicated()
+if duplicates.any():
+    print("Found duplicate indices. Resetting index...")
+
+    # Reset the index to remove duplicates
+    df_overlaps = df_overlaps.reset_index(drop=True)
+#+end_src
+
+#+RESULTS:
+: Found duplicate indices. Resetting index...
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+df_overlaps['DOED'] = df_overlaps['overlaps_MD'].apply(lambda x: avg_epochs(np.array(x), **options))
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3790, in Index.get_loc(self, key)
+   3789 try:
+-> 3790     return self._engine.get_loc(casted_key)
+   3791 except KeyError as err:
+
+File index.pyx:152, in pandas._libs.index.IndexEngine.get_loc()
+
+File index.pyx:181, in pandas._libs.index.IndexEngine.get_loc()
+
+File pandas/_libs/hashtable_class_helper.pxi:7080, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+File pandas/_libs/hashtable_class_helper.pxi:7088, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+KeyError: 'overlaps_MD'
+
+The above exception was the direct cause of the following exception:
+
+KeyError                                  Traceback (most recent call last)
+Cell In[269], line 2
+      1 options['epochs'] = ['ED']
+----> 2 df_overlaps['DOED'] = df_overlaps['overlaps_MD'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py:3893, in DataFrame.__getitem__(self, key)
+   3891 if self.columns.nlevels > 1:
+   3892     return self._getitem_multilevel(key)
+-> 3893 indexer = self.columns.get_loc(key)
+   3894 if is_integer(indexer):
+   3895     indexer = [indexer]
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3797, in Index.get_loc(self, key)
+   3792     if isinstance(casted_key, slice) or (
+   3793         isinstance(casted_key, abc.Iterable)
+   3794         and any(isinstance(x, slice) for x in casted_key)
+   3795     ):
+   3796         raise InvalidIndexError(key)
+-> 3797     raise KeyError(key) from err
+   3798 except TypeError:
+   3799     # If we have a listlike key, _check_indexing_error will raise
+   3800     #  InvalidIndexError. Otherwise we fall through and re-raise
+   3801     #  the TypeError.
+   3802     self._check_indexing_error(key)
+
+KeyError: 'overlaps_MD'
+#+end_example
+:END:
+
+#+begin_src ipython
+import seaborn as sns
+sns.lineplot(data=df_mice, x='day', y='overlaps_MD_ED', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'])
+
+plt.xlabel('Day')
+plt.ylabel('Late Sample Overlap')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+#+begin_src ipython
+df = df[df.mouse == 'JawsM15']
+mean_overlaps_by_day = df.groupby('day')['overlaps_MD'].apply(lambda x: np.stack(x)).reset_index()
+plt.plot(np.mean(np.array(mean_overlaps_by_day.overlaps_MD[0]), 0))
+plt.plot(np.mean(np.array(mean_overlaps_by_day.overlaps_MD[1]), 0))
+plt.plot(np.mean(np.array(mean_overlaps_by_day.overlaps_MD[2]), 0))
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+| <matplotlib.lines.Line2D | at | 0x7fc48f2a3d10> |
+[[./figures/landscape/figure_35.png]]
+:END:
+
+#+begin_src ipython
+df = df_mice[df_mice.tasks=='DualGo'].copy()
+df = df[df.mouse == 'JawsM15']
+print(df.day.unique())
+
+mean_overlaps_by_day = df.groupby('day')['overlaps_MD'].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+mean_overlaps_df = pd.DataFrame(mean_overlaps_by_day.tolist(), index=mean_overlaps_by_day.index)
+
+# Plotting
+for idx, row in mean_overlaps_df.iterrows():
+    plt.plot(np.linspace(0, 14, 84), row, label=f"Day {idx}")
+
+plt.xlabel('Time (s)')
+plt.ylabel('Overlap')
+plt.legend(fontsize=10)
+add_vlines()
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: ['first' 'middle' 'last']
+[[./figures/landscape/figure_36.png]]
+:END:
+
+#+begin_src ipython
+import seaborn as sns
+sns.lineplot(data=df_mice, x='day', y='overlaps_MD_ED', hue='tasks', marker='o', legend=0)
+
+# Set plot labels and title
+plt.xlabel('Day')
+plt.ylabel('Behavior')
+plt.title('Behavior vs Day per Task')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_36.png]]
+
+#+begin_src ipython
+
+#+end_src
+#+begin_src ipython
+
+#+end_src
+
+#+begin_src ipython
+  labels_dist = []
+  options['features'] = 'distractor'
+  options['epochs'] = ['MD']
+  options['scoring'] = overlaps_scorer
+
+  tasks = ['DPA', 'Dual']
+  for task in tasks:
+    options['task'] = task
+
+    labels_dist_task = []
+    dum=0
+    for day in days:
+        options['day'] = day
+
+        labels = get_classification(None, RETURN='labels', **options)
+        if (day == 'last') and ('ACC' in options['mouse']):
+            labels = pd.concat((labels, labels))
+        labels_dist_task.append(labels)
+
+        dum = 1
+        options['reload'] = 0
+
+    labels_dist.append(labels_dist_task)
+    #+end_src
+
+#+RESULTS:
+:RESULTS:
+: X_S1 (32, 113, 84) X_S2 (32, 113, 84)
+: X_test (64, 113, 84) y_test (64,)
+: X_S1 (64, 113, 84) X_S2 (64, 113, 84)
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+~/tmp/ipykernel_1548688/3157255210.py in ?()
+     11   dum=0
+     12   for day in days:
+     13       options['day'] = day
+     14
+---> 15       labels = get_classification(None, RETURN='labels', **options)
+     16       if (day == 'last') and ('ACC' in options['mouse']):
+     17           labels = pd.concat((labels, labels))
+     18       labels_dist_task.append(labels)
+
+~/dual_task/dual_data/src/torch/main.py in ?(model, RETURN, **options)
+    112         return coefs, bias
+    113     elif 'labels' in RETURN:
+    114         if IF_COMPO:
+    115             idx_Go = (y==0) | (y==2)
+--> 116             labels_Go = y_labels[idx_Go]
+    117             labels_NoGo = y_labels[~idx_Go]
+    118             y_labels = pd.concat((labels_Go, labels_NoGo))
+    119
+
+~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py in ?(self, key)
+   3880             return self.where(key)
+   3881
+   3882         # Do we have a (boolean) 1d indexer?
+   3883         if com.is_bool_indexer(key):
+-> 3884             return self._getitem_bool_array(key)
+   3885
+   3886         # We are left with two options: a single key, and a collection of keys,
+   3887         # We interpret tuples as collections only for non-MultiIndex
+
+~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py in ?(self, key)
+   3930                 UserWarning,
+   3931                 stacklevel=find_stack_level(),
+   3932             )
+   3933         elif len(key) != len(self.index):
+-> 3934             raise ValueError(
+   3935                 f"Item wrong length {len(key)} instead of {len(self.index)}."
+   3936             )
+   3937
+
+ValueError: Item wrong length 128 instead of 64.
+#+end_example
+:END:

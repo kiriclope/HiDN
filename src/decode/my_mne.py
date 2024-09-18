@@ -734,12 +734,6 @@ def my_cross_val_multiscore(
         for ii, (train, test) in enumerate(cv_iter)
     )
 
-    # for ii, (train, test) in enumerate(cv_iter):
-    #     for i in range(10):
-    #         print(ii, i,'scores', np.array(scores[ii][0][i]).shape)
-
-    # print('scores', np.array(scores).shape)
-
     return np.array(scores)[:, 0, ...]  # flatten over joblib output.
 
 # This verbose is necessary to properly set the verbosity level

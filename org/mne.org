@@ -14,10 +14,13 @@
 #+end_src
 
 #+RESULTS:
+:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
 
 * Imports
 
@@ -78,7 +81,7 @@
   # ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
 
   kwargs = {
-      'mouse': 'ACCM04', 'laser': 0,
+      'mouse': 'JawsM15', 'laser': 0,
       'trials': '', 'reload': 0, 'data_type': 'dF',
       'prescreen': None, 'pval': 0.05,
       'preprocess': False, 'scaler_BL': 'robust',
@@ -350,7 +353,7 @@ options['scoring'] = overlaps_scorer
 #+end_src
 
 #+RESULTS:
-: Loading files from /home/leon/dual_task/dual_data/data/ACCM04
+: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
 
 *** Dual
 
@@ -365,9 +368,9 @@ options['scoring'] = overlaps_scorer
 #+RESULTS:
 : DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
 : multiple days 0 2 2
-: X_S1 (128, 113, 84) X_S2 (128, 113, 84)
-: X (256, 113, 84) y (256,)
-: 64
+: X_S1 (64, 693, 84) X_S2 (64, 693, 84)
+: X (128, 693, 84) y (128,)
+: 32
 
 #+begin_src ipython
 options['epochs'] = ['MD']
@@ -381,9 +384,7 @@ print('X_avg', X_avg.shape, 'y_avg', y_avg.shape)
 #+end_src
 
 #+RESULTS:
-: (256, 113)
-: (1, 256, 113)
-: X_avg (256, 113) y_avg (256,)
+: X_avg (128, 693) y_avg (128,)
 
 #+begin_src ipython
 model.fit(X_avg, y_avg)
@@ -397,8 +398,8 @@ print('scores', scores_dual.shape)
 #+end_src
 
 #+RESULTS:
-: X_test==X True
-: scores (256, 84, 84)
+: X_test==X_train
+: scores (128, 84, 84)
 
 #+begin_src ipython
 if (scores_dual.shape[0] == 256) or (scores_dual.shape[0]==128):
@@ -411,7 +412,7 @@ if (scores_dual.shape[0] == 256) or (scores_dual.shape[0]==128):
 #+end_src
 
 #+RESULTS:
-: (128, 2, 84, 84)
+: (64, 2, 84, 84)
 
 *** DPA
 
@@ -425,8 +426,8 @@ if (scores_dual.shape[0] == 256) or (scores_dual.shape[0]==128):
 #+RESULTS:
 : DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
 : multiple days 0 2 2
-: X_S1 (64, 113, 84) X_S2 (64, 113, 84)
-: X_DPA (128, 113, 84) y_DPA (128,)
+: X_S1 (32, 693, 84) X_S2 (32, 693, 84)
+: X_DPA (64, 693, 84) y_DPA (64,)
 
 #+begin_src ipython
 scores_DPA = model.get_cv_scores(X, y, scoring=options['scoring'], IF_GEN=1, IF_COMPO=1, X_test=X_DPA, y_test=y_DPA, cv=LeaveOneOut())
@@ -434,7 +435,7 @@ print(scores_DPA.shape)
 #+end_src
 
 #+RESULTS:
-: (128, 84, 84)
+: (64, 84, 84)
 
 *** Summary
 
@@ -444,8 +445,8 @@ print(scores_DPA.shape)
 #+end_src
 
 #+RESULTS:
-: (128, 2, 84, 84)
-: (128, 84, 84)
+: (64, 2, 84, 84)
+: (64, 84, 84)
 
 #+begin_src ipython
 scores = np.concatenate((scores_DPA[:, np.newaxis], scores_dual), axis=1)
@@ -454,7 +455,7 @@ print(scores.shape)
 #+end_src
 
 #+RESULTS:
-: (128, 3, 84, 84)
+: (64, 3, 84, 84)
 
 #+begin_src ipython :tangle ../src/torch/utils.py
   import pickle as pkl
@@ -475,7 +476,6 @@ pkl_save(scores, '%s_scores_%s' % (options['mouse'], options['day']))
 #+end_src
 
 #+RESULTS:
-
 
 * Plots
 
@@ -513,7 +513,7 @@ pkl_save(scores, '%s_scores_%s' % (options['mouse'], options['day']))
 #+RESULTS:
 
 #+begin_src ipython
-  scores = distractor_overlaps[0]
+  # scores = distractor_overlaps[0]
 
   print(scores.shape)
   fig, ax = plt.subplots(1, 3, figsize= [2.5 * width, 1.5*height])
@@ -524,7 +524,7 @@ pkl_save(scores, '%s_scores_%s' % (options['mouse'], options['day']))
 
 #+RESULTS:
 :RESULTS:
-: (128, 3, 84, 84)
+: (64, 3, 84, 84)
 [[./figures/landscape/figure_35.png]]
 :END:
 
@@ -548,7 +548,7 @@ print(scores_MD.shape)
 #+end_src
 
 #+RESULTS:
-: (128, 3, 84)
+: (64, 3, 84)
 
 #+begin_src ipython
 from scipy.stats import sem, t
@@ -624,7 +624,6 @@ ci = my_boots_ci(scores_MD, np.mean, n_samples=100000)
 #+end_src
 
 #+RESULTS:
-: (3, 84)
 : (2, 3, 84)
 : (3, 84)
 
@@ -643,6 +642,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
+[[./figures/landscape/figure_42.png]]
 
 #+begin_src ipython
 

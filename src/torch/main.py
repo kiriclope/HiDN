@@ -1,5 +1,6 @@
 # import torch
 import numpy as np
+import pandas as pd
 from time import perf_counter
 from src.common.get_data import get_X_y_days, get_X_y_S1_S2
 from src.preprocess.helpers import avg_epochs
@@ -9,8 +10,6 @@ def map_values(row):
     if np.isnan(row['dist_odor']):
         return np.nan
     return row['sample_odor'] * 2 + row['dist_odor']
-
-# Apply the function to each row
 
 def convert_seconds(seconds):
     h = seconds // 3600
@@ -54,7 +53,13 @@ def get_classification(model, RETURN='overlaps', **options):
 
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     if y_labels is None:
-        y_labels = y.copy()
+        if options['features'] == 'distractor':
+            y_labels = y.copy().dropna()
+        else:
+            y_labels = y.copy()
+
+    print('y_labels', y_labels.tasks.unique())
+
     y = y_to_arr(y, **options)
 
     if options['verbose']:
@@ -85,16 +90,32 @@ def get_classification(model, RETURN='overlaps', **options):
         scores = model.get_cv_scores(X, y, options['scoring'], X_test=X_test, y_test=y_test, IF_GEN=IF_GEN, IF_COMPO=IF_COMPO, cv=options['cv'])
         print('scores', scores.shape)
 
-        if options['features'] == 'distractor':
-            if IF_COMPO==0:
-                idx_Go = (y==0) | (y==2)
-                scores_Go = scores[idx_Go]
-                scores_NoGo = scores[~idx_Go]
-                scores = np.stack((scores_Go, scores_NoGo), 1)
-            else:
-                scores = scores[:, np.newaxis]
+        # if options['features'] == 'distractor':
+        #     if IF_COMPO==0:
+        #         idx_Go = (y==0) | (y==2)
+        #         scores_Go = scores[idx_Go]
+        #         scores_NoGo = scores[~idx_Go]
+        #         scores = np.stack((scores_Go, scores_NoGo), 1)
+        #     else:
+        #         scores = scores[:, np.newaxis]
 
-        print('scores', scores.shape)
+        #     print('scores', scores.shape)
+
+        if 'df' in RETURN:
+            if IF_GEN:
+                scores_list = scores.reshape(-1, 84 * 84).tolist()
+            else:
+                scores_list = scores.reshape(-1, 84).tolist()
+
+            df = pd.DataFrame({'overlaps': scores_list}).reset_index(drop=True)
+            print(df.shape, y_labels.shape)
+            print('y_labels', y_labels.tasks.unique())
+            y_labels['day'] = options['day']
+
+            labels = pd.concat([y_labels.reset_index(drop=True), df], axis=1)
+            print('df', labels.shape)
+            return labels
+
         end = perf_counter()
         print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
         return scores
