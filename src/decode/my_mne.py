@@ -589,11 +589,7 @@ def my_cross_val_compo_score(
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
     cv_train = list(cv.split(X, y, groups))
 
-    try:
-        y[y==2] = 0
-        y[y==3] = 1
-    except:
-        pass
+    y = y % 2
 
     cv_test = list(cv.split(X2, y2, groups))
 
@@ -693,11 +689,9 @@ def my_cross_val_multiscore(
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
     cv_iter = list(cv.split(X, y, groups))
 
-    try:
-        y[y==2] = 0
-        y[y==3] = 1
-    except:
-        pass
+    y = y % 2
+    # y[y==2] = 0
+    # y[y==3] = 1
 
     y2 = y.copy()
 
@@ -838,8 +832,9 @@ def _score(estimator, X_test, y_test, scorer):
         idx_Go = (y_test==0) | (y_test==2)
 
         y = y_test.copy()
-        y[y==2] = 0
-        y[y==3] = 1
+        y = y % 2
+        # y[y==2] = 0
+        # y[y==3] = 1
 
         # print(y[idx_Go].shape, y[~idx_Go].shape)
 

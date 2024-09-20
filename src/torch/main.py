@@ -68,11 +68,9 @@ def get_classification(model, RETURN='overlaps', **options):
     X_avg = avg_epochs(X, **options).astype('float32')
     y_avg = y.copy()
 
-    try:
-        y_avg[y_avg==2]=0
-        y_avg[y_avg==3]=1
-    except:
-        pass
+    y_avg = y_avg % 2
+    # y_avg[y_avg==2]=0
+    # y_avg[y_avg==3]=1
 
     # if options['class_weight']:
     #         pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
@@ -103,9 +101,9 @@ def get_classification(model, RETURN='overlaps', **options):
 
         if 'df' in RETURN:
             if IF_GEN:
-                scores_list = scores.reshape(-1, 84 * 84).tolist()
+                scores_list = scores.reshape(-1, X.shape[-1] * X.shape[-1]).tolist()
             else:
-                scores_list = scores.reshape(-1, 84).tolist()
+                scores_list = scores.reshape(-1, X.shape[-1]).tolist()
 
             df = pd.DataFrame({'overlaps': scores_list}).reset_index(drop=True)
             print(df.shape, y_labels.shape)

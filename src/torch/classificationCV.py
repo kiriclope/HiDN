@@ -202,7 +202,7 @@ class ClassificationCV:
         if X_test is None:
             X_test = X
             y_test = y
-            print('X_test==X_train')
+            # print('X_test==X_train')
 
         start = perf_counter()
         if self.verbose:

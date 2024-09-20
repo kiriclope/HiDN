@@ -497,7 +497,8 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
     idx_days = True
     if isinstance(kwargs["day"], str):
-        print("multiple days", kwargs["n_discard"], kwargs["n_first"], kwargs["n_middle"])
+        print("multiple days, discard", kwargs["n_discard"],
+              'first', kwargs["n_first"], 'middle', kwargs["n_middle"])
         if kwargs["day"] == "first":
             idx_days = (y.day > kwargs["n_discard"]) & (y.day <= kwargs["n_first"] + kwargs["n_discard"])
 
