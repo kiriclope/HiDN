@@ -198,7 +198,7 @@ def set_options(**kwargs):
         opts["n_first"] = 2  # 3 or 2
         opts["n_middle"] = 2  # 0 or 2
 
-    if len(opts["days"])>3:
+    if len(opts["days"])>3 or opts["days"]=='all':
         opts["days"] = np.arange(1, opts['n_days']+1)
 
     if opts["day"] == "first":

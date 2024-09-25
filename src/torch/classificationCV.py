@@ -65,32 +65,43 @@ class ClassificationCV:
             )
 
         self.params = params
-        self.verbose = kwargs["verbose"]
         self.n_jobs = kwargs["n_jobs"]
+
+        # Parameter grid for gridsearch of hyperparameters
+        # see https://scikit-learn.org/stable/modules/grid_search.html#grid-search
+        self.params = params
+        self.grid = GridSearchCV(
+            self.model,
+            self.params,
+            refit=True,
+            cv=self.cv,
+            scoring=self.scoring,
+            n_jobs=self.n_jobs,
+        )
+
+        # By default sets best_model to the grid to perform nested CV.
+        # This is overwritten when calling the fit method.
+        self.best_model = clone(self.grid)
+
+        self.verbose = kwargs["verbose"]
 
     def fit(self, X, y):
         start = perf_counter()
         if self.verbose:
             print("Fitting hyperparameters ...")
 
-        grid = GridSearchCV(
-            self.model,
-            self.params,
-            refit=True,
-            cv=self.cv,
-            scoring=self.hp_scoring,
-            n_jobs=self.n_jobs,
-        )
-        grid.fit(X.astype("float32"), y.astype("float32"))
+        self.grid.fit(X.astype("float32"), y.astype("float32"))
+
         end = perf_counter()
+
         if self.verbose:
             print(
                 "Elapsed (with compilation) = %dh %dm %ds"
                 % convert_seconds(end - start)
             )
 
-        self.best_model = grid.best_estimator_
-        self.best_params = grid.best_params_
+        self.best_model = self.grid.best_estimator_
+        self.best_params = self.grid.best_params_
 
         if self.verbose:
             print(self.best_params)
