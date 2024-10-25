@@ -178,7 +178,7 @@ def plot_bump(X, y, trial, windowSize=10, width=7):
         ax[i].set_xlim([0, 12])
 
     cbar = plt.colorbar(im, ax=ax[1])
-    cbar.set_label("<Norm. Fluo>")
+    cbar.set_label("Norm. Fluo")
     cbar.set_ticks([-0.5, 0.0, 0.5, 1.0, 1.5])
 
 if __name__ == "__main__":

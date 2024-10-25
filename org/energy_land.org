@@ -65,99 +65,6 @@
 #+RESULTS:
 
 * Helpers
-** Perceptron
-
-#+begin_src ipython :tangle ../src/torch/percetron.py
-  import torch
-  import torch.nn as nn
-
-  class CustomBCEWithLogitsLoss(nn.BCEWithLogitsLoss):
-      def __init__(self, pos_weight=None, weight=None, reduction='mean'):
-          super(CustomBCEWithLogitsLoss, self).__init__(weight=weight, reduction=reduction, pos_weight=pos_weight)
-
-      def forward(self, input, target):
-          target = target.view(-1, 1)  # Make sure target shape is (n_samples, 1)
-          return super().forward(input.to(torch.float32), target.to(torch.float32))
-#+end_src
-
-#+RESULTS:
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/perceptron.py
-  class Perceptron(nn.Module):
-      def __init__(self, num_features, dropout_rate=0.0):
-          super(Perceptron, self).__init__()
-          self.linear = nn.Linear(num_features, 1)
-          self.dropout = nn.Dropout(dropout_rate)
-
-      def forward(self, x):
-          x = self.dropout(x)
-          hidden = self.linear(x)
-          return hidden
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/perceptron.py
-  class MLP(nn.Module):
-      def __init__(self, num_features, hidden_units=64, dropout_rate=0.5):
-          super(MLP, self).__init__()
-          self.linear = nn.Linear(num_features, hidden_units)
-          self.dropout = nn.Dropout(dropout_rate)
-          self.relu = nn.ReLU()
-          self.linear2 = nn.Linear(hidden_units, 1)
-
-      def forward(self, x):
-          x = self.dropout(x)
-          x = self.relu(self.linear(x))
-          x = self.dropout(x)
-          hidden = self.linear2(x)
-          return hidden
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/skorch.py
-  import torch
-  from skorch import NeuralNetClassifier
-  from skorch.callbacks import Callback
-  from skorch.callbacks import EarlyStopping
-
-  early_stopping = EarlyStopping(
-      monitor='train_loss',    # Metric to monitor
-      patience=10,              # Number of epochs to wait for improvement
-      threshold=0.001,       # Minimum change to qualify as an improvement
-      threshold_mode='rel',    # 'rel' for relative change, 'abs' for absolute change
-      lower_is_better=True     # Set to True if lower metric values are better
-  )
-
-  class RegularizedNet(NeuralNetClassifier):
-      def __init__(self, module, alpha=0.001, l1_ratio=0.95, **kwargs):
-          self.alpha = alpha  # Regularization strength
-          self.l1_ratio = l1_ratio # Balance between L1 and L2 regularization
-
-          super().__init__(module, **kwargs)
-
-      def get_loss(self, y_pred, y_true, X=None, training=False):
-          # Call super method to compute primary loss
-          if y_pred.shape != y_true.shape:
-              y_true = y_true.unsqueeze(-1)
-
-          loss = super().get_loss(y_pred, y_true, X=X, training=training)
-
-          if self.alpha>0:
-              elastic_net_reg = 0
-              for param in self.module_.parameters():
-                  elastic_net_reg += self.alpha * self.l1_ratio * torch.sum(torch.abs(param))
-                  elastic_net_reg += self.alpha * (1 - self.l1_ratio) * torch.sum(param ** 2)
-
-          # Add the elastic net regularization term to the primary loss
-          return loss + elastic_net_reg
-#+end_src
-
-#+RESULTS:
-
 ** Model
 #+begin_src ipython
   def get_bagged_coefs(clf, n_estimators):
@@ -461,7 +368,7 @@
 
 
   def pkl_load(name, path="."):
-      return pkl.load(open(path + "/" + name, "rb"))
+      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
 
 #+end_src
 
@@ -630,74 +537,58 @@
 * Parameters
 
 #+begin_src ipython
-    DEVICE = 'cuda:0'
-    mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-    N_NEURONS = [668, 693, 444, 361, 113]
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
 
-    tasks = ['DPA', 'DualGo', 'DualNoGo']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12']
+  # mice = ['PP09', 'PP17']
 
-    kwargs = {
-        'mouse': 'JawsM15',
-        'trials': '', 'reload': 0, 'data_type': 'dF',
-        'preprocess': False, 'scaler_BL': 'robust',
-        'avg_noise':True, 'unit_var_BL': False,
-        'random_state': None, 'T_WINDOW': 0.0,
-        'l1_ratio': 0.95,
-        'n_comp': None, 'scaler': None,
-        'bootstrap': 1, 'n_boots': 1024,
-        'n_splits': 5, 'n_repeats': 32,
-        'class_weight': 1
-    }
+  kwargs = {
+      'mouse': mice[1], 'laser': 0,
+      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 5, 'n_repeats': 16,
+      'class_weight': 0,
+      'multilabel':0,
+      'mne_estimator':'generalizing', # sliding or generalizing
+      'n_jobs': 128,
+  }
 
-    options = set_options(**kwargs)
-    days = np.arange(1, options['n_days']+1)
-    days = ['first', 'last']
+  # kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'last']
+  # kwargs['days'] = 'all'
+  options = set_options(**kwargs)
 
-    safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
-    options['scoring'] = safe_roc_auc
-    options['n_jobs'] = 30
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+
+  # options['hp_scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
+  options['hp_scoring'] = safe_roc_auc
+  options['scoring'] = options['hp_scoring']
+  options['cv'] = None
 #+end_src
 
 #+RESULTS:
 
-* Decoding vs days
+* Landscape vs days
 
 #+begin_src ipython
-    net = RegularizedNet(
-        module=Perceptron,
-        module__num_features=693,
-        module__dropout_rate=0.0,
-        alpha=0.01,
-        l1_ratio=options['l1_ratio'],
-        criterion=CustomBCEWithLogitsLoss,
-        criterion__pos_weight=torch.tensor(1.0, device=DEVICE).to(torch.float32),
-        optimizer=optim.Adam,
-        optimizer__lr=0.1,
-        max_epochs=1000,
-        callbacks=[early_stopping],
-        train_split=None,
-        iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
-        verbose=0,
-        device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
-        compile=True,
-        warm_start=True,
-    )
-
-    params = { 'net__alpha': np.logspace(-4, 4, 10),
-               # 'net__l1_ratio': np.linspace(0, 1, 10),
-               # 'net__module__dropout_rate': np.linspace(0, 1, 10),
-              }
-
-    options['verbose'] = 0
-    model = ClassificationCV(net, params, **options)
-    options['verbose'] = 1
-  #+end_src
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.classify import get_classification
+#+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
     from sklearn.linear_model import LogisticRegression
-    net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+    net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None, tol=0.001)
     # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
 
     params = {'net__C': np.logspace(-3, 3, 10)}
@@ -722,7 +613,7 @@
     theta_day = []
     index_day = []
 
-    for day in days:
+    for day in options['days']:
         options['day'] = day
 
         options['class_weight'] = 0
@@ -731,7 +622,7 @@
         options['epochs'] = ['ED']
         coefs, bias = get_classification(model, RETURN='coefs', **options)
 
-        coefs_sample.append(coefs)
+        coefs_sample.append(coefs[:, 0])
         bias_sample.append(bias)
 
         options['task'] = 'Dual'
@@ -739,7 +630,7 @@
         options['epochs'] = ['MD']
         coefs, bias = get_classification(model, RETURN='coefs', **options)
 
-        coefs_dist.append(coefs)
+        coefs_dist.append(coefs[:, 0])
         bias_dist.append(bias)
 
         # options['class_weight'] = 1
@@ -757,109 +648,46 @@
 
     coefs_save = np.stack((coefs_sample, coefs_dist))
     print(coefs_save.shape)
-    pkl_save(coefs_sample, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+    pkl_save(coefs_save, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
     #+end_src
 
 #+RESULTS:
-:RESULTS:
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-: PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-: DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-: multiple days, discard 0 first 3 middle 0
-: X_S1 (144, 693, 84) X_S2 (144, 693, 84)
-: X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-: X (288, 693, 84) y (288, 8)
-# [goto error]
 #+begin_example
----------------------------------------------------------------------------
-ValueError                                Traceback (most recent call last)
-Cell In[22], line 19
-     17 options['features'] = 'sample'
-     18 options['epochs'] = ['ED']
----> 19 coefs, bias = get_classification(model, RETURN='coefs', **options)
-     21 coefs_sample.append(coefs)
-     22 bias_sample.append(bias)
-
-Cell In[9], line 34, in get_classification(model, RETURN, **options)
-     31         print('imbalance', pos_weight)
-     32         model.criterion__pos_weight = pos_weight
----> 34 model.fit(X_avg, y)
-     36 if 'scores' in RETURN:
-     37     scores = model.get_cv_scores(X, y, options['scoring'])
-
-Cell In[8], line 49, in ClassificationCV.fit(self, X, y)
-     46     pass
-     48 grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
----> 49 grid.fit(X.astype('float32'), y.astype('float32'))
-     50 end = perf_counter()
-     51 if self.verbose:
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/generic.py:6534, in NDFrame.astype(self, dtype, copy, errors)
-   6530     results = [ser.astype(dtype, copy=copy) for _, ser in self.items()]
-   6532 else:
-   6533     # else, only a single dtype is given
--> 6534     new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
-   6535     res = self._constructor_from_mgr(new_data, axes=new_data.axes)
-   6536     return res.__finalize__(self, method="astype")
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/internals/managers.py:414, in BaseBlockManager.astype(self, dtype, copy, errors)
-    411 elif using_copy_on_write():
-    412     copy = False
---> 414 return self.apply(
-    415     "astype",
-    416     dtype=dtype,
-    417     copy=copy,
-    418     errors=errors,
-    419     using_cow=using_copy_on_write(),
-    420 )
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/internals/managers.py:354, in BaseBlockManager.apply(self, f, align_keys, **kwargs)
-    352         applied = b.apply(f, **kwargs)
-    353     else:
---> 354         applied = getattr(b, f)(**kwargs)
-    355     result_blocks = extend_blocks(applied, result_blocks)
-    357 out = type(self).from_blocks(result_blocks, self.axes)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/internals/blocks.py:616, in Block.astype(self, dtype, copy, errors, using_cow)
-    596 """
-    597 Coerce to the new dtype.
-    598
-   (...)
-    612 Block
-    613 """
-    614 values = self.values
---> 616 new_values = astype_array_safe(values, dtype, copy=copy, errors=errors)
-    618 new_values = maybe_coerce_values(new_values)
-    620 refs = None
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/dtypes/astype.py:238, in astype_array_safe(values, dtype, copy, errors)
-    235     dtype = dtype.numpy_dtype
-    237 try:
---> 238     new_values = astype_array(values, dtype, copy=copy)
-    239 except (ValueError, TypeError):
-    240     # e.g. _astype_nansafe can fail on object-dtype of strings
-    241     #  trying to convert to float
-    242     if errors == "ignore":
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/dtypes/astype.py:183, in astype_array(values, dtype, copy)
-    180     values = values.astype(dtype, copy=copy)
-    182 else:
---> 183     values = _astype_nansafe(values, dtype, copy=copy)
-    185 # in pandas we don't store numpy str dtypes, so convert to object
-    186 if isinstance(dtype, np.dtype) and issubclass(values.dtype.type, str):
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/dtypes/astype.py:134, in _astype_nansafe(arr, dtype, copy, skipna)
-    130     raise ValueError(msg)
-    132 if copy or arr.dtype == object or dtype == object:
-    133     # Explicit copy, or required since NumPy can't view from / to object.
---> 134     return arr.astype(dtype, copy=True)
-    136 return arr.astype(dtype, copy=copy)
-
-ValueError: could not convert string to float: 'correct_rej'
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+multiple days, discard 0 first 3 middle 0
+X_S1 (95, 693, 84) X_S2 (100, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+y_labels (195, 8) ['DualNoGo' 'DualGo' 'DPA']
+X (195, 693, 84) y (195,) [0. 1.]
+Elapsed (with compilation) = 0h 0m 8s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
+multiple days, discard 0 first 3 middle 0
+X_S1 (55, 693, 84) X_S2 (70, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+y_labels (125, 8) ['DualGo' 'DualNoGo']
+X (125, 693, 84) y (125,) [0. 1. 2. 3.]
+Elapsed (with compilation) = 0h 0m 2s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+multiple days, discard 0 first 3 middle 0
+X_S1 (124, 693, 84) X_S2 (125, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+y_labels (249, 8) ['DualGo' 'DualNoGo' 'DPA']
+X (249, 693, 84) y (249,) [0. 1.]
+Elapsed (with compilation) = 0h 0m 3s
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
+multiple days, discard 0 first 3 middle 0
+X_S1 (78, 693, 84) X_S2 (82, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+y_labels (160, 8) ['DualGo' 'DualNoGo']
+X (160, 693, 84) y (160,) [0. 1. 2. 3.]
+Elapsed (with compilation) = 0h 0m 2s
+(2, 2, 693)
 #+end_example
-:END:
 
-* Landscape vs days
 ** Reload data
 
 #+begin_src ipython
@@ -871,7 +699,7 @@ ValueError: could not convert string to float: 'correct_rej'
   y_list = []
   tasks = ["DPA", "DualGo", "DualNoGo"]
 
-  for i, day in enumerate(days):
+  for i, day in enumerate(options['days']):
       X_dum = []
       y_dum = []
       options['day'] = day
@@ -882,7 +710,7 @@ ValueError: could not convert string to float: 'correct_rej'
           y_data[y_data==-1] = 0
           print(X_data.shape)
           X_dum.append(X_data[..., index_day[i], :])
-          y_dum.append(y_data)
+          y_dum.append(y_data.sample_odor.to_numpy())
 
       X_list.append(X_dum)
       y_list.append(y_dum)
@@ -899,52 +727,220 @@ ValueError: could not convert string to float: 'correct_rej'
 #+RESULTS:
 #+begin_example
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
 DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-(64, 693, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+(96, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-(64, 693, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+(96, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
 DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-(64, 693, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+(96, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
 DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-(64, 693, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+(96, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
 DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-(64, 693, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+(96, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
 DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-(3, 3, 64, 693, 84) (3, 3, 64)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 693, 84) X_S2 (48, 693, 84)
+X_S3 (0, 693, 84) X_S4 (0, 693, 84)
+(96, 693, 84)
+(2, 3, 96, 693, 84) (2, 3, 96)
 #+end_example
+
+#+begin_src ipython
+print(X_list.shape, y_list.shape)
+print(np.array(X_list[0]).mean(0).shape)
+#+end_src
+
+#+RESULTS:
+: (2, 3, 96, 693, 84) (2, 3, 96)
+: (96, 693, 84)
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+
+def add_vdashed(ax=None, y0=693, mouse=""):
+    # Define time intervals
+    t_STIM = [2, 3]
+    t_DIST = [4.5, 5.5]
+    t_CUE = [6.5, 7]
+    t_TEST = [9, 10]
+
+    # Add vertical dashed lines and text labels for each interval
+    if ax is not None:
+        # Draw vertical lines
+        for t in [t_STIM, t_DIST, t_CUE, t_TEST]:
+            ax.axvline(x=t[0], linestyle='--', color='k', lw=2)
+            ax.axvline(x=t[1], linestyle='--', color='k', lw=2)
+
+        # Add text labels at the middle of each interval
+        ax.text((t_STIM[0] + t_STIM[1]) / 2, y0, 'STIM', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+        ax.text((t_DIST[0] + t_DIST[1]) / 2, y0, 'DIST', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+        ax.text((t_CUE[0] + t_CUE[1]) / 2, y0, 'CUE', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+        ax.text((t_TEST[0] + t_TEST[1]) / 2, y0, 'TEST', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_bump(X, y, trial, windowSize=10, width=7, s=0):
+    golden_ratio = (5**.5 - 1) / 2
+
+    fig, ax = plt.subplots(1, 3, figsize= [3*width * 1.25, width * golden_ratio], sharex=True)
+    sample = [0, 1]
+
+    for i in range(3):
+        if i==0:
+            rng = np.random.default_rng()
+            X_sample = X[y == sample[s]]
+            rng.shuffle(X_sample, axis=1)
+        else:
+            X_sample = X[y == sample[s]]
+
+        if windowSize != 0:
+            X_scaled = circcvl(X_sample, windowSize, axis=1)
+        else:
+            X_scaled = X_sample
+
+        if trial == "all":
+            X_ = np.mean(X_scaled, 0)
+        else:
+            if i==2:
+                X_ = np.mean(X_scaled, 0)
+            else:
+                X_ = X_scaled[trial]
+
+        if i>0:
+            im = ax[i].imshow(
+                # X_,
+                np.roll(X_, int(X_.shape[0]/2)+windowSize//2, axis=0),
+                # interpolation="lanczos",
+                # origin="lower",
+                cmap="jet",
+                extent=[0, 14, 0, 360],
+                # vmin=-1,
+                # vmax=2,
+                aspect="auto",  #
+            )
+        else:
+            im = ax[i].imshow(
+                # X_,
+                np.roll(X_, int(X_.shape[0]/2)+windowSize//2, axis=0),
+                # interpolation="lanczos",
+                origin="lower",
+                cmap="jet",
+                extent=[0, 14, 0, X_.shape[0]],
+                # vmin=-1.5,
+                # vmax=2,
+                aspect="auto",
+            )
+
+        # if i==0:
+        #     ax[i].set_title('Unordered')
+        # else:
+        #     ax[i].set_title('Ordered')
+
+        ax[i].set_xlabel("Time (s)")
+        if i == 0:
+            ax[i].set_ylabel("Neuron #")
+        else:
+            ax[i].set_ylabel("Pref. Location (°)")
+            ax[i].set_yticks([0, 90, 180, 270, 360])
+
+        ax[i].set_xlim([0, 12])
+        if i==0:
+            add_vdashed(ax[i], y0=X_.shape[0]+10)
+        else:
+            add_vdashed(ax[i], y0=370)
+
+    # cbar = plt.colorbar(im, ax=ax[2])
+    # cbar.set_label("Norm. Fluo")
+    # cbar.set_ticks([-0.5, 0.0, 0.5, 1.0, 1.5])
+ #+end_src
+
+#+RESULTS:
+
+** Bumps
+
+#+begin_src ipython
+from src.preprocess.helpers import preprocess_X
+day = 1
+task = 0
+X_norm = X_list[day][ task]
+# X_norm = preprocess_X(X_list[day][task], scaler="robust", avg_noise=0, unit_var=1)
+idx = np.random.randint(X_norm.shape[0]//2)
+print(idx)
+idx=21
+plot_bump(X_norm, y_list[day][ task], trial=idx, windowSize=int(0.1 * X_norm.shape[1]))
+plt.savefig('./cosyne/dpa_bump.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: 38
+[[./figures/landscape/figure_23.png]]
+:END:
+
+#+begin_src ipython
+from src.preprocess.helpers import preprocess_X
+day = 1
+task = 1
+X_norm = X_list[day][ task]
+# X_norm = preprocess_X(X_list[day][task], scaler="robust", avg_noise=0, unit_var=1)
+idx = np.random.randint(X_norm.shape[0]//2)
+print(idx)
+plot_bump(X_norm, y_list[day][ task], trial=idx, windowSize=int(0.1 * X_norm.shape[1]))
+plt.savefig('./cosyne/dualgo_bump.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: 20
+[[./figures/landscape/figure_24.png]]
+:END:
+
+#+begin_src ipython
+from src.preprocess.helpers import preprocess_X
+day = 1
+task = -1
+X_norm = X_list[day][ task]
+# X_norm = preprocess_X(X_list[day][task], scaler="robust", avg_noise=0, unit_var=1)
+idx = np.random.randint(X_norm.shape[0]//2)
+print(idx)
+plot_bump(X_norm, y_list[day][ task], trial=idx, windowSize=64)
+plt.savefig('./cosyne/dualnogo_bump.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: 19
+[[./figures/landscape/figure_25.png]]
+:END:
 
 ** Energy
 
@@ -956,14 +952,14 @@ multiple days 0 2 2
     # bins = opts['bins_ED']
     # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
     # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-    bins = opts['bins_PRE_DIST']
-    # bins = opts['bins_DELAY']
+    # bins = opts['bins_PRE_DIST']
+    bins = opts['bins_DELAY']
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  task = 'all'
+  task = 0
   kwargs['task'] = task
 
   num_bins = 96
@@ -974,7 +970,7 @@ multiple days 0 2 2
 
   IF_HMM = 0
   n_iter = 100
-  IF_BOOT=1
+  IF_BOOT=0
   IF_NORM=0
 #+end_src
 
@@ -987,13 +983,13 @@ multiple days 0 2 2
 #+end_src
 
 #+RESULTS:
-: (64, 693, 84)
+: (96, 693, 84)
 
 #+begin_src ipython
   energy_day = []
   ci_day = []
 
-  for i, day in enumerate(days):
+  for i, day in enumerate(options['days']):
       X = np.array(X_list[i])
       energy, ci = get_energy(X, np.array(y_list[i]), task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
 
@@ -1002,14 +998,6 @@ multiple days 0 2 2
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: bootstrap: 100% 1000/1000 [00:06<00:00, 166.02it/s]
-:
-: bootstrap: 100% 1000/1000 [00:05<00:00, 168.34it/s]
-:
-: bootstrap: 100% 1000/1000 [00:06<00:00, 162.71it/s]
-:
-:END:
 
 #+begin_src ipython
   from scipy.signal import find_peaks
@@ -1062,17 +1050,18 @@ multiple days 0 2 2
 #+RESULTS:
 
 #+begin_src ipython
+  days = options['days']
   cmap = plt.get_cmap('Blues')
-  colors = [cmap((i+1)/len(days)) for i in range(len(days))]
-  window = .05
+  colors = [cmap((i+1)/len(options['days'])) for i in range(len(options['days']))]
+  window = .1
 
   min_angles, min_energies = [], []
   theta = np.linspace(0, 360, energy_day[0].shape[0]-1, endpoint=False)
   windowSize = int(window * energy_day[0].shape[0]-1)
 
   fig, ax = plt.subplots()
-  for i, day in enumerate(days):
-      plot_theta_energy(theta_day[i], energy_day[i], ci_day[i],
+  for i, day in enumerate(options['days']):
+      plot_theta_energy(0, energy_day[i], ci_day[i],
                         window=window, ax=ax, SMOOTH=1, color=colors[i])
 
       # min_angle, min_energy = find_minima(energy_day[i] * 100, window=window,
@@ -1086,57 +1075,14 @@ multiple days 0 2 2
       except:
           pass
 
-  fig.savefig('./figs/%s_landscape.svg' % options['mouse'], dpi=300)
+  fig.savefig('./cosyne/%s_landscape.svg' % options['mouse'], dpi=300)
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_29.png]]
-
-#+begin_src ipython
-  min_angles = np.array(min_angles).T
-  print(np.round(min_angles))
-#+end_src
-
-#+RESULTS:
-: [[355. 356. 341.]
-:  [130. 183. 164.]]
-
-#+begin_src ipython
-  distance = np.abs(min_angles[0] - min_angles[1])
-  print(distance)
-  for i in range(distance.shape[0]):
-      if distance[i]>180:
-          distance[i] -= 360
-          distance[i] *= -1
-
-  print(np.round(distance))
-
-  plt.plot(np.arange(1, len(days)+1), distance, '-o')
-  # plt.ylim(0, 45)
-  plt.xticks(np.arange(1, len(days)+1))
-  # plt.yticks([0, 45, 90, 135, 180])
-  plt.xlabel('Day')
-  plt.ylabel('Distance')
-  fig.savefig('%s_distance_landscape.svg' % options['mouse'], dpi=300)
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: [224.38991413 172.71697019 177.504146  ]
-: [136. 173. 178.]
-[[./figures/landscape/figure_31.png]]
-:END:
+[[./figures/landscape/figure_32.png]]
 
 #+begin_src ipython
 
-#+end_src
-
-#+RESULTS:
-
-
-#+begin_src ipython
-      pkl_save(distance, '%s_distance_landscape' % options['mouse'], path="../data/%s/" % options['mouse'])
 #+end_src
 
 #+RESULTS:

@@ -30,7 +30,7 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
     y_days.loc[data["S3Trial"].flatten() - 1, 'sample_odor'] = 2
     y_days.loc[data["S4Trial"].flatten() - 1, 'sample_odor'] = 3
 
-    y_days.loc[data["NDTrial"].flatten() - 1, 'dist_odor'] = 0
+    y_days.loc[data["NDTrial"].flatten() - 1, 'dist_odor'] = np.nan
     y_days.loc[data["D1Trial"].flatten() - 1, 'dist_odor'] = 1
     y_days.loc[data["D2Trial"].flatten() - 1, 'dist_odor'] = 2
 
@@ -42,6 +42,11 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
     y_days.loc[data["CRTrial"].flatten() - 1, 'response'] = "correct_rej"
     y_days.loc[data["FATrial"].flatten() - 1, 'response'] = "incorrect_fa"
     y_days.loc[data["missTrial"].flatten() - 1, 'response'] = "incorrect_miss"
+
+    y_days.loc[data["hitTrial"].flatten() - 1, 'choice'] = 1
+    y_days.loc[data["CRTrial"].flatten() - 1, 'choice'] = 0
+    y_days.loc[data["FATrial"].flatten() - 1, 'choice'] = 1
+    y_days.loc[data["missTrial"].flatten() - 1, 'choice'] = 0
 
     y_days.loc[(y_days.response=="correct_hit") & (y_days.sample_odor==0), 'test_odor'] = 0
     y_days.loc[(y_days.response=="incorrect_fa") & (y_days.sample_odor==0), 'test_odor'] = 1
@@ -69,7 +74,6 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
     except:
         pass
 
-
     y_days['day'] = idx_day
 
     return X_days, y_days
@@ -91,7 +95,7 @@ def get_X_y_days_multi(mouse=gv.mouse):
     y_days.sample_odor[data["S3All"][0] - 1] = 2
     y_days.sample_odor[data["S4All"][0] - 1] = 3
 
-    y_days.dist_odor[data["NDAll"][0] - 1] = 0
+    y_days.dist_odor[data["NDAll"][0] - 1] = np.nan
     y_days.dist_odor[data["D1All"][0] - 1] = 1
     y_days.dist_odor[data["D2All"][0] - 1] = 2
     y_days.dist_odor[data["D3All"][0] - 1] = 3
@@ -99,8 +103,8 @@ def get_X_y_days_multi(mouse=gv.mouse):
 
     y_days.tasks[data["NDAll"][0] - 1] = "DPA"
     y_days.tasks[data["D1All"][0] - 1] = "DualGo"
-    y_days.tasks[data["D2All"][0] - 1] = "DualNoGo"
-    y_days.tasks[data["D3All"][0] - 1] = "DualGo"
+    y_days.tasks[data["D2All"][0] - 1] = "DualGo"
+    y_days.tasks[data["D3All"][0] - 1] = "DualNoGo"
     y_days.tasks[data["D4All"][0] - 1] = "DualNoGo"
 
     y_days.response[data["AllCorrect"][0] - 1] = "correct"
@@ -172,6 +176,9 @@ def create_df(y_raw, day=None):
     y_df.loc[y_df.tasks == 0, "tasks"] = "DPA"
     y_df.loc[y_df.tasks == 13, "tasks"] = "DualGo"
     y_df.loc[y_df.tasks == 14, "tasks"] = "DualNoGo"
+
+    y_df['performance'] = y_df['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+    y_df['pair'] = y_df['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
 
     return y_df
 
@@ -391,7 +398,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S3 = y.sample_odor == 2
             idx_S4 = y.sample_odor == 3
 
-    elif kwargs["features"] == "paired":
+    elif kwargs["features"] == "pair":
         if kwargs["trials"] == "correct":
             # pair
             idx_S1 = y.response == "correct_hit"
@@ -491,6 +498,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S2 = (y.tasks == "DualGo") | (y.tasks == "DualNoGo")
         else:
             idx_S2 = y.tasks == kwargs["task"]
+
         idx_S3 = False
         idx_S4 = False
         idx_tasks = True
@@ -532,39 +540,11 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
     X_S1_S2 = np.vstack((X_S1, X_S2, X_S3, X_S4))
 
-    if kwargs["multilabel"]:
-        # This is the multiclass version of the problem
-        # since cross validation doesn t work otherwise
-        # y_S1_S2 = np.hstack((np.zeros(kwargs['n_S1_Go']), np.ones(kwargs['n_S1_NoGo']),
-        #                      2*np.ones(kwargs['n_S2_Go']), 3*np.ones(kwargs['n_S2_NoGo'])))
+    y_S1 = y[idx_S1 & idx_trials & idx_days & idx_laser & idx_tasks]
+    y_S2 = y[idx_S2 & idx_trials & idx_days & idx_laser & idx_tasks]
+    y_S3 = y[idx_S3 & idx_trials & idx_days & idx_laser & idx_tasks]
+    y_S4 = y[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
 
-        y_S1_S2 = np.hstack(
-            (
-                np.zeros(X_S1.shape[0]),
-                np.ones(X_S2.shape[0]),
-                2 * np.ones(X_S3.shape[0]),
-                3 * np.ones(X_S4.shape[0]),
-            )
-        )
+    y_S1_S2 = pd.concat((y_S1, y_S2, y_S3, y_S4))
 
-    elif kwargs["multiclass"]:
-        y_S1_S2 = np.hstack(
-            (
-                np.zeros(kwargs["n_S1"]),
-                np.ones(kwargs["n_S1_Go"]),
-                2 * np.ones(kwargs["n_S2"]),
-                3 * np.ones(kwargs["n_S2_Go"]),
-            )
-        )
-    else:
-        # y_S1_S2 = np.hstack((np.zeros(X_S1.shape[0]), np.ones(X_S2.shape[0])))
-
-        y_S1 = y[idx_S1 & idx_trials & idx_days & idx_laser & idx_tasks]
-        y_S2 = y[idx_S2 & idx_trials & idx_days & idx_laser & idx_tasks]
-        y_S3 = y[idx_S3 & idx_trials & idx_days & idx_laser & idx_tasks]
-        y_S4 = y[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
-
-        y_S1_S2 = pd.concat((y_S1, y_S2, y_S3, y_S4))
-    # y_S1_S2 = np.float32(y_S1_S2)
-
-    return X_S1_S2, y_S1_S2
+    return X_S1_S2 * 1000.0, y_S1_S2

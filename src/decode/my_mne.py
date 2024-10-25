@@ -620,7 +620,7 @@ def my_cross_val_compo_score(
             scorer=scorer,
             verbose=verbose,
             fit_params=fit_params,
-       )
+        )
         for (train, _), (_, test) in zip(cv_train, cv_test)
     )
 
@@ -828,28 +828,28 @@ def _score(estimator, X_test, y_test, scorer):
     """
     if y_test is None:
         score = scorer(estimator, X_test)
-    elif np.sum(y_test==2) !=0:
-        idx_Go = (y_test==0) | (y_test==2)
+    # elif np.sum(y_test==2) !=0:
+    #     idx_Go = (y_test==0) | (y_test==2)
 
-        y = y_test.copy()
-        y = y % 2
-        # y[y==2] = 0
-        # y[y==3] = 1
+    #     y = y_test.copy()
+    #     y = y % 2
+    #     # y[y==2] = 0
+    #     # y[y==3] = 1
 
-        # print(y[idx_Go].shape, y[~idx_Go].shape)
+    #     # print(y[idx_Go].shape, y[~idx_Go].shape)
 
-        if np.any(idx_Go):
-            score_Go = scorer(estimator, X_test[idx_Go], y[idx_Go])
-        if np.any(~idx_Go):
-            score_NoGo = scorer(estimator, X_test[~idx_Go], y[~idx_Go])
-        if ~np.any(idx_Go):
-            score_Go = np.full_like(score_NoGo, np.nan)
-        if ~np.any(~idx_Go):
-            score_NoGo = np.full_like(score_Go, np.nan)
+    #     if np.any(idx_Go):
+    #         score_Go = scorer(estimator, X_test[idx_Go], y[idx_Go])
+    #     if np.any(~idx_Go):
+    #         score_NoGo = scorer(estimator, X_test[~idx_Go], y[~idx_Go])
+    #     if ~np.any(idx_Go):
+    #         score_Go = np.full_like(score_NoGo, np.nan)
+    #     if ~np.any(~idx_Go):
+    #         score_NoGo = np.full_like(score_Go, np.nan)
 
-        # print('Go', score_Go.shape, 'NoGo', score_NoGo.shape)
+    #     # print('Go', score_Go.shape, 'NoGo', score_NoGo.shape)
 
-        score = [score_Go, score_NoGo]
+    #     score = [score_Go, score_NoGo]
     else:
         score = scorer(estimator, X_test, y_test)
 

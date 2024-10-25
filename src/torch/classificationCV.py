@@ -75,7 +75,7 @@ class ClassificationCV:
             self.params,
             refit=True,
             cv=self.cv,
-            scoring=self.scoring,
+            scoring=self.hp_scoring,
             n_jobs=self.n_jobs,
         )
 

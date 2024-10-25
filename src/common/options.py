@@ -250,9 +250,11 @@ def set_options(**kwargs):
 
     opts["bins_PRE_DIST"] = opts["bins"][int((t_BL[0] + opts['T_WINDOW']) * frame_rate) : int((t_DIST[0]) * frame_rate)]
 
-    opts["bins_POST_DIST"] = opts["bins"][int((t_DIST[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[0]) * frame_rate)]
+    opts["bins_POST_DIST"] = opts["bins"][int((t_DIST[1] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[0]) * frame_rate)]
 
     opts["bins_DIST"] = opts["bins"][int((t_DIST[0] + opts['T_WINDOW']) * frame_rate) : int(t_DIST[1] * frame_rate)]
+
+    opts["bins_DIST_MD"] = opts["bins"][int((t_DIST[0] + opts['T_WINDOW']) * frame_rate) : int(t_MD[1] * frame_rate)]
 
     opts["bins_MD"]= opts["bins"][int((t_MD[0] + opts['T_WINDOW']) * frame_rate) : int((t_MD[1]) * frame_rate)]
 
@@ -267,7 +269,7 @@ def set_options(**kwargs):
     ]
 
     opts["bins_CHOICE"] = opts["bins"][
-        int((t_TEST[1]) * frame_rate) : int((t_RWD2[1] - opts['T_WINDOW']) * frame_rate)
+        int((t_TEST[0]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)
     ]
 
     opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[1] * frame_rate)]

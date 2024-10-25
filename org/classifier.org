@@ -1,0 +1,1443 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session decoder :kernel dual_data :exports results :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+  import traceback
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import pandas as pd
+
+  from time import perf_counter
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.main import get_classification
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+
+#+begin_src ipython
+def pad_with_nans(array, target_shape):
+    result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
+    print(result.shape)
+    slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
+    result[slices] = array[slices]
+    return result
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+
+  def safe_f1_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return f1_score(y_true, y_score)
+      #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
+
+
+  def pkl_load(name, path="."):
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12', 'PP09', 'PP17', 'RP17']
+  # mice = ['PP09', 'PP17']
+
+  kwargs = {
+      'mouse': 'JawsM15', 'laser': 0,
+      'trials': '', 'reload': 1, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 5, 'n_repeats': 16,
+      'class_weight': 0,
+      'multilabel':0,
+      'mne_estimator':'generalizing', # sliding or generalizing
+      'n_jobs': 64,
+  }
+
+  kwargs['days'] = ['first', 'middle', 'last']
+  # kwargs['days'] = 'all'
+  options = set_options(**kwargs)
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  options['hp_scoring'] = safe_roc_auc
+  options['n_jobs'] = 30
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
+    try:
+        coef = estimator.named_steps["model"].coef_.flatten()
+    except:
+        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
+
+    if IF_SIGN:
+        dot_product = (2*y_test -1) * np.dot(X_test, coef) / np.linalg.norm(coef)
+    else:
+        dot_product = -np.dot(X_test, coef) / np.linalg.norm(coef)
+
+    return np.nanmean(dot_product)
+
+
+options['scoring'] = overlaps_scorer
+# options['hp_scoring'] = 'overlaps_scorer'
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def signed_overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1):
+    try:
+        coef = estimator.named_steps["model"].coef_.flatten()
+    except:
+        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
+
+    if IF_SIGN:
+        dot_product = (2*y_test -1) * np.dot(X_test, coef) / np.linalg.norm(coef)
+    else:
+        dot_product = -np.dot(X_test, coef) / np.linalg.norm(coef)
+
+    return np.nanmean(dot_product)
+
+
+options['scoring'] = overlaps_scorer
+# options['hp_scoring'] = 'overlaps_scorer'
+#+end_src
+
+#+RESULTS:
+: 0491d61c-fcf5-4b3a-bca7-e9ca152c3def
+
+* Decoding vs days
+** Model
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/Dclassify')
+from src.classificationCV import ClassificationCV
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.linear_model import LogisticRegression
+# net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95)
+
+params = {'model__C': np.logspace(-4, 4, 20)} # , 'net__l1_ratio': np.linspace(0, 1, 10)}
+
+options['n_jobs'] = -1
+options['verbose'] = 0
+model = ClassificationCV(net, params, **options)
+options['cv'] = LeaveOneOut()
+#+end_src
+
+#+RESULTS:
+
+** Sample Overlap
+
+#+begin_src ipython
+options['verbose'] = 1
+options['features'] = 'distractor'
+options['epochs'] = ['MD']
+options['scoring'] = overlaps_scorer
+options['reload'] = 0
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+dfs = []
+
+mice = ['ACCM03']
+tasks = ['Dual']
+
+for mouse in mice:
+    df_mouse = []
+    options['mouse'] = mouse
+    options = set_options(**options)
+    days = options['days']
+
+    for task in tasks:
+        options['task'] = task
+
+        for day in days:
+            options['day'] = day
+            overlaps = get_classification(model, RETURN='df_scores', **options)
+            options['reload'] = 0
+            df_mouse.append(overlaps)
+
+    df_mouse = pd.concat(df_mouse)
+    df_mouse['mouse'] = mouse
+    dfs.append(df_mouse)
+
+df_mice = pd.concat(dfs)
+print(df_mice.shape)
+    #+end_src
+
+#+RESULTS:
+#+begin_example
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
+multiple days, discard 0 first 2 middle 2
+y_labels (256, 8) ['DualGo' 'DualNoGo']
+X (256, 361, 84) y (256,) [0. 1. 2. 3.]
+scores (256, 84, 84) labels (256, 1)
+df (256, 10)
+y_labels ['DualGo' 'DualNoGo']
+df (256, 10)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
+multiple days, discard 0 first 2 middle 2
+y_labels (256, 8) ['DualGo' 'DualNoGo']
+X (256, 361, 84) y (256,) [0. 1. 2. 3.]
+scores (256, 84, 84) labels (256, 1)
+df (256, 10)
+y_labels ['DualGo' 'DualNoGo']
+df (256, 10)
+Loading files from /home/leon/dual_task/dual_data/data/ACCM03
+DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
+multiple days, discard 0 first 2 middle 2
+y_labels (128, 8) ['DualGo' 'DualNoGo']
+X (128, 361, 84) y (128,) [0. 1. 2. 3.]
+scores (128, 84, 84) labels (128, 1)
+df (128, 10)
+y_labels ['DualGo' 'DualNoGo']
+df (128, 10)
+(640, 11)
+#+end_example
+
+#+begin_src ipython
+print(df_mice)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+     index  sample_odor  test_odor      response     tasks  laser    day  \
+0        1          1.0        1.0   correct_hit    DualGo    0.0  first
+1        5          0.0        1.0  incorrect_fa    DualGo    0.0  first
+2        9          0.0        0.0   correct_hit    DualGo    0.0  first
+3       10          0.0        0.0   correct_hit    DualGo    0.0  first
+4       13          0.0        1.0  incorrect_fa    DualGo    0.0  first
+..     ...          ...        ...           ...       ...    ...    ...
+123    942          0.0        0.0   correct_hit  DualNoGo    0.0   last
+124    945          1.0        0.0   correct_rej  DualNoGo    0.0   last
+125    951          0.0        1.0   correct_rej  DualNoGo    0.0   last
+126    954          1.0        0.0   correct_rej  DualNoGo    0.0   last
+127    957          0.0        0.0   correct_hit  DualNoGo    0.0   last
+
+     dist_odor  choice                                           overlaps  \
+0          0.0     1.0  [-0.11623255000912756, 0.11514200358397922, 0....
+1          0.0     1.0  [-0.08854538324688409, -0.05306814230827537, -...
+2          0.0     1.0  [-0.1351327649166174, -0.012923137479709312, -...
+3          0.0     1.0  [0.083653051247113, 0.06849367496160565, 0.039...
+4          0.0     1.0  [0.01736120533148588, -0.15334093371265733, -0...
+..         ...     ...                                                ...
+123        1.0     1.0  [nan, nan, nan, nan, nan, nan, nan, nan, nan, ...
+124        1.0     0.0  [nan, nan, nan, nan, nan, nan, nan, nan, nan, ...
+125        1.0     0.0  [nan, nan, nan, nan, nan, nan, nan, nan, nan, ...
+126        1.0     0.0  [nan, nan, nan, nan, nan, nan, nan, nan, nan, ...
+127        1.0     1.0  [nan, nan, nan, nan, nan, nan, nan, nan, nan, ...
+
+      mouse
+0    ACCM03
+1    ACCM03
+2    ACCM03
+3    ACCM03
+4    ACCM03
+..      ...
+123  ACCM03
+124  ACCM03
+125  ACCM03
+126  ACCM03
+127  ACCM03
+
+[640 rows x 11 columns]
+#+end_example
+
+#+begin_src ipython
+df_mice['performance'] = df_mice['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_mice['pair'] = df_mice['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+if len(days)>3:
+    name = 'df_sample_overlaps_days'
+else:
+    name = 'df_sample_overlaps'
+
+pkl_save(df_mice, '%s' % name, path="../data/mice/overlaps")
+#+end_src
+
+#+RESULTS:
+: 955986f3-9b72-4cac-8b27-2b18a211700a
+
+** Distractor overlap
+
+#+begin_src ipython
+options['verbose'] = 1
+options['features'] = 'distractor'
+options['epochs'] = ['MD']
+options['scoring'] = overlaps_scorer
+options['reload'] = 1
+tasks = ['DPA', 'Dual']
+dfs = []
+
+# mice = ['PP09']
+# mice = ['PP09', 'PP17']
+# mice = ['AP02', 'AP12']
+
+options['cv'] = LeaveOneOut()
+
+for mouse in mice:
+    df_mouse = []
+    options['mouse'] = mouse
+
+    options = set_options(**options)
+    days = options['days']
+
+    for task in tasks:
+        options['task'] = task
+        for day in days:
+
+            options['day'] = day
+
+            try:
+                overlaps = get_classification(model, RETURN='df_scores', **options)
+            except Exception as exc:
+                print(traceback.format_exc())
+                break
+
+            options['reload'] = 0
+            df_mouse.append(overlaps)
+
+    df_mouse = pd.concat(df_mouse)
+    df_mouse['mouse'] = mouse
+    dfs.append(df_mouse)
+
+df_mice = pd.concat(dfs)
+print(df_mice.shape)
+    #+end_src
+
+#+RESULTS:
+: 05a2e7a5-ab9b-49c2-8632-6ff54c886246
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+: a67e7b86-3b11-42dd-9f0c-38726cf82c61
+
+#+begin_src ipython
+df_mice['performance'] = df_mice['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_mice['pair'] = df_mice['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+#+end_src
+
+#+RESULTS:
+: c0e69717-65b8-4c0e-aef5-e940bc64b30b
+
+#+begin_src ipython
+print(df_mice.day.unique())
+#+end_src
+
+#+RESULTS:
+: b1c13724-1b06-4a24-a3a6-353db876ba1a
+
+#+begin_src ipython
+if len(days)>3:
+    name = 'df_distractor_overlaps_days'
+else:
+    name = 'df_distractor_overlaps'
+if len(mice)==1:
+    pkl_save(df_mice, '%s' % name, path="../data/%s/overlaps" % options['mouse'])
+else:
+    if len(mice)==2:
+        pkl_save(df_mice, '%s' % name, path="../data/mice/overlaps_ACC")
+
+#+end_src
+
+#+RESULTS:
+: 5b74cafe-a3da-4b33-85b7-10b0b76e4375
+
+* Plots
+
+#+begin_src ipython
+def significance_marker(p):
+    if p < 0.001:
+        return '***'
+    elif p < 0.01:
+        return '**'
+    elif p < 0.05:
+        return '*'
+    elif p <.1:
+        return '.'
+    else:
+        return ''
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_overlaps(df, day, epoch, ax):
+    df_ = df[df.day == day].copy()
+    colors = ['r', 'b', 'g']
+    time_points = np.linspace(0, 14, 84)
+
+    mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+    # lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+    # upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    for i, task in enumerate(mean_overlaps.index):
+        ax.plot(time_points, mean_overlaps[task], label=f"Day {task}", color=colors[i])
+        # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Overlap')
+    add_vlines(ax)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def bootstrap_ci(data, n_bootstrap=1000, ci=95):
+    bootstrapped_means = np.array([np.mean(np.random.choice(data, size=len(data))) for _ in range(n_bootstrap)])
+    lower_bound = np.percentile(bootstrapped_means, (100-ci)/2)
+    upper_bound = np.percentile(bootstrapped_means, 100 - (100-ci)/2)
+    return lower_bound, upper_bound
+#+end_src
+
+#+RESULTS:
+
+* distractor dfs
+** data
+
+#+begin_src ipython
+name = 'df_distractor_overlaps'
+df_dist = pkl_load(name, path="../data/mice/overlaps")
+#+end_src
+
+#+RESULTS:
+: loading from ../data/mice/overlaps/df_distractor_overlaps.pkl
+
+#+begin_src ipython
+df_dist = df_mice.copy()
+print(df_dist.shape, df_dist.head())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+(640, 13)    index  sample_odor  test_odor      response   tasks  laser    day  \
+0      1          1.0        1.0   correct_hit  DualGo    0.0  first
+1      5          0.0        1.0  incorrect_fa  DualGo    0.0  first
+2      9          0.0        0.0   correct_hit  DualGo    0.0  first
+3     10          0.0        0.0   correct_hit  DualGo    0.0  first
+4     13          0.0        1.0  incorrect_fa  DualGo    0.0  first
+
+   dist_odor  choice                                           overlaps  \
+0        0.0     1.0  [-0.11623255000912756, 0.11514200358397922, 0....
+1        0.0     1.0  [-0.08854538324688409, -0.05306814230827537, -...
+2        0.0     1.0  [-0.1351327649166174, -0.012923137479709312, -...
+3        0.0     1.0  [0.083653051247113, 0.06849367496160565, 0.039...
+4        0.0     1.0  [0.01736120533148588, -0.15334093371265733, -0...
+
+    mouse  performance  pair
+0  ACCM03            1     1
+1  ACCM03            0     0
+2  ACCM03            1     1
+3  ACCM03            1     1
+4  ACCM03            0     0
+#+end_example
+
+#+begin_src ipython
+df_mice
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+|     | index | sample_odor | test_odor | response     | tasks    | laser | day   | dist_odor | choice | overlaps                                          | mouse  | performance | pair |
+|-----+-------+-------------+-----------+--------------+----------+-------+-------+-----------+--------+---------------------------------------------------+--------+-------------+------|
+| 0   | 1     | 1.0         | 1.0       | correct_hit  | DualGo   | 0.0   | first | 0.0       | 1.0    | [-0.11623255000912756, 0.11514200358397922, 0.... | ACCM03 | 1           | 1    |
+| 1   | 5     | 0.0         | 1.0       | incorrect_fa | DualGo   | 0.0   | first | 0.0       | 1.0    | [-0.08854538324688409, -0.05306814230827537, -... | ACCM03 | 0           | 0    |
+| 2   | 9     | 0.0         | 0.0       | correct_hit  | DualGo   | 0.0   | first | 0.0       | 1.0    | [-0.1351327649166174, -0.012923137479709312, -... | ACCM03 | 1           | 1    |
+| 3   | 10    | 0.0         | 0.0       | correct_hit  | DualGo   | 0.0   | first | 0.0       | 1.0    | [0.083653051247113, 0.06849367496160565, 0.039... | ACCM03 | 1           | 1    |
+| 4   | 13    | 0.0         | 1.0       | incorrect_fa | DualGo   | 0.0   | first | 0.0       | 1.0    | [0.01736120533148588, -0.15334093371265733, -0... | ACCM03 | 0           | 0    |
+| ... | ...   | ...         | ...       | ...          | ...      | ...   | ...   | ...       | ...    | ...                                               | ...    | ...         | ...  |
+| 123 | 942   | 0.0         | 0.0       | correct_hit  | DualNoGo | 0.0   | last  | 1.0       | 1.0    | [nan, nan, nan, nan, nan, nan, nan, nan, nan, ... | ACCM03 | 1           | 1    |
+| 124 | 945   | 1.0         | 0.0       | correct_rej  | DualNoGo | 0.0   | last  | 1.0       | 0.0    | [nan, nan, nan, nan, nan, nan, nan, nan, nan, ... | ACCM03 | 1           | 0    |
+| 125 | 951   | 0.0         | 1.0       | correct_rej  | DualNoGo | 0.0   | last  | 1.0       | 0.0    | [nan, nan, nan, nan, nan, nan, nan, nan, nan, ... | ACCM03 | 1           | 0    |
+| 126 | 954   | 1.0         | 0.0       | correct_rej  | DualNoGo | 0.0   | last  | 1.0       | 0.0    | [nan, nan, nan, nan, nan, nan, nan, nan, nan, ... | ACCM03 | 1           | 0    |
+| 127 | 957   | 0.0         | 0.0       | correct_hit  | DualNoGo | 0.0   | last  | 1.0       | 1.0    | [nan, nan, nan, nan, nan, nan, nan, nan, nan, ... | ACCM03 | 1           | 1    |
+
+640 rows × 13 columns
+:END:
+
+#+begin_src ipython
+len([0])
+#+end_src
+
+#+RESULTS:
+: 1
+
+#+begin_src ipython
+df_dist['overlaps_diag'] = df_dist['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['epochs'] = ['MD']
+# df_dist['overlaps_MD'] = df_dist['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+df_dist['overlaps_MD'] = df_dist['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['epochs'] = ['DIST']
+df_dist['overlaps_DIST'] = df_dist['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['epochs'] = ['ED']
+df_dist['overlaps_MD_ED'] = df_dist['overlaps_MD'].apply(lambda x: avg_epochs(np.array(x), **options))
+df_dist['overlaps_diag_ED'] = df_dist['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+df_dist['sign_overlaps_MD_ED'] = df_dist['overlaps_MD'].apply(lambda x: np.sign(avg_epochs(np.array(x), **options)))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(df_dist.head())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+   index  sample_odor  test_odor      response   tasks  laser    day  \
+0      1          1.0        1.0   correct_hit  DualGo    0.0  first
+1      5          0.0        1.0  incorrect_fa  DualGo    0.0  first
+2      9          0.0        0.0   correct_hit  DualGo    0.0  first
+3     10          0.0        0.0   correct_hit  DualGo    0.0  first
+4     13          0.0        1.0  incorrect_fa  DualGo    0.0  first
+
+   dist_odor  choice                                           overlaps  \
+0        0.0     1.0  [-0.11623255000912756, 0.11514200358397922, 0....
+1        0.0     1.0  [-0.08854538324688409, -0.05306814230827537, -...
+2        0.0     1.0  [-0.1351327649166174, -0.012923137479709312, -...
+3        0.0     1.0  [0.083653051247113, 0.06849367496160565, 0.039...
+4        0.0     1.0  [0.01736120533148588, -0.15334093371265733, -0...
+
+    mouse  performance  pair  \
+0  ACCM03            1     1
+1  ACCM03            0     0
+2  ACCM03            1     1
+3  ACCM03            1     1
+4  ACCM03            0     0
+
+                                       overlaps_diag  \
+0  [-0.11623255000912756, 0.041044186264816235, 0...
+1  [-0.08854538324688409, -0.1077691516800328, 0....
+2  [-0.1351327649166174, -0.05640110624499688, -0...
+3  [0.083653051247113, -0.0951113739150873, -0.25...
+4  [0.01736120533148588, -0.4431841704168939, -0....
+
+                                         overlaps_MD  \
+0  [-0.004381431972310091, 0.21432254955932747, 0...
+1  [0.1433306665124442, 0.3172451917117637, 0.253...
+2  [0.09658663497227556, 0.029297088675575927, 0....
+3  [-0.0002373788622593856, 0.03631228320204346, ...
+4  [-0.02219530718255591, 0.09659726979324612, -0...
+
+                                       overlaps_DIST  overlaps_MD_ED  \
+0  [0.060039992351046616, 0.059400330750095286, 0...       -0.003170
+1  [-0.04439019923019486, 0.2039440977914996, -0....        0.131938
+2  [-0.17952947107718117, -0.0735207039847107, 0....       -0.292564
+3  [-0.10614739233460618, 0.025964385951194626, 0...       -0.206710
+4  [-0.179930020083229, 0.031083076264823123, -0....        0.212375
+
+   overlaps_diag_ED  sign_overlaps_MD_ED
+0          0.215731                 -1.0
+1          0.176126                  1.0
+2         -0.164151                 -1.0
+3          0.037100                 -1.0
+4          0.096847                  1.0
+#+end_example
+
+#+begin_src ipython
+import seaborn as sns
+df = df_dist
+# df = df_dist[df_dist.mouse=='ACCM04']
+# df = df[df.tasks=='DualGo']
+#df.overlaps_MD_ED = df.overlaps_MD_ED
+# df.day = np.exp(df.day)
+sns.lineplot(data=df, x='day', y='overlaps_MD_ED', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'])
+
+# Set plot labels and title
+plt.xlabel('Day')
+plt.ylabel('Overlap')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_55.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharex=True, sharey=True)
+
+df = df_dist[df_dist.mouse!='JawsM18']
+# df = df_dist.copy()
+
+# for i in range(1, 7):
+#      plot_overlaps(df, i, 'MD', ax[0])
+
+plot_overlaps(df, 'first', 'MD', ax[0])
+plot_overlaps(df, 'middle', 'MD', ax[1])
+plot_overlaps(df, 'last', 'MD', ax[2])
+
+# plot_overlaps(df, 'first', 'diag', ax[0])
+# plot_overlaps(df, 'middle', 'diag', ax[1])
+# plot_overlaps(df, 'last', 'diag', ax[2])
+
+# ax[2].legend(fontsize=10)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_56.png]]
+
+** Performance
+*** Performance ~ overlaps * days * tasks
+
+#+begin_src ipython
+  formula = 'performance ~ day * overlaps_MD_ED + (1 + day + tasks | mouse)'
+
+  data = df_dist.copy()
+  # data = data[data.mouse!='JawsM18']
+  # data = data[data.mouse !='ACCM04']
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Model failed to converge with max|grad| = 0.0102503 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~day*overlaps_MD_ED+(1+day+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1766.555 	 AIC: 3575.109
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.169  0.411
+mouse        daylast  0.538  0.733
+mouse      daymiddle  0.303  0.550
+mouse    tasksDualGo  0.197  0.443
+mouse  tasksDualNoGo  0.015  0.123
+
+               IV1            IV2   Corr
+mouse  (Intercept)        daylast  0.168
+mouse  (Intercept)      daymiddle  0.845
+mouse  (Intercept)    tasksDualGo -0.156
+mouse  (Intercept)  tasksDualNoGo -0.700
+mouse      daylast      daymiddle  0.616
+mouse      daylast    tasksDualGo -0.256
+mouse      daylast  tasksDualNoGo -0.194
+mouse    daymiddle    tasksDualGo -0.018
+mouse    daymiddle  tasksDualNoGo -0.462
+mouse  tasksDualGo  tasksDualNoGo  0.809
+
+Fixed effects:
+
+                          Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  \
+(Intercept)                  0.730   0.278    1.183  0.231  2.075      1.320
+daylast                      1.541   0.580    2.501  0.490  4.667      1.787
+daymiddle                    1.234   0.514    1.955  0.368  3.436      1.671
+overlaps_MD_ED              -0.218  -0.561    0.124  0.175  0.804      0.571
+daylast:overlaps_MD_ED       0.108  -0.456    0.672  0.288  1.114      0.634
+daymiddle:overlaps_MD_ED     0.668   0.069    1.268  0.306  1.951      1.071
+
+                          OR_97.5_ci   Prob  Prob_2.5_ci  Prob_97.5_ci  \
+(Intercept)                    3.263  0.675        0.569         0.765
+daylast                       12.190  0.824        0.641         0.924
+daymiddle                      7.062  0.775        0.626         0.876
+overlaps_MD_ED                 1.132  0.446        0.363         0.531
+daylast:overlaps_MD_ED         1.958  0.527        0.388         0.662
+daymiddle:overlaps_MD_ED       3.553  0.661        0.517         0.780
+
+                          Z-stat  P-val  Sig
+(Intercept)                3.162  0.002   **
+daylast                    3.145  0.002   **
+daymiddle                  3.357  0.001  ***
+overlaps_MD_ED            -1.250  0.211
+daylast:overlaps_MD_ED     0.376  0.707
+daymiddle:overlaps_MD_ED   2.184  0.029    *
+#+end_example
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# Assuming you already have model and glm.coef()
+coefficients = {
+    'coef': glm.coefs['Estimate'],
+    'lower_ci': glm.coefs['2.5_ci'],
+    'upper_ci': glm.coefs['97.5_ci'],
+    'p_value': glm.coefs['P-val']
+}
+
+df_coefs = pd.DataFrame(coefficients)
+
+# Determine significance markers
+def significance_marker(p):
+    if p < 0.001:
+        return '***'
+    elif p < 0.01:
+        return '**'
+    elif p < 0.05:
+        return '*'
+    elif p < 0.1:
+        return '.'
+    else:
+        return ''
+
+df_coefs['marker'] = df_coefs['p_value'].apply(significance_marker)
+
+#  Plot coefficients with error bars and significance markers
+plt.figure(figsize=(10, 6))
+plt.errorbar(df_coefs.index, df_coefs['coef'], yerr=[df_coefs['coef'] - df_coefs['lower_ci'], df_coefs['upper_ci'] - df_coefs['coef']], fmt='o')
+plt.axhline(y=0, color='grey', linestyle='--')
+plt.xlabel('Coefficient')
+plt.ylabel('Estimate')
+# plt.title('Coefficient Estimates with 95% Confidence Intervals')
+plt.xticks(rotation=45, ha='right', fontsize=10)
+plt.tight_layout()
+
+# Add significance markers
+for i, (coef, marker) in enumerate(zip(df_coefs['coef'], df_coefs['marker'])):
+    plt.text(i, 1.5 * np.max(df_coefs.coef), f'{marker}', fontsize=22, ha='center', va='bottom')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_52.png]]
+
+*** Performance ~ overlaps
+
+#+begin_src ipython
+df_dist['sign_overlaps_MD_ED'] = df_dist['overlaps_MD_ED'].apply(lambda x: (2*np.sign(x) - 1))
+formula = 'performance ~ sign_overlaps_MD_ED + (1 | mouse)'
+data = df_dist[['overlaps_MD_ED', 'sign_overlaps_MD_ED', 'performance', 'mouse', 'day']]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+from rpy2.robjects import pandas2ri
+import rpy2.robjects as ro
+
+pandas2ri.activate()
+
+# Extract model summary
+summary = ro.r.summary(glm)
+coefs = np.array(summary.rx2('coefficients'))
+
+# Extract coefficient estimates and confidence intervals
+estimates = coefs[:,0]
+stderr = coefs[:,1]
+p_values = coefs[:, 3]
+ci_low = estimates - 1.96 * stderr
+ci_high = estimates + 1.96 * stderr
+
+# Labels for the coefficients
+# labels = summary.rx2('coefficients').rownames
+
+# Plotting
+plt.figure(figsize=(8, 6))
+plt.errorbar(range(len(estimates)), estimates, yerr=[estimates - ci_low, ci_high - estimates], fmt='o')
+plt.axhline(0, color='gray', linestyle='--')
+# plt.xticks(range(len(estimates)), labels, rotation=45, ha='right')
+plt.xlabel('Coefficients')
+plt.ylabel('Estimate')
+# plt.title('Coefficients with 95% Confidence Intervals')
+for i, (est, ci_l, ci_h, p) in enumerate(zip(estimates, ci_low, ci_high, p_values)):
+    significance = significance_marker(p)
+    plt.text(i, ci_h + 0.05, significance, ha='center', va='bottom', color='red', fontsize=20)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_54.png]]
+
+#+begin_src ipython
+from rpy2.robjects import r
+from rpy2.robjects.packages import importr
+from rpy2.robjects import pandas2ri
+pandas2ri.activate()
+
+lme4 = importr('lme4')
+
+# Convert dataframe to R dataframe
+r_dataframe = pandas2ri.py2rpy(data)
+
+# Fit the model
+formula = 'performance ~ sign_overlaps_MD_ED + (1 | mouse)'
+glm = lme4.glmer(formula, data=r_dataframe, family='binomial') ;
+#+end_src
+
+#+RESULTS:
+: Warning message:
+: package ‘methods’ was built under R version 4.3.3
+: During startup - Warning messages:
+: 1: package ‘datasets’ was built under R version 4.3.3
+: 2: package ‘utils’ was built under R version 4.3.3
+: 3: package ‘grDevices’ was built under R version 4.3.3
+: 4: package ‘graphics’ was built under R version 4.3.3
+: 5: package ‘stats’ was built under R version 4.3.3
+
+*** Performance per day
+
+#+begin_src ipython
+results = []
+formula = 'performance ~ tasks * overlaps_MD_ED *day + (1 + tasks | mouse)'
+for day in df_dist.day.unique():
+  data = df_dist.copy()
+  data = data[data.day==day]
+  # data = data[data.mouse!='JawsM18']
+  # data = data[data.mouse !='ACCM04']
+  glm = Lmer(formula=formula, data=data, family='binomial')
+  glm.fit();
+  results.append(glm)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 384	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -206.855 	 AIC: 437.711
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  1.425  1.194
+mouse    tasksDualGo  0.000  0.021
+mouse  tasksDualNoGo  0.000  0.008
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo -1.000
+mouse  (Intercept)  tasksDualNoGo -0.997
+mouse  tasksDualGo  tasksDualNoGo  0.997
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 384	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -174.171 	 AIC: 372.342
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.000  0.000
+mouse    tasksDualGo  0.027  0.163
+mouse  tasksDualNoGo  0.009  0.097
+
+               IV1            IV2   Corr
+mouse  (Intercept)    tasksDualGo -0.226
+mouse  (Intercept)  tasksDualNoGo  0.228
+mouse  tasksDualGo  tasksDualNoGo -1.000
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.0629437 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 384	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -104.401 	 AIC: 232.801
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  3.020  1.738
+mouse    tasksDualGo  1.437  1.199
+mouse  tasksDualNoGo  1.552  1.246
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 384	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -132.616 	 AIC: 289.233
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.865  0.930
+mouse    tasksDualGo  0.084  0.290
+mouse  tasksDualNoGo  0.058  0.241
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 192	 Groups: {'mouse': 2.0}
+
+Log-likelihood: -49.666 	 AIC: 123.331
+
+Random effects:
+
+                Name  Var  Std
+mouse    (Intercept)  0.0  0.0
+mouse    tasksDualGo  0.0  0.0
+mouse  tasksDualNoGo  0.0  0.0
+
+               IV1            IV2     Corr
+mouse  (Intercept)    tasksDualGo
+mouse  (Intercept)  tasksDualNoGo
+mouse  tasksDualGo  tasksDualNoGo -0.93791
+
+Fixed effects:
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -459.566 	 AIC: 943.133
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.000  0.000
+mouse    tasksDualGo  0.028  0.168
+mouse  tasksDualNoGo  0.023  0.152
+
+               IV1            IV2 Corr
+mouse  (Intercept)    tasksDualGo
+mouse  (Intercept)  tasksDualNoGo
+mouse  tasksDualGo  tasksDualNoGo  1.0
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -379.042 	 AIC: 782.084
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  1.525  1.235
+mouse    tasksDualGo  0.098  0.312
+mouse  tasksDualNoGo  0.124  0.353
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -334.509 	 AIC: 693.017
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  0.512  0.716
+mouse    tasksDualGo  0.353  0.594
+mouse  tasksDualNoGo  0.001  0.030
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.0463207 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -242.958 	 AIC: 509.917
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  2.940  1.715
+mouse    tasksDualGo  0.657  0.811
+mouse  tasksDualNoGo  0.449  0.670
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.00619803 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 672	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -239.616 	 AIC: 503.232
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  2.030  1.425
+mouse    tasksDualGo  0.218  0.467
+mouse  tasksDualNoGo  0.176  0.420
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+Model failed to converge with max|grad| = 0.052299 (tol = 0.002, component 1)
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*overlaps_MD_ED*day+(1+tasks|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 288	 Groups: {'mouse': 3.0}
+
+Log-likelihood: -60.646 	 AIC: 145.291
+
+Random effects:
+
+                Name    Var    Std
+mouse    (Intercept)  5.790  2.406
+mouse    tasksDualGo  4.643  2.155
+mouse  tasksDualNoGo  2.836  1.684
+
+               IV1            IV2  Corr
+mouse  (Intercept)    tasksDualGo  -1.0
+mouse  (Intercept)  tasksDualNoGo  -1.0
+mouse  tasksDualGo  tasksDualNoGo   1.0
+
+Fixed effects:
+#+end_example
+
+#+begin_src ipython
+import pandas as pd
+
+# Assuming you have the list of results from all sessions
+combined_results = []
+
+for i, result in enumerate(results):
+    coefficients = {
+        'coef': result.coefs['Estimate'],
+        'lower_ci': result.coefs['2.5_ci'],
+        'upper_ci': result.coefs['97.5_ci'],
+        'p_value': result.coefs['P-val'],
+        'Sig': result.coefs['Sig'],
+        'day': df_dist.day.unique()[i]  # Add a session identifier
+    }
+    df_result = pd.DataFrame(coefficients)
+    combined_results.append(df_result)
+
+df_combined = pd.concat(combined_results)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(df_combined)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                                  coef  lower_ci  upper_ci   p_value  Sig  day
+(Intercept)                   0.335026  0.056462  0.613589  0.018412    *    1
+tasksDualGo                  -0.063773 -0.490794  0.363249  0.769746         1
+tasksDualNoGo                -0.076872 -0.496438  0.342695  0.719522         1
+overlaps_MD_ED               -0.371440 -1.018748  0.275868  0.260728         1
+tasksDualGo:overlaps_MD_ED    0.322035 -0.544636  1.188706  0.466444         1
+tasksDualNoGo:overlaps_MD_ED  0.425816 -0.514611  1.366243  0.374836         1
+(Intercept)                   1.513976  0.319727  2.708224  0.012966    *    2
+tasksDualGo                  -0.591574 -1.273464  0.090316  0.089062    .    2
+tasksDualNoGo                -0.132301 -0.850183  0.585581  0.717944         2
+overlaps_MD_ED                0.168766 -0.696994  1.034526  0.702414         2
+tasksDualGo:overlaps_MD_ED   -0.924652 -2.062538  0.213235  0.111233         2
+tasksDualNoGo:overlaps_MD_ED  0.215046 -0.917461  1.347553  0.709768         2
+(Intercept)                   1.774200  1.015086  2.533315  0.000005  ***    3
+tasksDualGo                  -0.854395 -1.590206 -0.118585  0.022856    *    3
+tasksDualNoGo                -0.043978 -0.623775  0.535819  0.881818         3
+overlaps_MD_ED                0.047790 -0.844191  0.939771  0.916368         3
+tasksDualGo:overlaps_MD_ED   -1.180659 -2.348995 -0.012323  0.047632    *    3
+tasksDualNoGo:overlaps_MD_ED -0.157124 -1.425323  1.111075  0.808137         3
+(Intercept)                   3.334479  1.521029  5.147928  0.000313  ***    4
+tasksDualGo                  -1.219787 -2.530685  0.091111  0.068191    .    4
+tasksDualNoGo                -0.813657 -2.104241  0.476927  0.216581         4
+overlaps_MD_ED                0.166448 -1.088381  1.421277  0.794878         4
+tasksDualGo:overlaps_MD_ED    0.024530 -1.548783  1.597843  0.975622         4
+tasksDualNoGo:overlaps_MD_ED -0.465253 -2.022016  1.091510  0.558041         4
+(Intercept)                   2.731889  1.247672  4.216106  0.000309  ***    5
+tasksDualGo                  -0.620648 -1.604598  0.363301  0.216350         5
+tasksDualNoGo                -0.611148 -1.588950  0.366653  0.220567         5
+overlaps_MD_ED               -0.290829 -1.209295  0.627636  0.534852         5
+tasksDualGo:overlaps_MD_ED    0.577143 -0.568939  1.723225  0.323644         5
+tasksDualNoGo:overlaps_MD_ED  0.412507 -0.703221  1.528234  0.468675         5
+(Intercept)                   5.073119  0.540387  9.605851  0.028262    *    6
+tasksDualGo                  -1.836240 -6.348544  2.676065  0.425109         6
+tasksDualNoGo                -2.347144 -6.523897  1.829609  0.270718         6
+overlaps_MD_ED               -2.816504 -5.780820  0.147812  0.062570    .    6
+tasksDualGo:overlaps_MD_ED    4.617119  1.441379  7.792859  0.004378   **    6
+tasksDualNoGo:overlaps_MD_ED  2.273498 -1.179284  5.726280  0.196861         6
+#+end_example
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+# Set up the subplots
+unique_coefs = df_combined.index.unique()
+fig, axes = plt.subplots(nrows=len(unique_coefs) // 3, ncols=3, figsize=(width * 3, (len(unique_coefs) // 3 * height)), sharex=True, sharey=True)
+axes = axes.flatten()
+
+for coef, ax in zip(unique_coefs, axes):
+    sub_df = df_combined.loc[coef].reset_index()  # Select data for the current coefficient
+
+    sns.lineplot(x='day', y='coef', data=sub_df, ax=ax, marker='o')
+
+    # Plotting the confidence intervals
+    ax.fill_between(x=sub_df['day'], y1=sub_df['lower_ci'], y2=sub_df['upper_ci'], alpha=0.3)
+
+    for idx in range(len(sub_df)):
+        marker = significance_marker(sub_df.loc[idx, 'p_value'])
+        if marker:
+            ax.text(sub_df.loc[idx, 'day'], sub_df.loc[idx, 'coef'] + 1, marker, ha='center', fontsize=20, color='red')
+
+    ax.set_title(f'{coef}', fontsize=14)
+    ax.set_xlabel('Day')
+    ax.set_ylabel('Coefficient Value')
+
+fig.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_73.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Overlaps
+*** Overlaps ~ day * tasks
+
+#+begin_src ipython
+  formula = 'overlaps_MD_ED ~ day * tasks + (1 + day | mouse)'
+  data = df_dist.copy()
+  # data = data[data.mouse!='JawsM18']
+  # data = data[data.mouse!='ACCM04']
+  glm = Lmer(formula=formula, data=data, family='gaussian')
+  result = glm.fit()
+  print(result)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+boundary (singular) fit: see help('isSingular')
+
+Linear mixed model fit by REML [’lmerMod’]
+Formula: overlaps_MD_ED~day*tasks+(1+day|mouse)
+
+Family: gaussian	 Inference: parametric
+
+Number of observations: 3648	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1640.684 	 AIC: 3313.368
+
+Random effects:
+
+                 Name    Var    Std
+mouse     (Intercept)  0.095  0.308
+mouse         daylast  0.294  0.543
+mouse       daymiddle  0.010  0.101
+Residual               0.140  0.375
+
+               IV1        IV2   Corr
+mouse  (Intercept)    daylast -0.796
+mouse  (Intercept)  daymiddle  0.080
+mouse      daylast  daymiddle  0.540
+
+Fixed effects:
+
+                         Estimate  2.5_ci  97.5_ci     SE        DF  T-stat  \
+(Intercept)                -0.032  -0.305    0.240  0.139     4.076  -0.231
+daylast                    -0.174  -0.653    0.305  0.244     4.066  -0.712
+daymiddle                  -0.015  -0.116    0.087  0.052     5.578  -0.283
+tasksDualGo                 0.005  -0.044    0.054  0.025  3630.995   0.201
+tasksDualNoGo              -0.006  -0.055    0.043  0.025  3630.995  -0.231
+daylast:tasksDualGo         0.028  -0.048    0.104  0.039  3630.995   0.713
+daymiddle:tasksDualGo      -0.025  -0.095    0.044  0.035  3630.995  -0.717
+daylast:tasksDualNoGo      -0.011  -0.087    0.065  0.039  3630.995  -0.280
+daymiddle:tasksDualNoGo     0.004  -0.066    0.073  0.035  3630.995   0.099
+
+                         P-val Sig
+(Intercept)              0.829
+daylast                  0.515
+daymiddle                0.787
+tasksDualGo              0.841
+tasksDualNoGo            0.818
+daylast:tasksDualGo      0.476
+daymiddle:tasksDualGo    0.473
+daylast:tasksDualNoGo    0.780
+daymiddle:tasksDualNoGo  0.921
+#+end_example
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# Assuming you already have model and glm.coef()
+coefficients = {
+    'coef': glm.coefs['Estimate'],
+    'lower_ci': glm.coefs['2.5_ci'],
+    'upper_ci': glm.coefs['97.5_ci'],
+    'p_value': glm.coefs['P-val']
+}
+
+df_coefs = pd.DataFrame(coefficients)
+
+df_coefs['marker'] = df_coefs['p_value'].apply(significance_marker)
+
+#  Plot coefficients with error bars and significance markers
+plt.figure(figsize=(10, 6))
+plt.errorbar(df_coefs.index, df_coefs['coef'], yerr=[df_coefs['coef'] - df_coefs['lower_ci'], df_coefs['upper_ci'] - df_coefs['coef']], fmt='o')
+plt.axhline(y=0, color='grey', linestyle='--')
+plt.xlabel('Coefficient')
+plt.ylabel('Estimate')
+# plt.title('Coefficient Estimates with 95% Confidence Intervals')
+plt.xticks(rotation=45, ha='right', fontsize=10)
+plt.tight_layout()
+
+# Add significance markers
+for i, (coef, marker) in enumerate(zip(df_coefs['coef'], df_coefs['marker'])):
+    plt.text(i, coef+.1, f'{marker}', fontsize=22, ha='center', va='bottom')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_62.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

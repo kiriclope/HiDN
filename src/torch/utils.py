@@ -6,6 +6,12 @@
           return np.nan  # return np.nan where the score cannot be calculated
       return roc_auc_score(y_true, y_score)
 
+  def safe_f1_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return f1_score(y_true, y_score)
+
   def rescale_coefs(model, coefs, bias):
 
           try:
@@ -38,8 +44,13 @@
   import pickle as pkl
 
   def pkl_save(obj, name, path="."):
-      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
 
 
   def pkl_load(name, path="."):
-      return pkl.load(open(path + "/" + name, "rb"))
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))

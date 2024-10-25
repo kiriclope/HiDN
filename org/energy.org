@@ -64,6 +64,7 @@
 
 #+RESULTS:
 
+
 * Helpers
 ** Perceptron
 
@@ -461,7 +462,7 @@
 
 
   def pkl_load(name, path="."):
-      return pkl.load(open(path + "/" + name, "rb"))
+      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
 
 #+end_src
 
@@ -630,237 +631,167 @@
 * Parameters
 
 #+begin_src ipython
-    DEVICE = 'cuda:0'
-    mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-    N_NEURONS = [668, 693, 444, 361, 113]
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
 
-    tasks = ['DPA', 'DualGo', 'DualNoGo']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12']
+  # mice = ['PP09', 'PP17']
 
-    kwargs = {
-        'mouse': 'JawsM15',
-        'trials': '', 'reload': 0, 'data_type': 'dF',
-        'preprocess': False, 'scaler_BL': 'robust',
-        'avg_noise':True, 'unit_var_BL': False,
-        'random_state': None, 'T_WINDOW': 0.0,
-        'l1_ratio': 0.95,
-        'n_comp': None, 'scaler': None,
-        'bootstrap': 1, 'n_boots': 1024,
-        'n_splits': 5, 'n_repeats': 32,
-        'class_weight': 1
-    }
+  kwargs = {
+      'mouse': mice[2], 'laser': 0,
+      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 5, 'n_repeats': 16,
+      'class_weight': 0,
+      'multilabel':0,
+      'mne_estimator':'generalizing', # sliding or generalizing
+      'n_jobs': 128,
+  }
 
-    options = set_options(**kwargs)
-    days = np.arange(1, options['n_days']+1)
-    days = ['first', 'last']
+  # kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'last']
+  # kwargs['days'] = 'all'
+  options = set_options(**kwargs)
 
-    safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
-    options['scoring'] = safe_roc_auc
-    options['n_jobs'] = 30
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+
+  options['hp_scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
+  # options['hp_scoring'] = 'accuracy'
+  # options['scoring'] = options['hp_scoring']
 #+end_src
 
 #+RESULTS:
-
-* Decoding vs days
-
-#+begin_src ipython
-    net = RegularizedNet(
-        module=Perceptron,
-        module__num_features=693,
-        module__dropout_rate=0.0,
-        alpha=0.01,
-        l1_ratio=options['l1_ratio'],
-        criterion=CustomBCEWithLogitsLoss,
-        criterion__pos_weight=torch.tensor(1.0, device=DEVICE).to(torch.float32),
-        optimizer=optim.Adam,
-        optimizer__lr=0.1,
-        max_epochs=1000,
-        callbacks=[early_stopping],
-        train_split=None,
-        iterator_train__shuffle=False,  # Ensure the data is shuffled each epoch
-        verbose=0,
-        device= DEVICE if torch.cuda.is_available() else 'cpu',  # Assuming you might want to use CUDA
-        compile=True,
-        warm_start=True,
-    )
-
-    params = { 'net__alpha': np.logspace(-4, 4, 10),
-               # 'net__l1_ratio': np.linspace(0, 1, 10),
-               # 'net__module__dropout_rate': np.linspace(0, 1, 10),
-              }
-
-    options['verbose'] = 0
-    model = ClassificationCV(net, params, **options)
-    options['verbose'] = 1
-  #+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-    from sklearn.linear_model import LogisticRegression
-    net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
-    # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
-
-    params = {'net__C': np.logspace(-3, 3, 10)}
-
-    options['n_jobs'] = -1
-    options['verbose'] = 0
-    model = ClassificationCV(net, params, **options)
-    options['verbose'] = 1
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-    coefs_sample = []
-    coefs_dist = []
-    coefs_choice = []
-
-    bias_sample = []
-    bias_dist = []
-    bias_choice = []
-
-    theta_day = []
-    index_day = []
-
-    for day in days:
-        options['day'] = day
-
-        options['class_weight'] = 0
-        options['task'] = 'all'
-        options['features'] = 'sample'
-        options['epochs'] = ['ED']
-        coefs, bias = get_classification(model, RETURN='coefs', **options)
-
-        coefs_sample.append(coefs)
-        bias_sample.append(bias)
-
-        options['task'] = 'Dual'
-        options['features'] = 'distractor'
-        options['epochs'] = ['MD']
-        coefs, bias = get_classification(model, RETURN='coefs', **options)
-
-        coefs_dist.append(coefs)
-        bias_dist.append(bias)
-
-        # options['class_weight'] = 1
-        # options['task'] = 'all'
-        # options['features'] = 'choice'
-        # options['epochs'] = ['CHOICE']
-        # coefs, bias = get_classification(model, RETURN='coefs', **options)
-
-        # # coefs_choice.append(coefs)
-        # bias_choice.append(bias)
-
-        theta = get_theta(-coefs_sample[-1], -coefs_dist[-1], IF_NORM=0, GM=0)
-        theta_day.append(theta)
-        index_day.append(theta.argsort())
-
-    coefs_save = np.stack((coefs_sample, coefs_dist))
-    print(coefs_save.shape)
-    pkl_save(coefs_sample, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
-    #+end_src
-
-#+RESULTS:
-:RESULTS:
-: Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-: PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-: DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-: multiple days, discard 0 first 3 middle 0
-: X_S1 (144, 693, 84) X_S2 (144, 693, 84)
-: X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-: X (288, 693, 84) y (288, 8)
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-ValueError                                Traceback (most recent call last)
-Cell In[22], line 19
-     17 options['features'] = 'sample'
-     18 options['epochs'] = ['ED']
----> 19 coefs, bias = get_classification(model, RETURN='coefs', **options)
-     21 coefs_sample.append(coefs)
-     22 bias_sample.append(bias)
-
-Cell In[9], line 34, in get_classification(model, RETURN, **options)
-     31         print('imbalance', pos_weight)
-     32         model.criterion__pos_weight = pos_weight
----> 34 model.fit(X_avg, y)
-     36 if 'scores' in RETURN:
-     37     scores = model.get_cv_scores(X, y, options['scoring'])
-
-Cell In[8], line 49, in ClassificationCV.fit(self, X, y)
-     46     pass
-     48 grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
----> 49 grid.fit(X.astype('float32'), y.astype('float32'))
-     50 end = perf_counter()
-     51 if self.verbose:
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/generic.py:6534, in NDFrame.astype(self, dtype, copy, errors)
-   6530     results = [ser.astype(dtype, copy=copy) for _, ser in self.items()]
-   6532 else:
-   6533     # else, only a single dtype is given
--> 6534     new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
-   6535     res = self._constructor_from_mgr(new_data, axes=new_data.axes)
-   6536     return res.__finalize__(self, method="astype")
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/internals/managers.py:414, in BaseBlockManager.astype(self, dtype, copy, errors)
-    411 elif using_copy_on_write():
-    412     copy = False
---> 414 return self.apply(
-    415     "astype",
-    416     dtype=dtype,
-    417     copy=copy,
-    418     errors=errors,
-    419     using_cow=using_copy_on_write(),
-    420 )
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/internals/managers.py:354, in BaseBlockManager.apply(self, f, align_keys, **kwargs)
-    352         applied = b.apply(f, **kwargs)
-    353     else:
---> 354         applied = getattr(b, f)(**kwargs)
-    355     result_blocks = extend_blocks(applied, result_blocks)
-    357 out = type(self).from_blocks(result_blocks, self.axes)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/internals/blocks.py:616, in Block.astype(self, dtype, copy, errors, using_cow)
-    596 """
-    597 Coerce to the new dtype.
-    598
-   (...)
-    612 Block
-    613 """
-    614 values = self.values
---> 616 new_values = astype_array_safe(values, dtype, copy=copy, errors=errors)
-    618 new_values = maybe_coerce_values(new_values)
-    620 refs = None
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/dtypes/astype.py:238, in astype_array_safe(values, dtype, copy, errors)
-    235     dtype = dtype.numpy_dtype
-    237 try:
---> 238     new_values = astype_array(values, dtype, copy=copy)
-    239 except (ValueError, TypeError):
-    240     # e.g. _astype_nansafe can fail on object-dtype of strings
-    241     #  trying to convert to float
-    242     if errors == "ignore":
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/dtypes/astype.py:183, in astype_array(values, dtype, copy)
-    180     values = values.astype(dtype, copy=copy)
-    182 else:
---> 183     values = _astype_nansafe(values, dtype, copy=copy)
-    185 # in pandas we don't store numpy str dtypes, so convert to object
-    186 if isinstance(dtype, np.dtype) and issubclass(values.dtype.type, str):
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/dtypes/astype.py:134, in _astype_nansafe(arr, dtype, copy, skipna)
-    130     raise ValueError(msg)
-    132 if copy or arr.dtype == object or dtype == object:
-    133     # Explicit copy, or required since NumPy can't view from / to object.
---> 134     return arr.astype(dtype, copy=True)
-    136 return arr.astype(dtype, copy=copy)
-
-ValueError: could not convert string to float: 'correct_rej'
-#+end_example
-:END:
 
 * Landscape vs days
-** Reload data
+** sample
+
+#+begin_src ipython
+if options['hp_scoring'] == 'accuracy':
+    dum = 'scores_l1'
+else:
+    dum = 'overlaps_l1'
+
+if len(options['days'])>3:
+    name = 'df_sample_%s_days' % dum
+elif len(options['days'])==2:
+    name = 'df_sample_%s_early_late' % dum
+else:
+    name = 'df_sample_%s' % dum
+
+if len(mice)==1:
+    size = size
+    df_sample = pkl_load('%s' % name, path="../data/%s/%s" % (options['mouse'], dum))
+elif len(mice)==2:
+    df_sample = pkl_load('%s' % name, path="../data/mice/%s_ACC" % dum)
+    size = 115
+else:
+    size = 84
+    df_sample = pkl_load('%s' % name, path="../data/mice/%s" % dum)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+index = mice.index(options['mouse'])
+N = N_NEURONS[index]
+df = df_sample[df_sample.mouse==options['mouse']]
+df = df[df.day=='first']
+
+options['epochs']  = ['ED']
+coefs_sample = avg_epochs(np.array(df.coefs.tolist()).reshape(-1, N+1, 84), **options).mean(0)
+print(coefs_sample.shape)
+#+end_src
+
+#+RESULTS:
+: (445,)
+
+** Dist
+
+#+begin_src ipython
+if len(options['days'])>3:
+    name = 'df_distractor_%s_days' % dum
+elif len(options['days'])==3:
+    name = 'df_distractor_%s_early_late' % dum
+else:
+    name = 'df_distractor_%s' % dum
+
+if len(mice)==1:
+    df_dist = pkl_load('%s' % name, path="../data/%s/%s" % (options['mouse'], dum))
+elif len(mice)==2:
+    df_dist = pkl_load('%s' % name, path="../data/mice/%s_ACC" % dum)
+else:
+    df_dist = pkl_load('%s' % name, path="../data/mice/%s" %dum).reset_index()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+index = mice.index(options['mouse'])
+N = N_NEURONS[index]
+df = df_dist[df_dist.mouse==options['mouse']]
+df = df[df.day=='first']
+df=df[df.tasks!='DPA']
+
+options['epochs']  = ['MD']
+coefs_dist = avg_epochs(np.array(df.coefs.tolist()).reshape(-1, N+1, 84), **options).mean(0)
+print(coefs_dist.shape)
+#+end_src
+
+#+RESULTS:
+: (445,)
+
+#+begin_src ipython
+theta_first = get_theta(coefs_sample[1:], -coefs_dist[1:], IF_NORM=0, GM=0)
+index_day = [theta_first.argsort()]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+index = mice.index(options['mouse'])
+N = N_NEURONS[index]
+df = df_sample[df_sample.mouse==options['mouse']]
+df = df[df.day=='last']
+
+options['epochs']  = ['ED']
+coefs_sample = avg_epochs(np.array(df.coefs.tolist()).reshape(-1, N+1, 84), **options).mean(0)
+print(coefs_sample.shape)
+#+end_src
+
+#+RESULTS:
+: (445,)
+
+#+begin_src ipython
+index = mice.index(options['mouse'])
+N = N_NEURONS[index]
+df = df_dist[df_dist.mouse==options['mouse']]
+df = df[df.day=='last']
+df=df[df.tasks!='DPA']
+
+options['epochs']  = ['MD']
+coefs_dist = avg_epochs(np.array(df.coefs.tolist()).reshape(-1, N+1, 84), **options).mean(0)
+print(coefs_dist.shape)
+#+end_src
+
+#+RESULTS:
+: (445,)
+
+#+begin_src ipython
+theta_last = get_theta(coefs_sample[1:], -coefs_dist[1:], IF_NORM=0, GM=0)
+index_day = np.stack((theta_first.argsort(), theta_last.argsort()))
+print(index_day.shape)
+#+end_src
+
+#+RESULTS:
+: (2, 444)
 
 #+begin_src ipython
   options['features'] = 'sample'
@@ -871,7 +802,7 @@ ValueError: could not convert string to float: 'correct_rej'
   y_list = []
   tasks = ["DPA", "DualGo", "DualNoGo"]
 
-  for i, day in enumerate(days):
+  for i, day in enumerate(options['days']):
       X_dum = []
       y_dum = []
       options['day'] = day
@@ -898,52 +829,31 @@ ValueError: could not convert string to float: 'correct_rej'
 
 #+RESULTS:
 #+begin_example
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-PREPROCESSING: SCALER robust AVG MEAN False AVG NOISE True UNIT VAR False
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-multiple days 0 2 2
-(64, 693, 84)
-(3, 3, 64, 693, 84) (3, 3, 64)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 444, 84) X_S2 (48, 444, 84)
+X_S3 (0, 444, 84) X_S4 (0, 444, 84)
+(96, 444, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 444, 84) X_S2 (48, 444, 84)
+X_S3 (0, 444, 84) X_S4 (0, 444, 84)
+(96, 444, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 444, 84) X_S2 (48, 444, 84)
+X_S3 (0, 444, 84) X_S4 (0, 444, 84)
+(96, 444, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 444, 84) X_S2 (48, 444, 84)
+X_S3 (0, 444, 84) X_S4 (0, 444, 84)
+(96, 444, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 444, 84) X_S2 (48, 444, 84)
+X_S3 (0, 444, 84) X_S4 (0, 444, 84)
+(96, 444, 84)
+multiple days, discard 0 first 3 middle 0
+X_S1 (48, 444, 84) X_S2 (48, 444, 84)
+X_S3 (0, 444, 84) X_S4 (0, 444, 84)
+(96, 444, 84)
+(2, 3, 96, 444, 84) (2, 3, 96, 8)
 #+end_example
 
 ** Energy
@@ -953,20 +863,20 @@ multiple days 0 2 2
     bins = None
     # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
     # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
-    # bins = opts['bins_ED']
+    # bins = opts['bins_BL']
     # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
     # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-    bins = opts['bins_PRE_DIST']
+    # bins = opts['bins_PRE_DIST']
     # bins = opts['bins_DELAY']
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  task = 'all'
+  task = 0
   kwargs['task'] = task
 
-  num_bins = 96
+  num_bins = 64
   print('num_bins', num_bins)
 
   window = 0.1
@@ -974,12 +884,12 @@ multiple days 0 2 2
 
   IF_HMM = 0
   n_iter = 100
-  IF_BOOT=1
+  IF_BOOT=0
   IF_NORM=0
 #+end_src
 
 #+RESULTS:
-: num_bins 96
+: num_bins 64
 : window 0.1
 
 #+begin_src ipython
@@ -987,13 +897,13 @@ multiple days 0 2 2
 #+end_src
 
 #+RESULTS:
-: (64, 693, 84)
+: (96, 444, 84)
 
 #+begin_src ipython
   energy_day = []
   ci_day = []
 
-  for i, day in enumerate(days):
+  for i, day in enumerate(options['days']):
       X = np.array(X_list[i])
       energy, ci = get_energy(X, np.array(y_list[i]), task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
 
@@ -1002,14 +912,12 @@ multiple days 0 2 2
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: bootstrap: 100% 1000/1000 [00:06<00:00, 166.02it/s]
-:
-: bootstrap: 100% 1000/1000 [00:05<00:00, 168.34it/s]
-:
-: bootstrap: 100% 1000/1000 [00:06<00:00, 162.71it/s]
-:
-:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
 
 #+begin_src ipython
   from scipy.signal import find_peaks
@@ -1062,17 +970,18 @@ multiple days 0 2 2
 #+RESULTS:
 
 #+begin_src ipython
+  days = options['days']
   cmap = plt.get_cmap('Blues')
   colors = [cmap((i+1)/len(days)) for i in range(len(days))]
-  window = .05
+  window = .01
 
   min_angles, min_energies = [], []
   theta = np.linspace(0, 360, energy_day[0].shape[0]-1, endpoint=False)
   windowSize = int(window * energy_day[0].shape[0]-1)
 
   fig, ax = plt.subplots()
-  for i, day in enumerate(days):
-      plot_theta_energy(theta_day[i], energy_day[i], ci_day[i],
+  for i, day in enumerate(options['days']):
+      plot_theta_energy(0, energy_day[i], ci_day[i],
                         window=window, ax=ax, SMOOTH=1, color=colors[i])
 
       # min_angle, min_energy = find_minima(energy_day[i] * 100, window=window,
@@ -1090,7 +999,7 @@ multiple days 0 2 2
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_29.png]]
+[[./figures/landscape/figure_35.png]]
 
 #+begin_src ipython
   min_angles = np.array(min_angles).T
@@ -1098,8 +1007,8 @@ multiple days 0 2 2
 #+end_src
 
 #+RESULTS:
-: [[355. 356. 341.]
-:  [130. 183. 164.]]
+: [[217. 241.]
+:  [ 75.  98.]]
 
 #+begin_src ipython
   distance = np.abs(min_angles[0] - min_angles[1])
@@ -1123,9 +1032,9 @@ multiple days 0 2 2
 
 #+RESULTS:
 :RESULTS:
-: [224.38991413 172.71697019 177.504146  ]
-: [136. 173. 178.]
-[[./figures/landscape/figure_31.png]]
+: [142.60284329 142.67106169]
+: [143. 143.]
+[[./figures/landscape/figure_37.png]]
 :END:
 
 #+begin_src ipython

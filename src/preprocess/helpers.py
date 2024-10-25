@@ -316,6 +316,9 @@ def avg_epochs(X, axis=-1, **kwargs):
         elif epoch == "DIST":
             X_DIST = np.nanmean(X[..., kwargs["bins_DIST"]], axis=axis)
             X_epochs[i_epoch] = X_DIST
+        elif epoch == "DIST_MD":
+            X_DIST = np.nanmean(X[..., kwargs["bins_DIST_MD"]], axis=axis)
+            X_epochs[i_epoch] = X_DIST
         elif epoch == "PRE_DIST":
             X_DIST = np.nanmean(X[..., kwargs["bins_PRE_DIST"]], axis=axis)
             X_epochs[i_epoch] = X_DIST
