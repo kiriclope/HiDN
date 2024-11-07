@@ -360,6 +360,16 @@
 
 #+RESULTS:
 
+#+begin_src ipython
+def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
 #+begin_src ipython :tangle ../src/torch/utils.py
   import pickle as pkl
 
@@ -394,9 +404,9 @@
 
 
 #+begin_src ipython
-  def get_energy(X, y, task, num_bins, bins, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
+  def get_energy(X, y, task, num_bins, bins, bins0, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
     ci_ = None
-    energy_ = run_energy(X, num_bins, bins, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+    energy_ = run_energy(X, num_bins, bins, bins0, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
     if IF_BOOT:
         _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
     if ci_ is not None:
@@ -462,7 +472,7 @@
       kernel = np.ones(windowSize) / windowSize
 
       # Apply convolution along the last axis or specified axis
-      smooth_signal = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='same'), axis=-1, arr=signal_copy)
+      smooth_signal = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='valid'), axis=-1, arr=signal_copy)
 
       # Substitute the original nan positions back into the result
       smooth_signal[nan_mask] = np.nan
@@ -471,6 +481,65 @@
           smooth_signal = np.swapaxes(smooth_signal, axis, -1)
 
       return smooth_signal
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+
+def circcvl(signal, windowSize=10, axis=-1):
+    signal_copy = signal.copy()
+
+    if axis != -1 and signal.ndim != 1:
+        signal_copy = np.swapaxes(signal_copy, axis, -1)
+
+    # Save the NaN positions before replacing them
+    nan_mask = np.isnan(signal_copy)
+    signal_copy[nan_mask] = np.interp(
+        np.flatnonzero(nan_mask),
+        np.flatnonzero(~nan_mask),
+        signal_copy[~nan_mask]
+    )
+
+    # Ensure the window size is odd for a centered kernel
+    if windowSize % 2 == 0:
+        windowSize += 1
+
+    # Create a centered averaging kernel
+    kernel = np.ones(windowSize) / windowSize
+
+    # Number of elements to pad on each side
+    pad_width = windowSize // 2
+
+    # Pad the signal circularly
+    if signal.ndim == 1:
+        padded_signal = np.pad(signal_copy, pad_width, mode='wrap')
+    else:
+        padding = [(0, 0)] * (signal.ndim - 1) + [(pad_width, pad_width)]
+        padded_signal = np.pad(signal_copy, padding, mode='wrap')
+
+    # Apply convolution along the last axis or specified axis
+    smooth_signal = np.apply_along_axis(
+        lambda m: np.convolve(m, kernel, mode='same'),
+        axis=-1,
+        arr=padded_signal
+    )
+
+    # Remove padding
+    if signal.ndim == 1:
+        smooth_signal = smooth_signal[pad_width:-pad_width]
+    else:
+        indexer = [slice(None)] * (smooth_signal.ndim - 1) + [slice(pad_width, -pad_width)]
+        smooth_signal = smooth_signal[tuple(indexer)]
+
+    # Substitute the original NaN positions back into the result
+    smooth_signal[nan_mask] = np.nan
+
+    if axis != -1 and signal.ndim != 1:
+        smooth_signal = np.swapaxes(smooth_signal, axis, -1)
+
+    return smooth_signal
 #+end_src
 
 #+RESULTS:
@@ -488,7 +557,7 @@
           distance *= -1
       return distance
 
-  def find_multiple_minima_from_values(x_vals, y_vals, num_minima=2, num_runs=50, tol=0.05, popsize=50, maxiter=10000, min_distance=0.1, ax=None):
+  def find_multiple_minima_from_values(x_vals, y_vals, num_minima=2, num_runs=50, tol=0.05, popsize=50, maxiter=10000, min_distance=0.1, ax=None, color='k'):
       # Interpolate the energy landscape
       energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
 
@@ -498,17 +567,20 @@
       results = []
 
       for _ in range(num_runs):
-          result = differential_evolution(energy_function, bounds, strategy='best1bin',
-                                          maxiter=maxiter, popsize=popsize, tol=0.01,
+          result = differential_evolution(energy_function, bounds, strategy='rand1bin',
+                                          maxiter=maxiter, popsize=popsize, tol=tol,
                                           seed=np.random.randint(0, 10000))
+
           results.append((result.x[0], result.fun))
 
       # Filter unique minima within a tolerance and minimum distance
       unique_minima = []
+      angles = []
       for x_val, energy in results:
 
           if not any(np.isclose(x_val, um[0], atol=tol) or get_distance(x_val, um[0]) < min_distance for um in unique_minima):
               unique_minima.append([x_val, energy])
+              angles.append(x_val)
 
       # Ensure we only return the requested number of unique minima
       unique_minima = sorted(unique_minima, key=lambda x: x[1])[:num_minima]
@@ -521,15 +593,56 @@
       # ax.plot(x, y)
 
       for min_x, _ in unique_minima:
-          ax.plot(min_x, energy_function(min_x), 'ro')  # Mark the minima points
+          ax.plot(min_x, np.abs(energy_function(min_x)), 'o', color=color, markeredgecolor='k')  # Mark the minima points
 
-      return unique_minima
+      return angles
 
   # Example usage
   # x_vals = np.linspace(-2, 2, 50)
   # y_vals = np.sin(np.pi * x_vals) * 2 + np.cos(2 * np.pi * x_vals) * 2 + 0.1 * x_vals * 2 + np.random.normal(0, 0.1, size=x_vals.shape)
 
   # find_multiple_minima_from_values(x_vals, y_vals, num_minima=4, num_runs=10, tol=0.05, popsize=15, maxiter=100, min_distance=0.1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+
+  def safe_f1_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return f1_score(y_true, y_score, average='weighted')
+      #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
+    try:
+        coef = estimator.named_steps["model"].coef_.flatten()
+        clf = estimator.named_steps["model"]
+    except:
+        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
+        clf = estimator.best_estimator_named_steps["model"]
+
+    norm_w = np.linalg.norm(coef)
+
+    if IF_SIGN:
+        # dot_product = (2*y_test -1) * np.dot(X_test, coef) / (np.linalg.norm(coef) + .00001)
+        dot_product = (2*y_test -1) * clf.decision_function(X_test)
+    else:
+        dot_product = clf.decision_function(X_test)
+        # dot_product = -np.dot(X_test, coef) / (np.linalg.norm(coef) + .00001)
+
+    return np.nanmean(dot_product) / coef.shape[0] / norm_w
 #+end_src
 
 #+RESULTS:
@@ -548,31 +661,32 @@
   kwargs = {
       'mouse': mice[1], 'laser': 0,
       'trials': 'correct', 'reload': 0, 'data_type': 'dF',
-      'prescreen': None, 'pval': 0.05,
+      'prescreen':None, 'pval': 0.05,
       'preprocess': False, 'scaler_BL': 'robust',
       'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
-      'bootstrap': 1, 'n_boots': 128,
-      'n_splits': 5, 'n_repeats': 16,
+      'bootstrap': 1, 'n_boots': 1000,
+      'n_splits': 3, 'n_repeats': 16,
       'class_weight': 0,
       'multilabel':0,
       'mne_estimator':'generalizing', # sliding or generalizing
       'n_jobs': 128,
+      'bolasso_penalty': 'l2',
   }
 
   # kwargs['days'] = ['first', 'middle', 'last']
-  kwargs['days'] = ['first', 'last']
-  # kwargs['days'] = 'all'
+  # kwargs['days'] = ['first', 'last']
+  kwargs['days'] = 'all'
   options = set_options(**kwargs)
 
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  # safe_f1 = make_scorer(safe_f1_score, needs_proba=True)
 
   # options['hp_scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
   options['hp_scoring'] = safe_roc_auc
   options['scoring'] = options['hp_scoring']
-  options['cv'] = None
 #+end_src
 
 #+RESULTS:
@@ -580,18 +694,30 @@
 * Landscape vs days
 
 #+begin_src ipython
-  from src.torch.classificationCV import ClassificationCV
+import sys
+sys.path.insert(0, '/home/leon/Dclassify')
+from src.classificationCV import ClassificationCV
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  #  from src.torch.classificationCV import ClassificationCV
   from src.torch.classify import get_classification
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-    from sklearn.linear_model import LogisticRegression
-    net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None, tol=0.001)
+    from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+    Cs = np.logspace(-2, 2, 10)
+    # net = LogisticRegressionCV(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None, tol=0.001, cv=3, Cs=Cs)
+    net = LogisticRegressionCV(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratios=[0.95], max_iter=100, tol=.001, Cs=Cs, cv=3)
+
+    # net = LogisticRegression(penalty='l2', solver='liblinear', class_weight='balanced', n_jobs=None, tol=0.001)
     # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
 
-    params = {'net__C': np.logspace(-3, 3, 10)}
+    params = {'model__C': np.logspace(-2, 2, 10)}
 
     options['n_jobs'] = -1
     options['verbose'] = 0
@@ -620,27 +746,26 @@
         options['task'] = 'all'
         options['features'] = 'sample'
         options['epochs'] = ['ED']
-        coefs, bias = get_classification(model, RETURN='coefs', **options)
 
-        coefs_sample.append(coefs[:, 0])
+        # coefs, bias = get_classification(model, RETURN='coefs', **options)
+        # coefs_sample.append(coefs[:, 0])
+
+        coefs, bias = get_classification(model, RETURN='bolasso', **options)
+        coefs_sample.append(coefs)
+
         bias_sample.append(bias)
 
         options['task'] = 'Dual'
         options['features'] = 'distractor'
         options['epochs'] = ['MD']
-        coefs, bias = get_classification(model, RETURN='coefs', **options)
 
-        coefs_dist.append(coefs[:, 0])
-        bias_dist.append(bias)
-
-        # options['class_weight'] = 1
-        # options['task'] = 'all'
-        # options['features'] = 'choice'
-        # options['epochs'] = ['CHOICE']
         # coefs, bias = get_classification(model, RETURN='coefs', **options)
+        # coefs_dist.append(coefs[:, 0])
 
-        # # coefs_choice.append(coefs)
-        # bias_choice.append(bias)
+        coefs, bias = get_classification(model, RETURN='bolasso', **options)
+        coefs_dist.append(coefs)
+
+        bias_dist.append(bias)
 
         theta = get_theta(-coefs_sample[-1], -coefs_dist[-1], IF_NORM=0, GM=0)
         theta_day.append(theta)
@@ -654,125 +779,290 @@
 #+RESULTS:
 #+begin_example
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (95, 693, 84) X_S2 (100, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-y_labels (195, 8) ['DualNoGo' 'DualGo' 'DPA']
-X (195, 693, 84) y (195,) [0. 1.]
-Elapsed (with compilation) = 0h 0m 8s
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+X_S1 (30, 693, 84) X_S2 (29, 693, 84)
+y_labels (59, 12) ['DualNoGo' 'DualGo' 'DPA']
+X (59, 693, 84) y (59,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 557
+X_fs (59, 557)
+samples (59,) features (693,) non zero 557
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (55, 693, 84) X_S2 (70, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-y_labels (125, 8) ['DualGo' 'DualNoGo']
-X (125, 693, 84) y (125,) [0. 1. 2. 3.]
-Elapsed (with compilation) = 0h 0m 2s
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 1 LASER 0
+X_S1 (20, 693, 84) X_S2 (20, 693, 84)
+y_labels (40, 12) ['DualGo' 'DualNoGo']
+X (40, 693, 84) y (40,) [0. 1. 2. 3.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 677
+X_fs (40, 677)
+samples (40,) features (693,) non zero 677
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (124, 693, 84) X_S2 (125, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-y_labels (249, 8) ['DualGo' 'DualNoGo' 'DPA']
-X (249, 693, 84) y (249,) [0. 1.]
-Elapsed (with compilation) = 0h 0m 3s
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+X_S1 (30, 693, 84) X_S2 (33, 693, 84)
+y_labels (63, 12) ['DualNoGo' 'DualGo' 'DPA']
+X (63, 693, 84) y (63,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 676
+X_fs (63, 676)
+samples (63,) features (693,) non zero 676
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES distractor TASK Dual TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (78, 693, 84) X_S2 (82, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-y_labels (160, 8) ['DualGo' 'DualNoGo']
-X (160, 693, 84) y (160,) [0. 1. 2. 3.]
-Elapsed (with compilation) = 0h 0m 2s
-(2, 2, 693)
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 2 LASER 0
+X_S1 (15, 693, 84) X_S2 (24, 693, 84)
+y_labels (39, 12) ['DualGo' 'DualNoGo']
+X (39, 693, 84) y (39,) [0. 1. 2. 3.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 662
+X_fs (39, 662)
+samples (39,) features (693,) non zero 662
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+X_S1 (35, 693, 84) X_S2 (38, 693, 84)
+y_labels (73, 12) ['DualGo' 'DPA' 'DualNoGo']
+X (73, 693, 84) y (73,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 669
+X_fs (73, 669)
+samples (73,) features (693,) non zero 669
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 3 LASER 0
+X_S1 (20, 693, 84) X_S2 (26, 693, 84)
+y_labels (46, 12) ['DualGo' 'DualNoGo']
+X (46, 693, 84) y (46,) [0. 1. 2. 3.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 670
+X_fs (46, 670)
+samples (46,) features (693,) non zero 670
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+X_S1 (45, 693, 84) X_S2 (44, 693, 84)
+y_labels (89, 12) ['DualGo' 'DualNoGo' 'DPA']
+X (89, 693, 84) y (89,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 676
+X_fs (89, 676)
+samples (89,) features (693,) non zero 676
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 4 LASER 0
+X_S1 (27, 693, 84) X_S2 (30, 693, 84)
+y_labels (57, 12) ['DualGo' 'DualNoGo']
+X (57, 693, 84) y (57,) [0. 1. 2. 3.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 670
+X_fs (57, 670)
+samples (57,) features (693,) non zero 670
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+X_S1 (36, 693, 84) X_S2 (34, 693, 84)
+y_labels (70, 12) ['DualNoGo' 'DPA' 'DualGo']
+X (70, 693, 84) y (70,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 663
+X_fs (70, 663)
+samples (70,) features (693,) non zero 663
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 5 LASER 0
+X_S1 (24, 693, 84) X_S2 (21, 693, 84)
+y_labels (45, 12) ['DualGo' 'DualNoGo']
+X (45, 693, 84) y (45,) [0. 1. 2. 3.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 683
+X_fs (45, 683)
+samples (45,) features (693,) non zero 683
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES sample TASK all TRIALS correct DAYS 6 LASER 0
+X_S1 (43, 693, 84) X_S2 (47, 693, 84)
+y_labels (90, 12) ['DPA' 'DualNoGo' 'DualGo']
+X (90, 693, 84) y (90,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 673
+X_fs (90, 673)
+samples (90,) features (693,) non zero 673
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 11)
+DATA: FEATURES distractor TASK Dual TRIALS correct DAYS 6 LASER 0
+X_S1 (27, 693, 84) X_S2 (31, 693, 84)
+y_labels (58, 12) ['DualGo' 'DualNoGo']
+X (58, 693, 84) y (58,) [0. 1. 2. 3.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 670
+X_fs (58, 670)
+samples (58,) features (693,) non zero 670
+(2, 6, 693)
 #+end_example
 
-** Reload data
+#+begin_src ipython
+print(coefs_save.shape)
+#+end_src
+
+#+RESULTS:
+: (2, 6, 693)
 
 #+begin_src ipython
-  options['features'] = 'sample'
-  options['trials'] = ''
-  options['reload'] = 0
+angle = []
+for i in range(len(options['days'])):
+    angle.append(angle_AB(-coefs_save[0][i], -coefs_save[1][i]))
+print(angle)
+angle = np.array(angle)
+pkl_save(angle, 'angle_%s' % options['mouse'], path=".")
+#+end_src
 
-  X_list = []
-  y_list = []
-  tasks = ["DPA", "DualGo", "DualNoGo"]
+#+RESULTS:
+: [94, 98, 84, 92, 84, 90]
 
-  for i, day in enumerate(options['days']):
-      X_dum = []
-      y_dum = []
-      options['day'] = day
-      for task in tasks:
-          options['task'] = task
-          X_days, y_days = get_X_y_days(**options)
-          X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-          y_data[y_data==-1] = 0
-          print(X_data.shape)
-          X_dum.append(X_data[..., index_day[i], :])
-          y_dum.append(y_data.sample_odor.to_numpy())
+#+begin_src ipython
+plt.plot(options['days'], angle, '-o')
+plt.xlabel('Day')
+plt.ylabel('Angle A/B vs Go/noGo (°)')
+plt.axhline(90, ls='--', color='k')
+plt.show()
+#+end_src
 
-      X_list.append(X_dum)
-      y_list.append(y_dum)
+#+RESULTS:
+[[./figures/landscape/figure_26.png]]
 
-  try:
-      X_list = np.array(X_list)
-      y_list = np.array(y_list)
+* Reload data
 
-      print(X_list.shape, y_list.shape)
-  except:
-      pass
-      #+end_src
+#+begin_src ipython
+options['features'] = 'sample'
+options['trials'] = ''
+options['reload'] = 0
+
+X_list = []
+y_list = []
+tasks = ["DPA", "DualGo", "DualNoGo"]
+
+for i, day in enumerate(options['days']):
+    X_dum = []
+    y_dum = []
+    options['day'] = day
+    for task in tasks:
+        options['task'] = task
+        X_days, y_days = get_X_y_days(**options)
+        X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+        y_data[y_data==-1] = 0
+        print(X_data.shape)
+        X_dum.append(X_data[..., index_day[i], :])
+        y_dum.append(y_data.sample_odor.to_numpy())
+
+    X_list.append(X_dum)
+    y_list.append(y_dum)
+
+try:
+    X_list = np.array(X_list)
+    y_list = np.array(y_list)
+
+    print(X_list.shape, y_list.shape)
+except:
+    pass
+#+end_src
 
 #+RESULTS:
 #+begin_example
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-(96, 693, 84)
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 1 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-(96, 693, 84)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 1 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-(96, 693, 84)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 1 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-(96, 693, 84)
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 2 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-(96, 693, 84)
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 2 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
 Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 693, 84) X_S2 (48, 693, 84)
-X_S3 (0, 693, 84) X_S4 (0, 693, 84)
-(96, 693, 84)
-(2, 3, 96, 693, 84) (2, 3, 96)
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 2 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 3 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 3 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 3 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 4 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 4 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 4 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 5 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 5 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 5 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DPA TRIALS  DAYS 6 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualGo TRIALS  DAYS 6 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+Loading files from /home/leon/dual_task/dual_data/data/JawsM15
+DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS 6 LASER 0
+X_S1 (16, 693, 84) X_S2 (16, 693, 84)
+(32, 693, 84)
+(6, 3, 32, 693, 84) (6, 3, 32)
 #+end_example
 
 #+begin_src ipython
-print(X_list.shape, y_list.shape)
-print(np.array(X_list[0]).mean(0).shape)
+# X_list = np.array(X_list)
+# print(X_list.shape, y_list.shape)
+# print(np.array(X_list[0]).mean(0).shape)
 #+end_src
 
 #+RESULTS:
-: (2, 3, 96, 693, 84) (2, 3, 96)
-: (96, 693, 84)
 
 #+begin_src ipython
 import matplotlib.pyplot as plt
@@ -792,9 +1082,9 @@ def add_vdashed(ax=None, y0=693, mouse=""):
             ax.axvline(x=t[1], linestyle='--', color='k', lw=2)
 
         # Add text labels at the middle of each interval
-        ax.text((t_STIM[0] + t_STIM[1]) / 2, y0, 'STIM', color='black',
+        ax.text((t_STIM[0] + t_STIM[1]) / 2, y0, 'A/B', color='black',
                 horizontalalignment='center', verticalalignment='center', fontsize=16)
-        ax.text((t_DIST[0] + t_DIST[1]) / 2, y0, 'DIST', color='black',
+        ax.text((t_DIST[0] + t_DIST[1]) / 2, y0, 'GnG', color='black',
                 horizontalalignment='center', verticalalignment='center', fontsize=16)
         ax.text((t_CUE[0] + t_CUE[1]) / 2, y0, 'CUE', color='black',
                 horizontalalignment='center', verticalalignment='center', fontsize=16)
@@ -882,7 +1172,7 @@ def plot_bump(X, y, trial, windowSize=10, width=7, s=0):
 
 #+RESULTS:
 
-** Bumps
+* Bumps
 
 #+begin_src ipython
 from src.preprocess.helpers import preprocess_X
@@ -892,7 +1182,7 @@ X_norm = X_list[day][ task]
 # X_norm = preprocess_X(X_list[day][task], scaler="robust", avg_noise=0, unit_var=1)
 idx = np.random.randint(X_norm.shape[0]//2)
 print(idx)
-idx=21
+
 plot_bump(X_norm, y_list[day][ task], trial=idx, windowSize=int(0.1 * X_norm.shape[1]))
 plt.savefig('./cosyne/dpa_bump.svg', dpi=300)
 plt.show()
@@ -900,8 +1190,8 @@ plt.show()
 
 #+RESULTS:
 :RESULTS:
-: 38
-[[./figures/landscape/figure_23.png]]
+: 15
+[[./figures/landscape/figure_31.png]]
 :END:
 
 #+begin_src ipython
@@ -919,8 +1209,8 @@ plt.show()
 
 #+RESULTS:
 :RESULTS:
-: 20
-[[./figures/landscape/figure_24.png]]
+: 3
+[[./figures/landscape/figure_32.png]]
 :END:
 
 #+begin_src ipython
@@ -938,31 +1228,33 @@ plt.show()
 
 #+RESULTS:
 :RESULTS:
-: 19
-[[./figures/landscape/figure_25.png]]
+: 1
+[[./figures/landscape/figure_33.png]]
 :END:
 
-** Energy
+* Energy
 
 #+begin_src ipython
     opts = set_options(T_WINDOW=0.0)
     bins = None
     # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
     # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
-    # bins = opts['bins_ED']
+    bins0 = opts['bins_ED']
     # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
-    # bins = np.concatenate( (opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
+    # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
     # bins = opts['bins_PRE_DIST']
-    bins = opts['bins_DELAY']
+    bins = opts['bins_ED']
+
+    bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-  task = 0
+  task = 'all'
   kwargs['task'] = task
 
-  num_bins = 96
+  num_bins = 32
   print('num_bins', num_bins)
 
   window = 0.1
@@ -975,29 +1267,28 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: num_bins 96
+: num_bins 32
 : window 0.1
-
-#+begin_src ipython
-  print(np.array(X_list[0][0]).shape)
-#+end_src
-
-#+RESULTS:
-: (96, 693, 84)
 
 #+begin_src ipython
   energy_day = []
   ci_day = []
 
   for i, day in enumerate(options['days']):
-      X = np.array(X_list[i])
-      energy, ci = get_energy(X, np.array(y_list[i]), task, num_bins, bins, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
-
+      energy, ci = get_energy(X_list[i], y_list[i], task, num_bins, bins, bins0, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
       energy_day.append(energy)
       ci_day.append(ci)
 #+end_src
 
 #+RESULTS:
+
+#+begin_src ipython
+bins0
+#+end_src
+
+#+RESULTS:
+: array([18, 19, 20, 21, 22, 23, 24, 25, 26])
+
 
 #+begin_src ipython
   from scipy.signal import find_peaks
@@ -1050,6 +1341,25 @@ plt.show()
 #+RESULTS:
 
 #+begin_src ipython
+from matplotlib.patches import Circle
+
+def plot_fix_points(phi, ax, color='k', title=''):
+
+    x = np.cos(phi)
+    y = np.sin(phi)
+
+    ax.plot(x, y, 'o', ms=15, color=color, markeredgecolor='k')
+    circle = Circle((0., 0.), 1, fill=False, edgecolor='k')
+    ax.add_patch(circle)
+
+    ax.set_aspect('equal')
+    ax.set_title(title)
+    ax.axis('off')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
   days = options['days']
   cmap = plt.get_cmap('Blues')
   colors = [cmap((i+1)/len(options['days'])) for i in range(len(options['days']))]
@@ -1059,30 +1369,263 @@ plt.show()
   theta = np.linspace(0, 360, energy_day[0].shape[0]-1, endpoint=False)
   windowSize = int(window * energy_day[0].shape[0]-1)
 
-  fig, ax = plt.subplots()
+  fig, ax = plt.subplots(1, 2, figsize= [2*width, height])
   for i, day in enumerate(options['days']):
       plot_theta_energy(0, energy_day[i], ci_day[i],
-                        window=window, ax=ax, SMOOTH=1, color=colors[i])
+                        window=window, ax=ax[0], SMOOTH=1, color=colors[i])
 
-      # min_angle, min_energy = find_minima(energy_day[i] * 100, window=window,
-      #                                     prominence=.001,  ax=ax,  color=colors[i], distance=15, height=None)
+      minima = find_multiple_minima_from_values(theta, circcvl(energy_day[i][1:]*100, windowSize), num_minima=2,
+                                                num_runs=360, tol=.1, ax=ax[0], min_distance=40, popsize=1, color=colors[i])
+      # print(minima)
+      plot_fix_points(np.array(minima[:2]) * np.pi / 180.0, ax[1], color=colors[i])
+      min_angles.append(minima[:2])
+      # maxima = find_multiple_minima_from_values(theta, -circcvl(energy_day[i][1:]*100, windowSize), num_minima=10, num_runs=1000,
+      #                                           tol=.01, ax=ax[0],
+      #                                           min_distance=0, popsize=1, color='w')
+      # # print(maxima)
+      # plot_fix_points(np.array(maxima[:2]) * np.pi / 180.0, ax[1], color='w')
 
-      minima = find_multiple_minima_from_values(theta, circcvl(energy_day[i][1:]*100, windowSize), num_minima=2, num_runs=150, tol=.01, ax=ax, min_distance=60, popsize=1)
-
-      try:
-          min_angles.append([minima[0][0], minima[1][0]])
-          min_energies.append([minima[0][1], minima[1][1]])
-      except:
-          pass
-
-  fig.savefig('./cosyne/%s_landscape.svg' % options['mouse'], dpi=300)
+  fig.savefig('./cosyne/%s_landscape_days.svg' % options['mouse'], dpi=300)
+  # fig.savefig('./cosyne/%s_landscape_days.svg' % options['mouse'], dpi=300)
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_32.png]]
+[[./figures/landscape/figure_40.png]]
+
+
+#+begin_src ipython
+print(min_angles)
+a = np.array(min_angles[:])
+pkl_save(a, 'minima_%s' % options['mouse'], path=".")
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: [[4.173280494589798, 101.26473261614233], [347.80430351104445, 92.73363783092167], [2.956554340277048, 173.40114635282183], [55.47472702914557], [23.603375399570947, 232.75914074072455]]
+# [goto error]
+: ---------------------------------------------------------------------------
+: ValueError                                Traceback (most recent call last)
+: Cell In[55], line 2
+:       1 print(min_angles)
+: ----> 2 a = np.array(min_angles[:])
+:       3 pkl_save(a, 'minima_%s' % options['mouse'], path=".")
+:
+: ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (5,) + inhomogeneous part.
+:END:
+
+#+begin_src ipython
+plt.plot((np.sin(a[:,0]*np.pi/180)+np.sin(a[:,1]*np.pi/180))/2, '-o')
+plt.xlabel('Day')
+plt.ylabel('Y-location')
+fig.savefig('./cosyne/%s_land_y.svg' % options['mouse'], dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_42.png]]
+
+
+#+begin_src ipython
+yloc = []
+for mouse in options['mice']:
+    a = pkl_load('minima_%s' % mouse, path=".")
+    if a.shape[0]==5:
+        a = np.vstack((a, [np.nan, np.nan]))
+    yloc.append(a)
+yloc = np.array(yloc[:])
+yloc_mean = np.nanmean(np.array(yloc[:]), 0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(yloc.shape)
+#+end_src
+
+#+RESULTS:
+: (5, 6, 2)
+
+#+begin_src ipython
+for i in range(yloc.shape[0]):
+    plt.plot(np.arange(1, 7), (np.sin(yloc[i,:,0]*np.pi/180)+np.sin(yloc[i,:,1]*np.pi/180))/2, '-o', alpha=0.1)
+plt.plot(np.arange(1, 7), (np.sin(yloc_mean[:,0]*np.pi/180)+np.sin(yloc_mean[:,1]*np.pi/180))/2, '-ko')
+plt.axhline(0, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('GnG-projection')
+plt.xticks([1,2,3,4,5,6])
+plt.savefig('./cosyne/landscape_yloc.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_45.png]]
+
+#+begin_src ipython
+ang_list = []
+for mouse in options['mice']:
+    angle = pkl_load('angle_%s' % mouse, path=".")
+    if len(angle) ==5:
+        angle = np.hstack( (angle, np.nan))
+
+    ang_list.append(angle)
+ang_list = np.array(ang_list)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(ang_list)
+#+end_src
+#+RESULTS:
+: [[104.  97.  98.  96.  95.  97.]
+:  [ 94.  99.  83.  92.  84.  90.]
+:  [ 89.  98.  91.  98.  95.  90.]
+:  [ 87.  90.  91.  90.  88.  nan]
+:  [ 91. 100.  85.  91.  86.  nan]]
+
+#+begin_src ipython
+for i in range(yloc.shape[0]):
+    plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
+plt.plot(np.arange(1, 7), np.nanmean(ang_list, 0), '-ko')
+plt.axhline(90, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('Angle A/B-GnG (°)')
+plt.xticks([1,2,3,4,5,6])
+plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_48.png]]
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+
+# Sample data
+# yloc, ang_list = ... (Ensure these are defined appropriately)
+
+confidence_level = 0.95
+
+mean_angles = np.nanmean(ang_list, axis=0)
+n = ang_list.shape[0]
+
+# Standard error of the mean
+sem = stats.sem(ang_list, axis=0, nan_policy='omit')
+
+# Compute confidence intervals
+confidence_intervals = stats.t.interval(confidence_level, n-1, loc=mean_angles, scale=sem)
+
+# Plotting
+for i in range(yloc.shape[0]):
+    plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
+
+plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
+
+# Plot confidence intervals
+plt.fill_between(np.arange(1, 7), confidence_intervals[0], confidence_intervals[1], color='gray', alpha=0.2, label='Confidence Interval')
+
+plt.axhline(90, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('Angle A/B-GnG (°)')
+plt.xticks([1, 2, 3, 4, 5, 6])
+
+plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_49.png]]
+
+   #+begin_src ipython
+   import numpy as np
+   import matplotlib.pyplot as plt
+   from scipy import stats
+
+   # Function to perform bootstrap resampling
+   def bootstrap_conf_int(data, num_samples=1000, confidence_level=0.95):
+       bootstrap_samples = np.random.choice(data, (num_samples, len(data)), replace=True)
+       bootstrap_means = np.nanmean(bootstrap_samples, axis=1)
+       lower_bound = np.nanpercentile(bootstrap_means, (1 - confidence_level) / 2 * 100)
+       upper_bound = np.nanpercentile(bootstrap_means, (1 + confidence_level) / 2 * 100)
+       return lower_bound, upper_bound
+
+   # Sample data
+   mean_angles = np.nanmean(ang_list, axis=0)
+   lower_bounds, upper_bounds = [], []
+
+   for i in range(mean_angles.size):
+       lb, ub = bootstrap_conf_int(ang_list[:, i])
+       lower_bounds.append(lb)
+       upper_bounds.append(ub)
+
+   # Plotting
+   for i in range(yloc.shape[0]):
+       plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
+
+   plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
+
+   # Plot bootstrap confidence intervals
+   plt.fill_between(np.arange(1, 7), lower_bounds, upper_bounds, color='gray', alpha=0.1, label='Bootstrap CI')
+
+   plt.axhline(90, ls='--', color='k')
+   plt.xlabel('Day')
+   plt.ylabel('Angle A/B-GnG (°)')
+   plt.xticks([1, 2, 3, 4, 5, 6])
+
+   plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
+   plt.show()
+   #+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_50.png]]
 
 #+begin_src ipython
 
 #+end_src
 
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+
+# Sample data
+# yloc, ang_list = ... # Ensure these are already defined
+
+# Function to calculate the mean of the sample
+def mean_func(data, axis):
+    return np.nanmean(data, axis=axis)
+
+# Bootstrapping using scipy.stats.bootstrap
+confidence_level = 0.95
+lower_bounds, upper_bounds = [], []
+
+# Calculate the bootstrap confidence intervals for each day
+for i in range(ang_list.shape[1]):
+    res = stats.bootstrap((ang_list[:, i],), mean_func, vectorized=True, n_resamples=1000, confidence_level=confidence_level, method='percentile')
+    lower_bounds.append(res.confidence_interval.low)
+    upper_bounds.append(res.confidence_interval.high)
+
+mean_angles = np.nanmean(ang_list, axis=0)
+
+# Plotting
+for i in range(yloc.shape[0]):
+    plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
+
+plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
+
+# Plot bootstrap confidence intervals
+plt.fill_between(np.arange(1, 7), lower_bounds, upper_bounds, color='gray', alpha=0.2, label='Bootstrap CI')
+
+plt.axhline(90, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('Angle A/B-GnG (°)')
+plt.xticks([1, 2, 3, 4, 5, 6])
+
+plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
+plt.show()
+#+end_src
+
 #+RESULTS:
+[[./figures/landscape/figure_52.png]]

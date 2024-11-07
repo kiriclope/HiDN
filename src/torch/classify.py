@@ -1,4 +1,3 @@
-# import torch
 import numpy as np
 import pandas as pd
 from time import perf_counter
@@ -51,6 +50,16 @@ def get_classification(model, RETURN='overlaps', **options):
     X_B, y_B, cv_B, y_B_labels = None, None, None, None
     y_labels = None
 
+    if options['features'] == 'sample':
+        options['trials'] = 'incorrect'
+        X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+        y_B_labels = y_B.copy()
+        y_B = y_to_arr(y_B, **options)
+
+        print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+        cv_B = options['cv']
+        options['trials'] = 'correct'
+
     if options['features'] == 'distractor':
         if 'DPA' in options['task']:
             options['features'] = 'sample'
@@ -88,6 +97,8 @@ def get_classification(model, RETURN='overlaps', **options):
         return X_avg, y_labels
     elif RETURN == 'labels':
         pass
+    elif 'bolasso' in RETURN:
+        coefs = model.get_bolasso_coefs(X_avg, y_avg, n_boots=options['n_boots'], penalty=options['bolasso_penalty'], pval=options['pval'], confidence=options['bolasso_pval'])
     else:
         model.fit(X_avg, y_avg)
 
@@ -173,5 +184,8 @@ def get_classification(model, RETURN='overlaps', **options):
         end = perf_counter()
         print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
         return coefs, bias
+    elif 'bolasso' in RETURN:
+        # coefs = model.get_bolasso_coefs(X_avg, y_avg, n_boots=options['n_boots'], penalty='l2', pval=options['pval'], confidence=0.05)
+        return coefs, 0
     else:
         return None

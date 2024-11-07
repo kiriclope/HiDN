@@ -5,37 +5,6 @@ from hmmlearn import hmm
 from src.decode.bump import decode_bump, circcvl
 from src.preprocess.helpers import standard_scaler_BL, preprocess_X
 
-
-def replace_zero_cols(matrix):
-    nrows, ncols = matrix.shape
-    for col in range(ncols):
-        if np.all(matrix[:, col] == 0):  # Check for zero column
-            # Find the non-zero neighbor columns indices to the left and right
-            left = col - 1
-            while left >= 0 and np.all(matrix[:, left] == 0):
-                left -= 1
-            right = col + 1
-            while right < ncols and np.all(matrix[:, right] == 0):
-                right += 1
-
-            if left >= 0 and right < ncols:
-                # Both neighbors found, take the average
-                avg_col = (matrix[:, left] + matrix[:, right]) / 2
-            elif left >= 0:
-                # Only left neighbor found
-                avg_col = matrix[:, left]
-            elif right < ncols:
-                # Only right neighbor found
-                avg_col = matrix[:, right]
-            else:
-                raise ValueError("No non-zero neighbors found for column {0}".format(col))
-
-            # Replace the zero column with the average of the neighbors
-            matrix[:, col] = avg_col
-
-    return matrix
-
-
 def gaussian(x, mu, sig):
     return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
 
@@ -65,7 +34,6 @@ def biased_markov(bias, num_bins):
     trans_matrix /= np.sum(trans_matrix, axis=1)[:, None]  # Normalize rows
 
     return trans_matrix, prob
-
 
 def compute_transition_matrix_hmm(phase, num_bins, n_iter=100):
 
@@ -98,7 +66,6 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
     if verbose:
         print('phase', phase.shape, phase.min() * 180 / np.pi, phase.max() * 180 / np.pi)
 
-    # bins = np.linspace(-np.pi, np.pi, num_bins-1, endpoint=False)
     bins = np.linspace(0, 2.0 * np.pi, num_bins-1, endpoint=False)
     if verbose:
         print('bins', bins)
@@ -113,36 +80,15 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
     # Compute transitions
     for i in range(X_discrete.shape[0]): # trials
         for j in range(X_discrete.shape[1] - 1): # bins
-            matrix[X_discrete[i, j], X_discrete[i, j+1]] += 1
-            # matrix[X_discrete[i, j+1], X_discrete[i, j]] += 1
-
-    # matrix = circcvl(matrix, windowSize=int(0.1*num_bins), axis=0)
-
-    # Normalize transition matrix (to make it stochastic)
-    # col_sum = matrix.sum(axis=1)
-
-    # while np.any(col_sum==0):
-    #     for i in range(matrix.shape[0]):
-    #         if col_sum[i] == 0:
-    #             if i == matrix.shape[0]-1:
-    #                 if col_sum[i-1]>0 and col_sum[0]>0:
-    #                     matrix[i] = (matrix[i-1] + matrix[0]) / 2.0
-    #             elif i<matrix.shape[0]-1:
-    #                 if col_sum[i-1]>0 and col_sum[i+1]>0:
-    #                     matrix[i] = (matrix[i-1] + matrix[i+1]) / 2.0
-
-    #     col_sum = matrix.sum(axis=1)
-
-    # matrix = replace_zero_cols(matrix)
+            if (X_discrete[i,j]<num_bins) and (X_discrete[i,j+1]<num_bins):
+                matrix[X_discrete[i, j], X_discrete[i, j+1]] += 1
 
     col_sum = matrix.sum(axis=1)
+
+    # Avoid division by zero by setting denominators to 1 where there are no transitions
+    # col_sum[col_sum == 0] = 1
+
     matrix = matrix / col_sum[:, np.newaxis]
-
-    # row_sum = matrix.sum(axis=0)
-    # print('row_sum', np.where(row_sum==0)[0], row_sum[0])
-    # col_sum = matrix.sum(axis=1)
-    # print('col_sum', np.where(col_sum==0)[0], col_sum[0])
-
     # matrix[:, 0] = matrix[:, -1]
 
     return matrix
@@ -160,40 +106,25 @@ def compute_steady_state(p_transition, VERBOSE=0):
     # Return last row
     return pinv.T[-1]
 
-def compute_energy_landscape(steady_state, window):
+def compute_energy_landscape(steady_state):
     # Compute the energy landscape as the negative log of the steady state distribution
     Z = np.sum(steady_state)
     energy = -np.log(steady_state) + np.log(Z)
-
-    # energy = np.zeros(steady_state.shape) * np.nan
-    # for i in range(steady_state.shape[0]):
-    #     energy[i] = np.log(Z)
-    #     if steady_state[i] > 0:
-    #         energy[i] += -np.log(steady_state[i])
-
-    # windowSize = int(window * energy.shape[0])
-    # energy = circcvl(energy, windowSize=windowSize)
 
     Emin = np.nanmin(energy)
     energy = (energy - Emin)
     denom = np.nansum(energy)
     energy = energy / denom
 
-    # denom = np.nansum(energy)
-    # energy = energy / denom
-    # Emin = np.nanmin(energy)
-    # energy = energy - Emin
-
     return energy
 
+def run_energy(X_, num_bins, bins, bins0, task, window, IF_HMM=0, VERBOSE=0, n_iter=100, IF_SYNT=0, bias=0.5, IF_NORM=0):
 
-
-def run_energy(X_, num_bins, bins, task, window, IF_HMM=0, VERBOSE=0, n_iter=100, IF_SYNT=0, bias=0.5, IF_NORM=0):
+    # X_[1][:][~bins0] = np.nan
+    # X_[2][:][~bins0] = np.nan
 
     if task=='all':
       X = np.vstack(X_)
-    elif task==13:
-      X = np.vstack((X_[0], X_[-1]))
     else:
       X = X_[task]
 
@@ -205,7 +136,6 @@ def run_energy(X_, num_bins, bins, task, window, IF_HMM=0, VERBOSE=0, n_iter=100
       X = X[..., bins]
 
     _, phase = decode_bump(X, axis=1)
-    # phase += np.pi
 
     if IF_HMM:
         transition_matrix = compute_transition_matrix_hmm(phase, num_bins=num_bins, n_iter=n_iter)
@@ -228,7 +158,7 @@ def run_energy(X_, num_bins, bins, task, window, IF_HMM=0, VERBOSE=0, n_iter=100
         print('steady state', steady_state.shape)
         print(steady_state)
 
-    energy = compute_energy_landscape(steady_state, window)
+    energy = compute_energy_landscape(steady_state)
 
     if VERBOSE:
         print('energy', energy.shape)
@@ -242,14 +172,10 @@ def plot_energy(energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
         fig, ax = plt.subplots()
 
     theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
-    # energy = energy[1:]
-    # theta = theta[1:]
 
     windowSize = int(window * energy.shape[0])
     if SMOOTH:
         energy = circcvl(energy, windowSize=windowSize)
-
-    # theta = np.linspace(-180, 180, energy.shape[0], endpoint=False)
 
     ax.plot(theta, energy * 100, lw=4, color=color)
 

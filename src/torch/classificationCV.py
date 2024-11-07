@@ -8,6 +8,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
 from sklearn.decomposition import PCA
 
+from src.torch.selection import safeSelector
 from mne.decoding import SlidingEstimator, GeneralizingEstimator, cross_val_multiscore
 from src.decode.my_mne import my_cross_val_multiscore, my_cross_val_compo_score
 
@@ -19,16 +20,26 @@ def convert_seconds(seconds):
     return h, m, s
 
 
-def get_bagged_coefs(clf, n_estimators):
+def get_bagged_coefs(clf, n_estimators, mask):
     coefs_list = []
     bias_list = []
+    print(mask.shape)
     for i in range(n_estimators):
         model = clf.estimators_[i]
+        try:
+            mask = model.named_steps["filter"]._get_support_mask()
+            coefs = np.zeros((mask.shape[0], 1))
+        except:
+            mask = None
+
         try:
             coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
             bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
         except:
-            coefs = model.named_steps['net'].coef_.T
+            if mask is None:
+                coefs = model.named_steps['net'].coef_.T
+            else:
+                coefs[mask] = model.named_steps['net'].coef_.T
             bias = model.named_steps['net'].intercept_.T
 
         # coefs, bias = rescale_coefs(model, coefs, bias)
@@ -45,6 +56,10 @@ class ClassificationCV:
         self.scaler = kwargs["scaler"]
         if self.scaler is not None and self.scaler != 0:
             pipe.append(("scaler", StandardScaler()))
+
+        self.prescreen = kwargs["prescreen"]
+        if kwargs["prescreen"] is not None:
+            pipe.append(("filter", safeSelector(method=kwargs['prescreen'] , alpha=kwargs["pval"])))
 
         self.n_comp = kwargs["n_comp"]
         if kwargs["n_comp"] is not None:
@@ -86,6 +101,7 @@ class ClassificationCV:
         self.verbose = kwargs["verbose"]
 
     def fit(self, X, y):
+
         start = perf_counter()
         if self.verbose:
             print("Fitting hyperparameters ...")
@@ -102,6 +118,11 @@ class ClassificationCV:
 
         self.best_model = self.grid.best_estimator_
         self.best_params = self.grid.best_params_
+
+        # if self.prescreen is not None:
+        #     self.mask = self.grid.best_estimator_.named_steps["filter"]._get_support_mask()
+        # else:
+        self.mask = np.ones(X.shape[1], dtype='int32')
 
         if self.verbose:
             print(self.best_params)
@@ -140,7 +161,7 @@ class ClassificationCV:
                 % convert_seconds(end - start)
             )
 
-        self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
+        self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots, mask=self.mask)
 
         return self.coefs, self.bias
 
@@ -226,8 +247,6 @@ class ClassificationCV:
         else:
             self.estimator = GeneralizingEstimator(copy.deepcopy(self.best_model), n_jobs=1, scoring=scoring, verbose=False)
 
-        # self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
-        #                                    cv=cv, n_jobs=-1, verbose=False)
         if IF_COMPO:
             self.scores = my_cross_val_compo_score(
                 self.estimator,
