@@ -23,7 +23,9 @@ def convert_seconds(seconds):
     return h, m, s
 
 def y_to_arr(y, **options):
-    if options['task'] == 'Dual':
+    if options['features'] == 'odr_choice':
+        y = y.odr_choice.to_numpy()
+    elif options['task'] == 'Dual':
         y['labels'] = y.apply(map_values, axis=1)
         y = y.labels.dropna().to_numpy()
     elif options['features'] == 'sample':
@@ -32,6 +34,8 @@ def y_to_arr(y, **options):
         y = y.dist_odor.to_numpy()
     elif options['features'] == 'choice':
         y = y.choice.to_numpy()
+    elif options['features'] == 'odr_choice':
+        y = y.odr_choice.to_numpy()
     elif options['features'] == 'pair':
         y = y.pair.to_numpy()
 
@@ -51,16 +55,17 @@ def get_classification(model, RETURN='overlaps', **options):
     y_labels = None
 
     if options['features'] == 'sample':
-        options['trials'] = 'incorrect'
+        # options['trials'] = 'incorrect'
         X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
         y_B_labels = y_B.copy()
         y_B = y_to_arr(y_B, **options)
 
         print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
         cv_B = options['cv']
-        options['trials'] = 'correct'
+        # options['trials'] = 'correct'
 
-    if options['features'] == 'distractor':
+    if (options['features'] == 'distractor') or (options['features'] == 'odr_choice'):
+        feat = options['features']
         if 'DPA' in options['task']:
             options['features'] = 'sample'
             options['task'] = 'DPA'
@@ -71,14 +76,14 @@ def get_classification(model, RETURN='overlaps', **options):
 
             print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
 
-            options['features'] = 'distractor'
+            options['features'] = feat
             options['task'] = 'Dual'
             cv_B = options['cv']
 
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     y_labels = y.copy()
 
-    if options['features'] == 'distractor':
+    if (options['features'] == 'distractor') or (options['features'] == 'odr_choice'):
         y_labels = y_labels.dropna()
 
     print('y_labels', y_labels.shape, y_labels.tasks.unique())
@@ -105,8 +110,12 @@ def get_classification(model, RETURN='overlaps', **options):
     if 'scores' in RETURN:
         scores, probas, coefs, _ = model.get_cv_scores(X, y, options["scoring"], cv=options['cv'], X_B=X_B, y_B=y_B, cv_B=cv_B)
 
-        # probas = np.array(probas)
-        # coefs = np.array(coefs)
+        try:
+            scores = np.array(scores)
+            probas = np.array(probas)
+            coefs = np.array(coefs)
+        except:
+            pass
 
         if 'all' in RETURN:
             probas[y==1, 0, ..., 0] = probas[y==1, 0, ..., 1]

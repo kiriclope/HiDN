@@ -12,6 +12,7 @@ import numpy as np
 def set_options(**kwargs):
     opts = dict()
 
+    opts["NEW_DATA"] = 1
     opts["path"] = "/home/leon/dual_task/dual_data/"
     opts["fname"] =''
 
@@ -63,6 +64,7 @@ def set_options(**kwargs):
 
     opts["n_splits"] = 3
     opts["avg_coefs"] = True
+    opts['cv'] = 5
 
     opts["add_vlines"] = 0
 
@@ -185,10 +187,22 @@ def set_options(**kwargs):
     if "P" in opts["mouse"]:
         opts["n_days"] = 10  # PrL 6, ACC 5 or multi 10
         opts["n_discard"] = 4
-    if "ACC" in opts["mouse"]:
+    elif "ACC" in opts["mouse"]:
         opts["n_days"] = 5  # PrL 6, ACC 5 or multi 10
-    if "17" in opts["mouse"]:
+    elif "17" in opts["mouse"]:
         opts["n_days"] = 8  # PrL 6, ACC 5 or multi 10
+        opts["n_discard"] = 0
+    elif "23" in opts["mouse"]:
+        opts["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+        opts["n_discard"] = 0
+    elif "12" in opts["mouse"]:
+        opts["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+        opts["n_discard"] = 0
+    elif "01" in opts["mouse"]:
+        opts["n_days"] = 4  # PrL 6, ACC 5 or multi 10
+        opts["n_discard"] = 0
+    else:
+        opts["n_days"] = 6  # PrL 6, ACC 5 or multi 10
         opts["n_discard"] = 0
 
     if len(opts["days"])==2:
@@ -269,7 +283,7 @@ def set_options(**kwargs):
     ]
 
     opts["bins_CHOICE"] = opts["bins"][
-        int((t_TEST[0]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)
+        int((t_TEST[1]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)
     ]
 
     opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[1] * frame_rate)]

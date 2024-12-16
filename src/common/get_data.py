@@ -18,7 +18,10 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
     elif "FR" in data_type:
         X_days = np.rollaxis(data["FR_Trial"], 1, 0)
     else:
-        X_days = np.rollaxis(data["dff_TrialBase"], 1, 0)
+        try:
+            X_days = np.rollaxis(data["dff_TrialBase"], 1, 0)
+        except:
+            X_days = np.rollaxis(data["dFF_Trial"], 1, 0)
 
     y_ = np.zeros((X_days.shape[0], 7))
     y_days = pd.DataFrame(
@@ -27,26 +30,70 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
 
     y_days.loc[data["S1Trial"].flatten() - 1, 'sample_odor'] = 0
     y_days.loc[data["S2Trial"].flatten() - 1, 'sample_odor'] = 1
-    y_days.loc[data["S3Trial"].flatten() - 1, 'sample_odor'] = 2
-    y_days.loc[data["S4Trial"].flatten() - 1, 'sample_odor'] = 3
 
-    y_days.loc[data["NDTrial"].flatten() - 1, 'dist_odor'] = np.nan
-    y_days.loc[data["D1Trial"].flatten() - 1, 'dist_odor'] = 1
-    y_days.loc[data["D2Trial"].flatten() - 1, 'dist_odor'] = 2
+    try:
+        y_days.loc[data["S3Trial"].flatten() - 1, 'sample_odor'] = 2
+        y_days.loc[data["S4Trial"].flatten() - 1, 'sample_odor'] = 3
+    except:
+        pass
 
-    y_days.loc[data["NDTrial"].flatten() - 1, 'tasks'] = "DPA"
+    try:
+        y_days.loc[data["NDTrial"].flatten() - 1, 'dist_odor'] = np.nan
+        y_days.loc[data["NDTrial"].flatten() - 1, 'tasks'] = "DPA"
+    except:
+        y_days.loc[data["ODPATrial"].flatten() - 1, 'dist_odor'] = np.nan
+        y_days.loc[data["ODPATrial"].flatten() - 1, 'tasks'] = "DPA"
+
+    y_days.loc[data["D1Trial"].flatten() - 1, 'dist_odor'] = 0
+    y_days.loc[data["D2Trial"].flatten() - 1, 'dist_odor'] = 1
+
     y_days.loc[data["D1Trial"].flatten() - 1, 'tasks'] = "DualGo"
     y_days.loc[data["D2Trial"].flatten() - 1, 'tasks'] = "DualNoGo"
 
-    y_days.loc[data["hitTrial"].flatten() - 1, 'response'] = "correct_hit"
-    y_days.loc[data["CRTrial"].flatten() - 1, 'response'] = "correct_rej"
-    y_days.loc[data["FATrial"].flatten() - 1, 'response'] = "incorrect_fa"
-    y_days.loc[data["missTrial"].flatten() - 1, 'response'] = "incorrect_miss"
+    try:
+        y_days.loc[data["hitTrial"].flatten() - 1, 'response'] = "correct_hit"
+        y_days.loc[data["CRTrial"].flatten() - 1, 'response'] = "correct_rej"
+        y_days.loc[data["FATrial"].flatten() - 1, 'response'] = "incorrect_fa"
+        y_days.loc[data["missTrial"].flatten() - 1, 'response'] = "incorrect_miss"
 
-    y_days.loc[data["hitTrial"].flatten() - 1, 'choice'] = 1
-    y_days.loc[data["CRTrial"].flatten() - 1, 'choice'] = 0
-    y_days.loc[data["FATrial"].flatten() - 1, 'choice'] = 1
-    y_days.loc[data["missTrial"].flatten() - 1, 'choice'] = 0
+        y_days.loc[data["hitTrial"].flatten() - 1, 'choice'] = 1
+        y_days.loc[data["CRTrial"].flatten() - 1, 'choice'] = 0
+        y_days.loc[data["FATrial"].flatten() - 1, 'choice'] = 1
+        y_days.loc[data["missTrial"].flatten() - 1, 'choice'] = 0
+
+    except:
+
+        y_days.loc[data["ODPAHitTrial"].flatten() - 1, 'response'] = "correct_hit"
+        y_days.loc[data["ODPACRTrial"].flatten() - 1, 'response'] = "correct_rej"
+        y_days.loc[data["ODPAFATrial"].flatten() - 1, 'response'] = "incorrect_fa"
+
+        y_days.loc[data["ODPAHitTrial"].flatten() - 1, 'choice'] = 1
+        y_days.loc[data["ODPACRTrial"].flatten() - 1, 'choice'] = 0
+        y_days.loc[data["ODPAFATrial"].flatten() - 1, 'choice'] = 1
+
+        y_days.loc[data["ODRHitTrial"].flatten() - 1, 'odr_perf'] = 1
+        y_days.loc[data["ODRCRTrial"].flatten() - 1, 'odr_perf'] = 1
+
+        y_days.loc[data["ODRHitTrial"].flatten() - 1, 'odr_choice'] = 1
+        y_days.loc[data["ODRCRTrial"].flatten() - 1, 'odr_choice'] = 0
+
+        try:
+            y_days.loc[data["ODRFATrial"].flatten() - 1, 'odr_perf'] = 0
+            y_days.loc[data["ODRFATrial"].flatten() - 1, 'odr_choice'] = 1
+        except:
+            pass
+
+        try:
+            y_days.loc[data["ODPAMissTrial"].flatten() - 1, 'response'] = "incorrect_miss"
+            y_days.loc[data["ODPAMissTrial"].flatten() - 1, 'choice'] = 0
+        except:
+            pass
+
+        try:
+            y_days.loc[data["ODRMissTrial"].flatten() - 1, 'odr_perf'] = 0
+            y_days.loc[data["ODRMissTrial"].flatten() - 1, 'odr_choice'] = 0
+        except:
+            pass
 
     y_days.loc[(y_days.response=="correct_hit") & (y_days.sample_odor==0), 'test_odor'] = 0
     y_days.loc[(y_days.response=="incorrect_fa") & (y_days.sample_odor==0), 'test_odor'] = 1
@@ -96,10 +143,10 @@ def get_X_y_days_multi(mouse=gv.mouse):
     y_days.sample_odor[data["S4All"][0] - 1] = 3
 
     y_days.dist_odor[data["NDAll"][0] - 1] = np.nan
-    y_days.dist_odor[data["D1All"][0] - 1] = 1
-    y_days.dist_odor[data["D2All"][0] - 1] = 2
-    y_days.dist_odor[data["D3All"][0] - 1] = 3
-    y_days.dist_odor[data["D4All"][0] - 1] = 4
+    y_days.dist_odor[data["D1All"][0] - 1] = 0
+    y_days.dist_odor[data["D2All"][0] - 1] = 1
+    y_days.dist_odor[data["D3All"][0] - 1] = 2
+    y_days.dist_odor[data["D4All"][0] - 1] = 3
 
     y_days.tasks[data["NDAll"][0] - 1] = "DPA"
     y_days.tasks[data["D1All"][0] - 1] = "DualGo"
@@ -193,15 +240,13 @@ def get_fluo_data(idx_day, **kwargs):
 
     if "ACC" in mouse:
         data = loadmat(path + "/" + mouse + "/SamedROI/" + mouse + "_all_days" + ".mat")
-    elif "P" in mouse:
-        data = loadmat(
-            path
-            + "/"
-            + mouse
-            + "/SamedROI_%.2dDays/" % n_days
-            + "Day%.2d" % idx_day
-            + "/DFF_Data01.mat"
-        )
+
+    elif kwargs['NEW_DATA']:
+
+        file = path + "/" + mouse + "/SamedROI_%.2dDays/" % n_days + "Day%.2d" % idx_day + "/DFF_Data01.mat"
+        print(file)
+        data = mat73.loadmat(file)
+
     else:
         data = loadmat(
             path
@@ -214,7 +259,7 @@ def get_fluo_data(idx_day, **kwargs):
             + ".mat"
         )
 
-    if "P" in mouse:
+    if kwargs['NEW_DATA']:
         X_raw, y_raw = get_X_y_day_new(idx_day, data, data_type)
     else:
         if "raw" in data_type:
@@ -258,12 +303,15 @@ def get_X_y_days(**kwargs):
     path = kwargs["data_path"]
     mouse = kwargs["mouse"]
 
-    if "P" in kwargs["mouse"]:
-        kwargs["n_days"] = 10  # PrL 6, ACC 5 or multi 10
-    if "ACC" in kwargs["mouse"]:
-        kwargs["n_days"] = 5  # PrL 6, ACC 5 or multi 10
-    if "17" in kwargs["mouse"]:
-        kwargs["n_days"] = 8  # PrL 6, ACC 5 or multi 10
+    # if "P" in kwargs["mouse"]:
+    #     kwargs["n_days"] = 10  # PrL 6, ACC 5 or multi 10
+    # if "ACC" in kwargs["mouse"]:
+    #     kwargs["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+    # if "23" in kwargs["mouse"]:
+    #     kwargs["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+    # if "17" in kwargs["mouse"]:
+    #     kwargs["n_days"] = 8  # PrL 6, ACC 5 or multi 10
+
 
     n_days = kwargs["n_days"]
     days = np.arange(1, n_days + 1)
@@ -292,7 +340,7 @@ def get_X_y_days(**kwargs):
                 X, y = get_fluo_data(idx_day=day, **kwargs)
                 # print("X", X.shape, "y", y.shape)
 
-                if "P" in mouse:
+                if kwargs["NEW_DATA"]:
                     y_df = y
                 else:
                     y_df = create_df(y, day=day)
@@ -324,7 +372,7 @@ def get_X_y_days(**kwargs):
 
         X_days = preprocess_df(X_days, y_days, **kwargs)
 
-    return X_days, y_days
+    return X_days[..., :84], y_days
 
 
 def get_X_y_mice(**kwargs):
@@ -373,6 +421,9 @@ def get_X_y_S1_S2(X, y, **kwargs):
         )
 
     idx_trials = True
+    idx_S3 = False
+    idx_S4 = False
+
     if kwargs["trials"] == "correct":
         idx_trials = ~y.response.str.contains("incorrect")
     elif kwargs["trials"] == "incorrect":
@@ -391,8 +442,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
     if kwargs["features"] == "sample":
         idx_S1 = y.sample_odor == 0
         idx_S2 = y.sample_odor == 1
-        idx_S3 = False
-        idx_S4 = False
 
         if kwargs["multilabel"]:
             idx_S3 = y.sample_odor == 2
@@ -404,28 +453,19 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S1 = y.response == "correct_hit"
             # unpair
             idx_S2 = y.response == "correct_rej"
-            idx_S3 = False
-            idx_S4 = False
         else:
             # pair
             idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_miss")
             # unpair
             # idx_S2 = (y.response == "incorrect_fa") | (y.response == "correct_rej")
             idx_S2 = (y.response == "correct_rej") | (y.response == "incorrect_fa")
-            idx_S3 = False
-            idx_S4 = False
-
-        idx_trials = True
 
     elif kwargs["features"] == "fa":
         # lick
         idx_S1 = y.response == "correct_rej"
         # no lick
         idx_S2 = y.response == "incorrect_fa"
-        idx_S3 = False
-        idx_S4 = False
 
-        idx_trials = True
     elif kwargs["features"] == "decision":
         if kwargs["trials"] == "correct":
             # lick
@@ -438,60 +478,35 @@ def get_X_y_S1_S2(X, y, **kwargs):
             # no lick
             idx_S2 = y.response == "incorrect_miss"
 
-        idx_S3 = False
-        idx_S4 = False
-
-        idx_trials = True
-
     elif kwargs["features"] == "choice":
-        if kwargs["trials"] == "correct":
-            # lick
-            idx_S1 = y.response == "correct_hit"
-            # no lick
-            idx_S2 = y.response == "correct_rej"
-        elif kwargs["trials"] == "incorect" :
-            # lick
-            idx_S1 = y.response == "incorrect_fa"
-            # no lick
-            idx_S2 = y.response == "incorrect_miss"
-        else:
-            # lick
-            idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_fa")
-            # no lick
-            idx_S2 = (y.response == "incorrect_miss") | (y.response == "correct_rej")
+        idx_S1 = y.choice == 1
+        idx_S2 = y.choice == 0
 
-        idx_S3 = False
-        idx_S4 = False
-
-        idx_trials = True
+    elif kwargs["features"] == "odr_choice":
+        idx_S1 = y.odr_choice == 1
+        idx_S2 = y.odr_choice == 0
 
     elif kwargs["features"] == "reward":
         idx_S1 = ~y.response.str.contains("incorrect")
         idx_S2 = y.response.str.contains("incorrect")
-        idx_S3 = False
-        idx_S4 = False
-
-        idx_trials = True
 
     elif kwargs["features"] == "test":
         idx_S1 = y.test_odor == 0
         idx_S2 = y.test_odor == 1
-        idx_S3 = False
-        idx_S4 = False
 
     elif kwargs["features"] == "distractor":
-        idx_S1 = y.tasks == "DualGo"
-        idx_S2 = y.tasks == "DualNoGo"
-        idx_S3 = False
-        idx_S4 = False
+        idx_S1 = y.dist_odor == 0
+        idx_S2 = y.dist_odor == 1
+
+        # try:
+        #     idx_trials = y.odr_perf == 1
+        # except:
+        #     pass
 
         if kwargs["multilabel"]:
-            idx_S1 = y.dist_odor == 1
-            idx_S2 = y.dist_odor == 2
-            idx_S3 = y.dist_odor == 3
-            idx_S4 = y.dist_odor == 4
+            idx_S3 = y.dist_odor == 2
+            idx_S4 = y.dist_odor == 3
 
-        idx_tasks = True
     elif kwargs["features"] == "task":
         idx_S1 = y.tasks == "DPA"
         if kwargs["task"] == "Dual":
@@ -499,11 +514,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
         else:
             idx_S2 = y.tasks == kwargs["task"]
 
-        idx_S3 = False
-        idx_S4 = False
-        idx_tasks = True
-
-    idx_days = True
     if isinstance(kwargs["day"], str):
         print("multiple days, discard", kwargs["n_discard"],
               'first', kwargs["n_first"], 'middle', kwargs["n_middle"])
@@ -520,7 +530,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_days = y.day == kwargs["day"]
 
     idx_laser = True
-
     if kwargs["laser"] == 1:
         idx_laser = y.laser == 1
     elif kwargs["laser"] == 0:

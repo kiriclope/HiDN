@@ -1,0 +1,108 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :var B0="1.0" :results both :exports both :async yes :session dual2 :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython :tangle no
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+%run ../notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
+
+* Licks
+
+#+begin_src ipython
+from scipy.io import loadmat
+
+path = "/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/20200605_RandomTrials_DualTask_M15/Java-20200605-RandomTrials-DualTask-M15-DualTask.mat"
+
+path = "/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/20200912ACCImaging-M3-DualTask/Java-20200912-ACCImaging-OdorPQBYRMK-M3-DualTask.mat"
+
+path ='/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/20200916ACCImaging-M3-DualTask/Java-20200916-ACCImaging-OdorPQBYRMK-M3-DualTask.mat'
+# path = "/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/20200610_RandomTrials_DualTask_M15/Java-20200610-RandomTrials-DualTask-M15-DualTask.mat"
+
+data = loadmat(path)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(data.keys())
+#+end_src
+
+#+RESULTS:
+: dict_keys(['__header__', '__version__', '__globals__', 'AbolishTrials', 'AllData', 'AllSample', 'AllTrials', 'Data', 'Data1', 'DataD', 'DataD_GO', 'DataD_NG', 'DataID', 'DataID1', 'DataID2', 'DataID3', 'DataS', 'Delay', 'Delay1', 'FDelay', 'FirstOdor', 'FirstOdor1', 'ITI', 'LDelay', 'LaserPeriod', 'MeantrialLen', 'Odor', 'Odor1', 'ResponseDelay', 'Sample', 'Sample1', 'SampleD', 'SampleD_GO', 'SampleD_NG', 'SampleS', 'SecondOdor', 'SecondOdor1', 'SerialData', 'Test', 'Test1', 'TrialNum', 'TrialNumD', 'TrialNumS', 'Trials', 'Trials1', 'TrialsD', 'TrialsD_GO', 'TrialsD_NG', 'TrialsS', 'Water', 'Water1', 'laserTime', 'lickTime'])
+
+#+begin_src ipython
+print(data['lickTime'].shape)
+print(data['SerialData'])
+#+end_src
+
+#+RESULTS:
+: (2130, 1)
+: [[362552255        85        51        95       170]
+:  [362552259        85        61         1       170]
+:  [362552263        85        58        95       170]
+:  ...
+:  [367838927        85       163       100       170]
+:  [367838931         0         1         2         3]
+:  [367838935        85         0        56       170]]
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '../')
+from src.licks.licks import *
+from src.common.plot_utils import add_vlines, add_vdashed
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+licks_dpa, licks_go, licks_nogo = get_licks_mouse(data, '', response="", trial_length=14, verbose=1)
+licks_all = [np.hstack(licks_dpa), np.hstack(licks_go), np.hstack(licks_nogo)]
+#+end_src
+
+#+RESULTS:
+: licks: DPA (32, 9) Go (32, 23) NoGo (32, 19)
+
+#+begin_src ipython
+fig, ax = plt.subplots(1, 3, figsize=[3 * width, height])
+
+for i in range(licks_dpa.shape[0]):
+    ax[0].plot(licks_dpa[i], i*np.ones(licks_dpa.shape[1]), '|')
+    ax[1].plot(licks_go[i], i*np.ones(licks_go.shape[1]), '|')
+    ax[2].plot(licks_nogo[i], i*np.ones(licks_nogo.shape[1]), '|')
+
+add_vlines(ax[0])
+add_vlines(ax[1])
+add_vlines(ax[2])
+
+plt.xlabel('Time (s)')
+plt.ylabel('Trial')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/647100c14a3364c61844298df488478cd9c8fd2e.png]]
+
+
+#+begin_src ipython
+licks_density, bins = plot_licks_hist(licks_all, n_bins='auto')
+add_vlines2()
+# plt.ylim([0, 1])
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/fed82d2a1067ac5c0adc2e3eb015055b68790493.png]]

@@ -12,11 +12,11 @@ def plot_lick_rate(licks_counts, bin_edges, n_mice=1):
     # convert count of events to rate (Hz) by dividing by the total time in seconds
     bin_widths = np.diff(bin_edges)
     rates = licks_counts / bin_widths / n_mice / 64
-    
+
     plt.plot(bin_edges[:-1], rates[0], "r")
     plt.plot(bin_edges[:-1], rates[1], "b")
     plt.plot(bin_edges[:-1], rates[2], "g")
-    add_vlines()
+    add_vlines2()
     plt.xlabel("Time (s)")
     plt.ylabel("Lick Rate (Hz)")
     # plt.ylim([0, 20])
@@ -83,7 +83,8 @@ def vstack_nan(X, Y):
     return np.vstack((X, Y))
 
 
-def add_vlines(t_STIM=[0, 1], t_DIST=[4, 5], t_CUE=[7, 7.5], t_TEST=[11, 12], ax=None):
+def add_vlines2(t_STIM=[0, 1], t_DIST=[2.5, 3.5], t_CUE=[4.5, 5], t_TEST=[7, 8], ax=None):
+    # def add_vlines(t_STIM=[0, 1], t_DIST=[4, 5], t_CUE=[7, 7.5], t_TEST=[11, 12], ax=None):
     time_periods = [t_STIM, t_DIST, t_CUE, t_TEST]
 
     colors = ["b", "b", "g", "b"]
@@ -184,6 +185,7 @@ def get_licks_and_times(data, mouse="ACC_Prl"):
     t_sample_off = np.sort(np.hstack((t_S1_off, t_S2_off)))
 
     t_sample = vstack_nan(t_sample_on, t_sample_off)
+    # print(t_sample.shape)
 
     # print("dist")
     t_dist_on = np.sort(np.hstack((t_Go_on, t_NoGo_on)))
@@ -203,8 +205,9 @@ def get_licks_and_times(data, mouse="ACC_Prl"):
 
     # print("nogo", np.array(t_NoGo_on).shape, np.array(t_NoGo_off).shape)
     t_nogo = vstack_nan(t_NoGo_on, t_NoGo_off)
-    
+
     licks = (licks - t_sample[0][0]) / 1000
+
     t_dist = (t_dist - t_sample[0][0]) / 1000
     t_test = (t_test - t_sample[0][0]) / 1000
     t_go = (t_go - t_sample[0][0]) / 1000
@@ -361,8 +364,8 @@ def pad_list(sub_list, max_len, pad_value=float("nan")):
     return sub_list + [pad_value] * (max_len - len(sub_list))
 
 
-def get_licks_array(licks, serie):
-    licks_trial = [get_licks_in_trial(start, start + 20, licks) for start, _ in serie]
+def get_licks_array(licks, serie, trial_length):
+    licks_trial = [get_licks_in_trial(start, start + trial_length, licks) for start, _ in serie]
 
     max_len = max((len(x) for x in licks_trial), default=0)
 
@@ -408,9 +411,9 @@ def get_licks_mouse(data, mouse, response="", trial_length=20, verbose=1):
     # if verbose:
     #     print("get licks")
 
-    licks_dpa = get_licks_array(t_licks, dpa_trials)
-    licks_go = get_licks_array(t_licks, go_trials)
-    licks_nogo = get_licks_array(t_licks, nogo_trials)
+    licks_dpa = get_licks_array(t_licks, dpa_trials, trial_length)
+    licks_go = get_licks_array(t_licks, go_trials, trial_length)
+    licks_nogo = get_licks_array(t_licks, nogo_trials, trial_length)
 
     if verbose:
         print(
@@ -437,14 +440,14 @@ def get_licks_mice(path, n_session=10, response="", trial_length=20, ini=0):
         licks_dpa = []
         licks_go = []
         licks_nogo = []
-        
+
         print("mouse", mouse)
-        # 
+        #
         for i_session in range(ini, n_session + 1):
             # print(path + mouse + "/session_%d" % i_session)
-            
+
             data = loadmat(path + mouse + "/session_%d" % i_session)
-            
+
             dpa, go, nogo = get_licks_mouse(
                 data, path, response, trial_length, verbose=0
             )
@@ -452,7 +455,7 @@ def get_licks_mice(path, n_session=10, response="", trial_length=20, ini=0):
             licks_dpa.append(dpa)
             licks_go.append(go)
             licks_nogo.append(nogo)
-            
+
         licks_dpa = hstack_with_padding(licks_dpa)
         licks_go = hstack_with_padding(licks_go)
         licks_nogo = hstack_with_padding(licks_nogo)

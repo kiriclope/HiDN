@@ -38,6 +38,19 @@ def center_BL(X, center=None, avg_mean=0):
 
     return X_scale
 
+def standard_scaler(X, center=None, scale=None, avg_mean=0, avg_noise=0):
+
+    # print('X', X.shape)
+    center = np.nanmean(X, axis=0)
+    # print('center', center.shape)
+
+    scale = np.nanstd(X, axis=0)
+    scale = _handle_zeros_in_scale(scale, copy=False)
+    # print('scale', scale.shape)
+
+    X_scale = (X - center[np.newaxis]) / scale[np.newaxis]
+
+    return X_scale, center, scale
 
 def standard_scaler_BL(X, center=None, scale=None, avg_mean=0, avg_noise=0):
     X_BL = X[..., gv.bins_BL]
@@ -214,8 +227,12 @@ def preprocess_X(
         X_scale = X - X.mean((0,-1))[np.newaxis, ..., np.newaxis]
     elif scaler=="lowpass":
         X_scale = low_pass(X)
-    elif scaler == "standard":
+    elif scaler == "standard_BL":
         X_scale, center, scale = standard_scaler_BL(
+            X, center, scale, avg_mean, avg_noise
+        )
+    elif scaler == "standard":
+        X_scale, center, scale = standard_scaler(
             X, center, scale, avg_mean, avg_noise
         )
     elif scaler == "robust":

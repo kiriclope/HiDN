@@ -1,0 +1,855 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session landscape :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from time import perf_counter
+
+  import torch
+  import torch.nn as nn
+  import torch.optim as optim
+  from skorch import NeuralNetClassifier
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.ensemble import BaggingClassifier
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.pipeline import Pipeline
+  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+  from sklearn.decomposition import PCA
+
+  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+
+  from src.attractor.energy import run_energy, plot_energy
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Model
+#+begin_src ipython
+  def get_bagged_coefs(clf, n_estimators):
+      coefs_list = []
+      bias_list = []
+      for i in range(n_estimators):
+          model = clf.estimators_[i]
+          try:
+              coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+              bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+          except:
+              coefs = model.named_steps['net'].coef_[0]
+              bias = model.named_steps['net'].intercept_[0]
+
+          # coefs, bias = rescale_coefs(model, coefs, bias)
+
+          coefs_list.append(coefs)
+          bias_list.append(bias)
+
+      return np.array(coefs_list).mean(0), np.array(bias_list).mean(0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/classificationCV.py
+    from time import perf_counter
+    from sklearn.ensemble import BaggingClassifier
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
+    from sklearn.decomposition import PCA
+
+    from mne.decoding import SlidingEstimator, cross_val_multiscore
+
+    class ClassificationCV():
+        def __init__(self, net, params, **kwargs):
+
+            pipe = []
+            self.scaler = kwargs['scaler']
+            if self.scaler is not None and self.scaler !=0 :
+                pipe.append(("scaler", StandardScaler()))
+
+            self.n_comp = kwargs['n_comp']
+            if kwargs['n_comp'] is not None:
+                self.n_comp = kwargs['n_comp']
+                pipe.append(("pca", PCA(n_components=self.n_comp)))
+
+            pipe.append(("net", net))
+            self.model = Pipeline(pipe)
+
+            self.num_features = kwargs['num_features']
+            self.scoring =  kwargs['scoring']
+
+            if  kwargs['n_splits']==-1:
+                self.cv = LeaveOneOut()
+            else:
+                self.cv = RepeatedStratifiedKFold(n_splits=kwargs['n_splits'], n_repeats=kwargs['n_repeats'])
+
+            self.params = params
+            self.verbose =  kwargs['verbose']
+            self.n_jobs =  kwargs['n_jobs']
+
+        def fit(self, X, y):
+            start = perf_counter()
+            if self.verbose:
+                print('Fitting hyperparameters ...')
+
+            try:
+                self.model['net'].module__num_features = self.num_features
+            except:
+                pass
+
+            grid = GridSearchCV(self.model, self.params, refit=True, cv=self.cv, scoring=self.scoring, n_jobs=self.n_jobs)
+            grid.fit(X.astype('float32'), y.astype('float32'))
+            end = perf_counter()
+            if self.verbose:
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+            self.best_model = grid.best_estimator_
+            self.best_params = grid.best_params_
+
+            if self.verbose:
+                print(self.best_params)
+
+            try:
+                self.coefs = self.best_model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+                self.bias = self.best_model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+            except:
+                self.coefs = self.best_model.named_steps['net'].coef_[0]
+                self.bias = self.best_model.named_steps['net'].intercept_[0]
+
+        def get_bootstrap_coefs(self, X, y, n_boots=10):
+            start = perf_counter()
+            if self.verbose:
+                print('Bootstrapping coefficients ...')
+
+            self.bagging_clf = BaggingClassifier(base_estimator=self.best_model, n_estimators=n_boots)
+            self.bagging_clf.fit(X.astype('float32'), y.astype('float32'))
+            end = perf_counter()
+
+            if self.verbose:
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+            self.coefs, self.bias = get_bagged_coefs(self.bagging_clf, n_estimators=n_boots)
+
+            return self.coefs, self.bias
+
+        def get_overlap(self, model, X):
+            try:
+                coefs = model.named_steps['net'].module_.linear.weight.data.cpu().detach().numpy()[0]
+                bias = model.named_steps['net'].module_.linear.bias.data.cpu().detach().numpy()[0]
+            except:
+                coefs = model.named_steps['net'].coef_[0]
+                bias = model.named_steps['net'].intercept_[0]
+
+            if self.scaler is not None and self.scaler!=0:
+                scaler = model.named_steps['scaler']
+                for i in range(X.shape[-1]):
+                    X[..., i] = scaler.transform(X[..., i])
+
+            if self.n_comp is not None:
+                pca = model.named_steps['pca']
+                X_pca = np.zeros((X.shape[0], self.n_comp, X.shape[-1]))
+
+                for i in range(X.shape[-1]):
+                    X_pca[..., i] = pca.transform(X[..., i])
+
+                self.overlaps = (np.swapaxes(X_pca, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+            else:
+                self.overlaps = -(np.swapaxes(X, 1, -1) @ coefs + bias) / np.linalg.norm(coefs)
+
+            return self.overlaps
+
+        def get_bootstrap_overlaps(self, X):
+            start = perf_counter()
+            if self.verbose:
+                print('Getting bootstrapped overlaps ...')
+
+            X_copy = np.copy(X)
+            overlaps_list = []
+            n_boots = len(self.bagging_clf.estimators_)
+
+            for i in range(n_boots):
+                model = self.bagging_clf.estimators_[i]
+                overlaps = self.get_overlap(model, X_copy)
+                overlaps_list.append(overlaps)
+
+            end = perf_counter()
+            if self.verbose:
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+            return np.array(overlaps_list).mean(0)
+
+        def get_cv_scores(self, X, y, scoring):
+            start = perf_counter()
+            if self.verbose:
+                print('Computing cv scores ...')
+
+            estimator = SlidingEstimator(clone(self.best_model), n_jobs=1,
+                                         scoring=scoring, verbose=False)
+
+            self.scores = cross_val_multiscore(estimator, X.astype('float32'), y.astype('float32'),
+                                               cv=self.cv, n_jobs=-1, verbose=False)
+            end = perf_counter()
+            if self.verbose:
+                print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+            return self.scores
+#+end_src
+
+#+RESULTS:
+
+
+  #+begin_src ipython :tangle ../src/torch/main.py
+      from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+      from src.preprocess.helpers import avg_epochs
+
+      def get_classification(model, RETURN='overlaps', **options):
+              start = perf_counter()
+
+              dum = 0
+              if options['features'] == 'distractor':
+                      if options['task'] != 'Dual':
+                              task = options['task']
+                              options['task'] = 'Dual'
+                              dum = 1
+
+              X_days, y_days = get_X_y_days(**options)
+              X, y = get_X_y_S1_S2(X_days, y_days, **options)
+              y[y==-1] = 0
+              if options['verbose']:
+                  print('X', X.shape, 'y', y.shape)
+
+              X_avg = avg_epochs(X, **options).astype('float32')
+              if dum:
+                      options['features'] = 'sample'
+                      options['task'] = task
+                      X, _ = get_X_y_S1_S2(X_days, y_days, **options)
+
+              index = mice.index(options['mouse'])
+              model.num_features = N_NEURONS[index]
+
+              if options['class_weight']:
+                      pos_weight = torch.tensor(np.sum(y==0) / np.sum(y==1), device=DEVICE).to(torch.float32)
+                      print('imbalance', pos_weight)
+                      model.criterion__pos_weight = pos_weight
+
+              model.fit(X_avg, y)
+
+              if 'scores' in RETURN:
+                  scores = model.get_cv_scores(X, y, options['scoring'])
+                  end = perf_counter()
+                  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                  return scores
+              if 'overlaps' in RETURN:
+                  if options['n_boots']>1:
+                          coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+                          overlaps = model.get_bootstrap_overlaps(X)
+                  else:
+                          coefs = model.coefs
+                          bias = model.bias
+                          overlaps = model.get_overlap(model, X)
+
+                  end = perf_counter()
+                  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                  return overlaps
+              if 'coefs' in RETURN:
+                  if options['n_boots']>1:
+                          coefs, bias = model.get_bootstrap_coefs(X_avg, y, n_boots=options['n_boots'])
+                  else:
+                          coefs = model.coefs
+                          bias = model.bias
+                  end = perf_counter()
+                  print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+                  return coefs, bias
+#+end_src
+
+#+RESULTS:
+
+** Other
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+** Plots
+
+#+begin_src ipython
+from matplotlib.patches import Circle
+
+def plot_fix_points(phi, ax, color='k', title=''):
+
+    x = np.cos(phi)
+    y = np.sin(phi)
+
+    ax.plot(x, y, 'o', ms=15, color=color, markeredgecolor='k')
+    circle = Circle((0., 0.), 1, fill=False, edgecolor='k')
+    ax.add_patch(circle)
+
+    ax.set_aspect('equal')
+    ax.set_title(title)
+    ax.axis('off')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          v = b - np.dot(b, a) / np.dot(a, a) * a
+
+      if IF_NORM:
+          u = a / np.linalg.norm(a)
+          v = b / np.linalg.norm(b)
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+  def get_energy(X, y, task, num_bins, bins, bins0, window, IF_BOOT=0, IF_NORM=0, IF_HMM=0, n_iter=10):
+    ci_ = None
+    energy_ = run_energy(X, num_bins, bins, bins0, task, window, VERBOSE=0, IF_HMM=IF_HMM, n_iter=n_iter)
+    if IF_BOOT:
+        _, ci_ = my_boots_ci(X, lambda x: run_energy(x, num_bins, bins, task, window, IF_HMM=IF_HMM, n_iter=n_iter), n_samples=1000)
+    if ci_ is not None:
+      ci_ = ci_ / 2.0
+    return energy_, ci_
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  def plot_theta_energy(theta, energy, ci=None, window=.9, ax=None, SMOOTH=0, color='r'):
+      if ax is None:
+          fig, ax = plt.subplots()
+
+      theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
+
+      energy = energy[1:]
+      theta = theta[1:]
+
+      windowSize = int(window * energy.shape[0])
+      if SMOOTH:
+          # window = np.ones(windowSize) / windowSize
+          # energy = np.convolve(energy, window, mode='same')
+          # theta = circcvl(theta, windowSize=windowSize)
+          energy = circcvl(energy, windowSize=windowSize)
+
+      ax.plot(theta, energy * 100, lw=4, color=color)
+
+      if ci is not None:
+          ax.fill_between(
+              theta,
+              (energy - ci[:, 0]) * 100,
+              (energy + ci[:, 1]) * 100,
+              alpha=0.1, color=color
+          )
+
+      ax.set_ylabel('Energy')
+      ax.set_xlabel('Pref. Location (°)')
+      ax.set_xticks([0, 90, 180, 270, 360])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import numpy as np
+
+  def circcvl(signal, windowSize=10, axis=-1):
+      signal_copy = signal.copy()
+
+      if axis != -1 and signal.ndim != 1:
+          signal_copy = np.swapaxes(signal_copy, axis, -1)
+
+      # Save the nan positions before replacing them
+      nan_mask = np.isnan(signal_copy)
+      signal_copy[nan_mask] = np.interp(np.flatnonzero(nan_mask),
+                                        np.flatnonzero(~nan_mask),
+                                        signal_copy[~nan_mask])
+
+      # Ensure the window size is odd for a centered kernel
+      if windowSize % 2 == 0:
+          windowSize += 1
+
+      # Create a centered averaging kernel
+      kernel = np.ones(windowSize) / windowSize
+
+      # Apply convolution along the last axis or specified axis
+      smooth_signal = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode='valid'), axis=-1, arr=signal_copy)
+
+      # Substitute the original nan positions back into the result
+      smooth_signal[nan_mask] = np.nan
+
+      if axis != -1 and signal.ndim != 1:
+          smooth_signal = np.swapaxes(smooth_signal, axis, -1)
+
+      return smooth_signal
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+
+def circcvl(signal, windowSize=10, axis=-1):
+    signal_copy = signal.copy()
+
+    if axis != -1 and signal.ndim != 1:
+        signal_copy = np.swapaxes(signal_copy, axis, -1)
+
+    # Save the NaN positions before replacing them
+    nan_mask = np.isnan(signal_copy)
+    signal_copy[nan_mask] = np.interp(
+        np.flatnonzero(nan_mask),
+        np.flatnonzero(~nan_mask),
+        signal_copy[~nan_mask]
+    )
+
+    # Ensure the window size is odd for a centered kernel
+    if windowSize % 2 == 0:
+        windowSize += 1
+
+    # Create a centered averaging kernel
+    kernel = np.ones(windowSize) / windowSize
+
+    # Number of elements to pad on each side
+    pad_width = windowSize // 2
+
+    # Pad the signal circularly
+    if signal.ndim == 1:
+        padded_signal = np.pad(signal_copy, pad_width, mode='wrap')
+    else:
+        padding = [(0, 0)] * (signal.ndim - 1) + [(pad_width, pad_width)]
+        padded_signal = np.pad(signal_copy, padding, mode='wrap')
+
+    # Apply convolution along the last axis or specified axis
+    smooth_signal = np.apply_along_axis(
+        lambda m: np.convolve(m, kernel, mode='same'),
+        axis=-1,
+        arr=padded_signal
+    )
+
+    # Remove padding
+    if signal.ndim == 1:
+        smooth_signal = smooth_signal[pad_width:-pad_width]
+    else:
+        indexer = [slice(None)] * (smooth_signal.ndim - 1) + [slice(pad_width, -pad_width)]
+        smooth_signal = smooth_signal[tuple(indexer)]
+
+    # Substitute the original NaN positions back into the result
+    smooth_signal[nan_mask] = np.nan
+
+    if axis != -1 and signal.ndim != 1:
+        smooth_signal = np.swapaxes(smooth_signal, axis, -1)
+
+    return smooth_signal
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  import numpy as np
+  from scipy.optimize import differential_evolution
+  from scipy.interpolate import interp1d
+  import matplotlib.pyplot as plt
+
+  def get_distance(x, y):
+      distance = abs(x - y)
+      if distance>180:
+          distance -= 360
+          distance *= -1
+      return distance
+
+  def find_multiple_minima_from_values(x_vals, y_vals, num_minima=2, num_runs=50, tol=0.05, popsize=50, maxiter=10000, min_distance=0.1, ax=None, color='k'):
+      # Interpolate the energy landscape
+      energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
+
+      # Define the bounds for the differential evolution
+      bounds = [(x_vals.min(), x_vals.max())]
+
+      results = []
+
+      for _ in range(num_runs):
+          result = differential_evolution(energy_function, bounds, strategy='rand1bin',
+                                          maxiter=maxiter, popsize=popsize, tol=tol,
+                                          seed=np.random.randint(0, 10000))
+
+          results.append((result.x[0], result.fun))
+
+      # Filter unique minima within a tolerance and minimum distance
+      unique_minima = []
+      angles = []
+      energies = []
+      for x_val, energy in results:
+
+          if not any(np.isclose(x_val, um[0], atol=tol) or get_distance(x_val, um[0]) < min_distance for um in unique_minima):
+              unique_minima.append([x_val, energy])
+              angles.append(x_val)
+              energies.append(energy)
+      # Ensure we only return the requested number of unique minima
+      unique_minima = sorted(unique_minima, key=lambda x: x[1])[:num_minima]
+
+      if ax is None:
+          fig, ax = plt.subplots()
+      # Plot the function
+      x = np.linspace(x_vals.min(), x_vals.max(), 400)
+      y = [energy_function(xi) for xi in x]  # Without noise for plotting
+
+
+      for min_x, _ in unique_minima:
+          ax.plot(min_x, np.abs(energy_function(min_x)), 'o', color=color, markeredgecolor='k')  # Mark the minima points
+
+      return angles, energies
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+
+  def safe_f1_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return np.nan  # return np.nan where the score cannot be calculated
+      return f1_score(y_true, y_score, average='weighted')
+      #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
+    try:
+        coef = estimator.named_steps["model"].coef_.flatten()
+        clf = estimator.named_steps["model"]
+    except:
+        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
+        clf = estimator.best_estimator_named_steps["model"]
+
+    norm_w = np.linalg.norm(coef)
+
+    if IF_SIGN:
+        # dot_product = (2*y_test -1) * np.dot(X_test, coef) / (np.linalg.norm(coef) + .00001)
+        dot_product = (2*y_test -1) * clf.decision_function(X_test)
+    else:
+        dot_product = clf.decision_function(X_test)
+        # dot_product = -np.dot(X_test, coef) / (np.linalg.norm(coef) + .00001)
+
+    return np.nanmean(dot_product) / coef.shape[0] / norm_w
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  N_NEURONS = [668, 693, 444, 361, 113]
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12']
+  # mice = ['PP09', 'PP17']
+
+  kwargs = {
+      'mouse': mice[1], 'laser': 0,
+      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'prescreen':None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 1000,
+      'n_splits': 3, 'n_repeats': 16,
+      'class_weight': 0,
+      'multilabel':0,
+      'mne_estimator':'generalizing', # sliding or generalizing
+      'n_jobs': 128,
+      'bolasso_penalty': 'l2',
+  }
+
+  # kwargs['days'] = ['first', 'middle', 'last']
+  # kwargs['days'] = ['first', 'last']
+  kwargs['days'] = 'all'
+  options = set_options(**kwargs)
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  # safe_f1 = make_scorer(safe_f1_score, needs_proba=True)
+
+  # options['hp_scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
+  options['hp_scoring'] = safe_roc_auc
+  options['scoring'] = options['hp_scoring']
+#+end_src
+
+#+RESULTS:
+
+* Energy
+
+#+begin_src ipython
+path = '/home/leon/'
+# name = 'phase_bias'
+# data = pkl.load(open(path + "/" + name + '.pkl', "rb"))[np.newaxis]
+# data = pkl_load('phase', path="'/home/leon/models/NeuroFlame/org")
+# print(data.shape)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+data = np.load('/home/leon/spikingLeon.npy')
+data = data[np.newaxis]
+
+data = (data + np.pi) % (2 * np.pi) - np.pi
+data = (data + 2 * np.pi) % (2 * np.pi)
+print(data.shape)
+ #+end_src
+
+#+RESULTS:
+: (1, 296, 491)
+
+#+begin_src ipython
+# bins = np.arange(0, )
+bins = None
+num_bins = 96
+IF_BOOT=0
+window=0.1
+cmap = plt.get_cmap('Blues')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+plt.hist(data[0, :, bins].reshape(-1) * 180 / np.pi, bins='auto')
+plt.xlabel('Bump Loc. (°)')
+plt.ylabel('Count')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_24.png]]
+
+#+begin_src ipython
+N_BINS = 25
+n_bins = data.shape[1] // N_BINS
+
+energies = []
+cis = []
+
+
+for i in range(n_bins):
+    start_idx = i * N_BINS
+    end_idx = start_idx + N_BINS
+    if i==n_bins-1:
+        end_idx = -1
+    print(start_idx, end_idx)
+
+    energy, ci = get_energy(data[:, start_idx:end_idx], [], 0, num_bins, bins, None, window, IF_BOOT)
+    print(energy.shape)
+    energies.append(energy)
+    cis.append(ci)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+0 25
+(96,)
+25 50
+(96,)
+50 75
+(96,)
+75 100
+(96,)
+100 125
+(96,)
+125 150
+(96,)
+150 175
+(96,)
+175 200
+(96,)
+200 225
+(96,)
+225 250
+(96,)
+250 -1
+(96,)
+#+end_example
+
+#+begin_src ipython
+energy_copy = energy
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+energies = np.array(energies)
+print(energies.shape)
+#+end_src
+
+#+RESULTS:
+: (11, 96)
+
+#+begin_src ipython
+  n_bins = 2
+  theta = np.linspace(0, 360, energies.shape[1]-1, endpoint=False)
+  windowSize = int(window * energies.shape[1]-1)
+  colors = [cmap((i+1)/n_bins) for i in range(n_bins)]
+
+  minimas = []
+  heights = []
+  fig, ax = plt.subplots(1, 3, figsize= [3*width, height])
+  for i in range(n_bins):
+      plot_theta_energy(0, energies[i], ci, window=window, ax=ax[0], SMOOTH=1, color=colors[i])
+
+
+      minima, well = find_multiple_minima_from_values(theta, circcvl(energies[i][1:]*100, windowSize), num_minima=2,
+                                                      num_runs=360, tol=.1, ax=ax[0], min_distance=40, popsize=1, color=colors[i])
+
+      plot_fix_points(np.array(minima[:2]) * np.pi / 180.0, ax[2], color=colors[i])
+
+      minimas.append(minimas[:2])
+      heights.append(well[0] + well[1])
+
+      ax[1].plot(i, heights[-1]/2, 'o', color=colors[i])
+
+  # ax[0].axvline(333, ls='--')
+  # ax[0].axvline(153, ls='--')
+
+  ax[0].axvline(180, ls='--')
+  # ax[1].plot(np.array(heights)/2)
+
+  plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_28.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

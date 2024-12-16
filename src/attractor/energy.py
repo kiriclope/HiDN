@@ -43,10 +43,11 @@ def compute_transition_matrix_hmm(phase, num_bins, n_iter=100):
 
     # Estimate model parameters.
     # Note: you would need to reshape your observations to be 2D array
-    bins = np.linspace(0, 2 * np.pi, num_bins-1, endpoint=False)
+    bins = np.linspace(0, 2 * np.pi, num_bins, endpoint=False)
     # bins = np.linspace(phase.min(), phase.max(), num_bins-1, endpoint=True)
 
-    X_discrete = np.digitize(phase, bins)
+    # X_discrete = np.digitize(phase, bins)
+    X_discrete = np.digitize(X, bins, right=False)-1
 
     # lgt = X_discrete.shape[-1]
     # length = np.ones(X_discrete.shape[0]) * lgt
@@ -66,11 +67,14 @@ def compute_transition_matrix(phase, num_bins, verbose=0):
     if verbose:
         print('phase', phase.shape, phase.min() * 180 / np.pi, phase.max() * 180 / np.pi)
 
-    bins = np.linspace(0, 2.0 * np.pi, num_bins-1, endpoint=False)
+    bins = np.linspace(0, 2.0 * np.pi, num_bins, endpoint=False)
+    # bins = np.linspace(-np.pi, np.pi, num_bins-1, endpoint=False)
+
     if verbose:
         print('bins', bins)
 
-    X_discrete = np.digitize(phase, bins)
+    X_discrete = np.digitize(phase, bins) - 1
+
     if verbose:
         print('X_bins', X_discrete.shape)
 
@@ -135,7 +139,10 @@ def run_energy(X_, num_bins, bins, bins0, task, window, IF_HMM=0, VERBOSE=0, n_i
     if bins is not None:
       X = X[..., bins]
 
-    _, phase = decode_bump(X, axis=1)
+    try:
+        _, phase = decode_bump(X, axis=1)
+    except:
+        phase = X
 
     if IF_HMM:
         transition_matrix = compute_transition_matrix_hmm(phase, num_bins=num_bins, n_iter=n_iter)
