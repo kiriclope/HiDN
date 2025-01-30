@@ -307,6 +307,73 @@ def preprocess_df(X, y, **kwargs):
 
     return X_scaled
 
+def sum_epochs(X, axis=-1, **kwargs):
+    X_avg = np.nansum(X, axis=axis)
+    # print(X_avg.shape)
+
+    X_epochs = np.empty(tuple([len(kwargs["epochs"])]) + X_avg.shape)
+    # print(X_epochs.shape)
+    for i_epoch, epoch in enumerate(kwargs["epochs"]):
+        if epoch == "BL":
+            X_BL = np.nansum(X[..., kwargs["bins_BL"]], axis=axis)
+            X_epochs[i_epoch] = X_BL
+        elif epoch == "STIM":
+            X_STIM = np.nansum(X[..., kwargs["bins_STIM"]], axis=axis)
+            X_epochs[i_epoch] = X_STIM
+        elif epoch == "STIM_ED":
+            X_STIM = np.nansum(X[..., kwargs["bins_STIM_ED"]], axis=axis)
+            X_epochs[i_epoch] = X_STIM
+        elif epoch == "ED":
+            X_ED = np.nansum(X[..., kwargs["bins_ED"]], axis=axis)
+            X_epochs[i_epoch] = X_ED
+        elif epoch == "STIM_ED":
+            X_STIM = np.nansum(X[..., kwargs["bins_STIM_ED"]], axis=axis)
+            X_epochs[i_epoch] = X_STIM
+        elif epoch == "DIST":
+            X_DIST = np.nansum(X[..., kwargs["bins_DIST"]], axis=axis)
+            X_epochs[i_epoch] = X_DIST
+        elif epoch == "DIST_MD":
+            X_DIST = np.nansum(X[..., kwargs["bins_DIST_MD"]], axis=axis)
+            X_epochs[i_epoch] = X_DIST
+        elif epoch == "PRE_DIST":
+            X_DIST = np.nansum(X[..., kwargs["bins_PRE_DIST"]], axis=axis)
+            X_epochs[i_epoch] = X_DIST
+        elif epoch == "POST_DIST":
+            X_DIST = np.nansum(X[..., kwargs["bins_POST_DIST"]], axis=axis)
+            X_epochs[i_epoch] = X_DIST
+        elif epoch == "MD":
+            X_MD = np.nansum(X[..., kwargs["bins_MD"]], axis=axis)
+            X_epochs[i_epoch] = X_MD
+        elif epoch == "CUE":
+            X_CUE = np.nansum(X[..., kwargs["bins_CUE"]], axis=axis)
+            X_epochs[i_epoch] = X_CUE
+        elif epoch == "RWD":
+            X_RWD = np.nansum(X[..., kwargs["bins_RWD"]], axis=axis)
+            X_epochs[i_epoch] = X_RWD
+        elif epoch == "LD":
+            X_LD = np.nansum(X[..., kwargs["bins_LD"]], axis=axis)
+            X_epochs[i_epoch] = X_LD
+        elif epoch == "TEST":
+            X_TEST = np.nansum(X[..., kwargs["bins_TEST"]], axis=axis)
+            X_epochs[i_epoch] = X_TEST
+        elif epoch == "CHOICE":
+            X_RWD = np.nansum(X[..., kwargs["bins_CHOICE"]], axis=axis)
+            X_epochs[i_epoch] = X_RWD
+        elif epoch == "RWD2":
+            X_RWD = np.nansum(X[..., kwargs["bins_RWD2"]], axis=axis)
+            X_epochs[i_epoch] = X_RWD
+        elif epoch == "DELAY":
+            X_DELAY = np.nansum(X[..., kwargs["bins_DELAY"]], axis=axis)
+            X_epochs[i_epoch] = X_DELAY
+
+    X_epochs = np.moveaxis(X_epochs, 0, axis)
+
+    if X_epochs.shape[-1] == 1:
+        X_epochs = X_epochs[..., 0]
+
+    return X_epochs
+
+
 
 def avg_epochs(X, axis=-1, **kwargs):
     X_avg = np.nanmean(X, axis=axis)

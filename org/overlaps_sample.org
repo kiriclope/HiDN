@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session sample_decoder :kernel dual_data :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session sample_overlaps :kernel dual_data :output-dir ./figures/sample_overlaps :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -14,15 +14,13 @@
 #+end_src
 
 #+RESULTS:
-:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
-: <Figure size 700x432.624 with 0 Axes>
-:END:
 
 * Imports
+
 #+begin_src ipython
   from sklearn.exceptions import ConvergenceWarning
   warnings.filterwarnings("ignore")
@@ -40,6 +38,7 @@
   import numpy as np
   import matplotlib.pyplot as plt
   import pandas as pd
+  import seaborn as sns
 
   from time import perf_counter
 
@@ -79,13 +78,13 @@ def pad_with_nans(array, target_shape):
   def safe_roc_auc_score(y_true, y_score):
       y_true = np.asarray(y_true)
       if len(np.unique(y_true)) == 1:
-          return np.nan  # return np.nan where the score cannot be calculated
+          return 0.5  # return np.nan where the score cannot be calculated
       return roc_auc_score(y_true, y_score)
 
   def safe_f1_score(y_true, y_score):
       y_true = np.asarray(y_true)
       if len(np.unique(y_true)) == 1:
-          return np.nan  # return np.nan where the score cannot be calculated
+          return 0.5  # return np.nan where the score cannot be calculated
       return f1_score(y_true, y_score, average='weighted')
       #+end_src
 
@@ -207,28 +206,28 @@ from pymer4.models import Lmer
 #+RESULTS:
 
 #+begin_src ipython
-def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0):
+def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_abs=0, ls='-'):
     df_ = df[df.day == day].copy()
     colors = ['r', 'b', 'g']
 
-    if if_proba:
-        mean_overlaps = df_.groupby('tasks')['probas_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+    if if_abs:
+        mean_overlaps = df_.groupby('tasks')['abs_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
     else:
         mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
 
-    # lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
-    # upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+    lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+    upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
 
     time_points = np.linspace(0, 14, size)
 
     for i, task in enumerate(mean_overlaps.index):
-        ax.plot(time_points, mean_overlaps[task], label=f"Day {task}", color=colors[i])
-        # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls)
+        ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
 
     ax.set_xlabel('Time (s)')
-    # ax.set_ylabel('%s Overlap' % title)
     add_vlines(ax)
     ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
 
 def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
     stacked = np.stack(x)
@@ -351,8 +350,9 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
 
 #+begin_src ipython
   DEVICE = 'cuda:0'
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  N_NEURONS = [668, 693, 444, 361, 113]
+  old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
 
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   # mice = ['AP02', 'AP12']
@@ -361,7 +361,7 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
 
   kwargs = {
       'mouse': mice[0], 'laser': 0,
-      'trials': '', 'reload': 1, 'data_type': 'dF',
+      'trials': 'correct', 'reload': 1, 'data_type': 'dF',
       'prescreen': None, 'pval': 0.05,
       'preprocess': False, 'scaler_BL': 'robust',
       'avg_noise':True, 'unit_var_BL': True,
@@ -371,7 +371,7 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
       'bootstrap': 1, 'n_boots': 128,
       'n_splits': 5, 'n_repeats': 16,
       'class_weight': 0,
-      'multilabel':1,
+      'multilabel': 0,
       'mne_estimator':'generalizing', # sliding or generalizing
       'n_jobs': 128,
   }
@@ -384,11 +384,11 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
   safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
   safe_f1 = make_scorer(safe_f1_score, needs_proba=True)
 
-  options['hp_scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
+  options['hp_scoring'] = lambda estimator, X_test, y_test: np.abs(overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1))
   # options['hp_scoring'] = 'accuracy'
-  #   options['scoring'] = options['hp_scoring']
+  options['scoring'] = overlaps_scorer
 
-  dum = 'accuracy_loocv'
+  dum = 'overlaps_all_loocv'
  #+end_src
 
 #+RESULTS:
@@ -405,59 +405,82 @@ from src.classificationCV import ClassificationCV
 
 #+begin_src ipython
 from sklearn.linear_model import LogisticRegression
-net = LogisticRegression(penalty='l1', solver='liblinear', n_jobs=None, tol=0.001, class_weight='balanced')
+net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
 # net = LogisticRegression(penalty='elasticnet', solver='saga', n_jobs=None, l1_ratio=0.95,  tol=0.001, class_weight='balanced')
 
 params = {'model__C': np.logspace(-2, 2, 10)} # , 'net__l1_ratio': np.linspace(0, 1, 10)}
 
-options['hp_scoring'] = 'accuracy'
-options['scoring'] = 'accuracy'
-# options['scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
-
-# options['hp_scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
-# options['scoring'] = options['hp_scoring']
+options['hp_scoring'] = lambda estimator, X_test, y_test: np.abs(overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1))
+options['scoring'] = overlaps_scorer
 
 options['n_jobs'] = -1
 options['verbose'] = 0
 model = ClassificationCV(net, params, **options)
 
 options['cv'] = LeaveOneOut()
-# options['cv'] = None
+# options['cv'] = 5
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
 options['verbose'] = 1
-options['reload'] = 0
-options['multilabel']= 0
+options['reload'] = 1
+
 options['features'] = 'sample'
 options['epochs'] = ['ED']
+options['T_WINDOW'] = 0.0
 
 tasks = ['DPA', 'DualGo', 'DualNoGo']
+
 dfs = []
 
-mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# mice = ['ACCM04']
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+tasks = ['all']
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+new_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
+# mice = ['ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+
+options['NEW_DATA'] = 0
+# mice = ['JawsM15']
 
 for mouse in mice:
-
     df_mouse = []
     options['mouse'] = mouse
     options = set_options(**options)
     days = options['days']
     print(days)
 
-    options['task'] = 'all'
-
-    for day in days:
-        options['day'] = day
-        overlaps = get_classification(model, RETURN='df_scores', **options)
+    if mouse in new_mice:
         options['reload'] = 0
-        df_mouse.append(overlaps)
+        options['NEW_DATA'] = 1
+    else:
+        options['reload'] = 0
+        options['NEW_DATA'] = 0
+
+    for task in tasks:
+        options['task'] = task
+
+        for day in days:
+            options['day'] = day
+
+            try:
+            # if 0==0:
+                overlaps = get_classification(model, RETURN='df_scores', **options)
+                options['reload'] = 0
+                df_mouse.append(overlaps)
+            except:
+                pass
 
     df_mouse = pd.concat(df_mouse)
     df_mouse['mouse'] = mouse
-
     dfs.append(df_mouse)
 
 df_sample = pd.concat(dfs)
@@ -468,141 +491,31 @@ print(df_sample.shape)
 #+begin_example
 ['first', 'last']
 Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
 multiple days, discard 0 first 3 middle 0
-X_S1 (144, 184, 84) X_S2 (144, 184, 84)
-X_B (288, 184, 84) y_B (288,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
+X_S1 (43, 184, 84) X_S2 (29, 184, 84)
+X_B (72, 184, 84) y_B (72,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
 multiple days, discard 0 first 3 middle 0
-X_S1 (144, 184, 84) X_S2 (144, 184, 84)
-y_labels (288, 11) ['DualGo' 'DualNoGo' 'DPA']
-X (288, 184, 84) y (288,) [0. 1.]
-scores (288, 2, 84, 84) 0.5563547178130511
-df_A (288, 12) scores (288, 7056) labels (288, 11)
-df_B (288, 12) scores (288, 7056) labels (288, 11)
-df (576, 12)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 184, 84) X_S2 (48, 184, 84)
-X_B (96, 184, 84) y_B (96,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (48, 184, 84) X_S2 (48, 184, 84)
-y_labels (96, 11) ['DualNoGo' 'DualGo' 'DPA']
-X (96, 184, 84) y (96,) [0. 1.]
-scores (96, 2, 84, 84) 0.5432167658730159
-df_A (96, 12) scores (96, 7056) labels (96, 11)
-df_B (96, 12) scores (96, 7056) labels (96, 11)
-df (192, 12)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 201, 84) X_S2 (144, 201, 84)
-X_B (288, 201, 84) y_B (288,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 201, 84) X_S2 (144, 201, 84)
-y_labels (288, 12) ['DualNoGo' 'DualGo' 'DPA']
-X (288, 201, 84) y (288,) [0. 1.]
-scores (288, 2, 84, 84) 0.5305590986394558
-df_A (288, 13) scores (288, 7056) labels (288, 12)
-df_B (288, 13) scores (288, 7056) labels (288, 12)
-df (576, 13)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 201, 84) X_S2 (144, 201, 84)
-X_B (288, 201, 84) y_B (288,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 201, 84) X_S2 (144, 201, 84)
-y_labels (288, 12) ['DualNoGo' 'DPA' 'DualGo']
-X (288, 201, 84) y (288,) [0. 1.]
-scores (288, 2, 84, 84) 0.5523141258818343
-df_A (288, 13) scores (288, 7056) labels (288, 12)
-df_B (288, 13) scores (288, 7056) labels (288, 12)
-df (576, 13)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 423, 84) X_S2 (144, 423, 84)
-X_B (288, 423, 84) y_B (288,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 423, 84) X_S2 (144, 423, 84)
-y_labels (288, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (288, 423, 84) y (288,) [0. 1.]
-scores (288, 2, 84, 84) 0.6219514715608465
-df_A (288, 12) scores (288, 7056) labels (288, 11)
-df_B (288, 12) scores (288, 7056) labels (288, 11)
-df (576, 12)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (96, 423, 84) X_S2 (96, 423, 84)
-X_B (192, 423, 84) y_B (192,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (96, 423, 84) X_S2 (96, 423, 84)
-y_labels (192, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 423, 84) y (192,) [0. 1.]
-scores (192, 2, 84, 84) 0.5933779761904762
-df_A (192, 12) scores (192, 7056) labels (192, 11)
-df_B (192, 12) scores (192, 7056) labels (192, 11)
-df (384, 12)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 693, 84) X_S2 (144, 693, 84)
-X_B (288, 693, 84) y_B (288,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 693, 84) X_S2 (144, 693, 84)
-y_labels (288, 12) ['DualNoGo' 'DualGo' 'DPA']
-X (288, 693, 84) y (288,) [0. 1.]
-scores (288, 2, 84, 84) 0.6114117811476443
-df_A (288, 13) scores (288, 7056) labels (288, 12)
-df_B (288, 13) scores (288, 7056) labels (288, 12)
-df (576, 13)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 693, 84) X_S2 (144, 693, 84)
-X_B (288, 693, 84) y_B (288,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 693, 84) X_S2 (144, 693, 84)
-y_labels (288, 12) ['DualGo' 'DualNoGo' 'DPA']
-X (288, 693, 84) y (288,) [0. 1.]
-scores (288, 2, 84, 84) 0.6554892211514235
-df_A (288, 13) scores (288, 7056) labels (288, 12)
-df_B (288, 13) scores (288, 7056) labels (288, 12)
-df (576, 13)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 444, 84) X_S2 (144, 444, 84)
-X_B (288, 444, 84) y_B (288,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (144, 444, 84) X_S2 (144, 444, 84)
-y_labels (288, 10) ['DualNoGo' 'DualGo' 'DPA']
-X (288, 444, 84) y (288,) [0. 1.]
+X_S1 (101, 184, 84) X_S2 (115, 184, 84)
+y_labels (216, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (216, 184, 84) nans 0.0 y (216,) [0. 1.]
 #+end_example
+
+#+begin_src ipython
+print(df_sample.keys())
+#+end_src
+
+#+RESULTS:
+: bd51b07b-8cb1-4201-93a3-42116884b967
+
+#+begin_src ipython
+print(df_sample.mouse.unique())
+#+end_src
+
+#+RESULTS:
+: 4a3eae4b-6b6f-479c-9e68-d6e243674d02
 
 #+begin_src ipython
 df_sample['performance'] = df_sample['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
@@ -610,9 +523,16 @@ df_sample['pair'] = df_sample['response'].apply(lambda x: 0 if (('rej' in x) or 
  #+end_src
 
  #+RESULTS:
- : 27b2d107-4b06-410f-95ac-cae55bbd5209
+ : 146d1c39-23c9-493a-8abd-4cdb2f6ebba8
 
  #+begin_src ipython
+print(len(days))
+ #+end_src
+
+#+RESULTS:
+: 1e22b6a3-e266-4806-8553-3f44de077395
+
+#+begin_src ipython
 if len(days)>3:
     name = 'df_sample_%s_days' % dum
 elif len(days)==2:
@@ -621,25 +541,25 @@ else:
     name = 'df_sample_%s' % dum
 
 if len(mice)==1:
-    pkl_save(df_sample, '%s' % name, path="../data/%s/%s" % (options['mouse'], dum))
+    pkl_save(df_sample, '%s' % name, path="../data/%s/overlaps" % options['mouse'])
 elif len(mice)==2:
-    pkl_save(df_sample, '%s' % name, path="../data/mice/%s_PP" % dum)
+    pkl_save(df_sample, '%s' % name, path="../data/mice/overlaps_ACC")
 else:
-    pkl_save(df_sample, '%s' % name, path="../data/mice/%s" % dum)
+    pkl_save(df_sample, '%s' % name, path="../data/mice/overlaps")
 
 #+end_src
 
 #+RESULTS:
-: 28e8cac9-1c61-4927-a491-68987364a131
+: 47c57576-169e-46ba-b11f-86a4704bfdc2
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
-: 01781656-160e-462c-b8a3-2c0cc1dc6fe1
+: 2c335cc2-0a73-4efe-9f8b-1c2c1b0947f2
 
-* Sample dfs
+* Data
 
 #+begin_src ipython
 if len(options['days'])>3:
@@ -650,110 +570,612 @@ else:
     name = 'df_sample_%s' % dum
 
 if len(mice)==1:
-    df_sample = pkl_load('%s' % name, path="../data/%s/%s" % (options['mouse'], dum))
+    df_sample = pkl_load('%s' % name, path="../data/%s/overlaps" % options['mouse'])
 elif len(mice)==2:
-    df_sample = pkl_load('%s' % name, path="../data/mice/%s_ACC" % dum)
+    df_sample = pkl_load('%s' % name, path="../data/mice/overlaps_ACC")
 else:
-    df_sample = pkl_load('%s' % name, path="../data/mice/%s" % dum)
+    df_sample = pkl_load('%s' % name, path="../data/mice/overlaps")#.reset_index()
 #+end_src
 
 #+RESULTS:
-: bdf60775-7897-4b12-91f1-1d22ded79dde
+: loading from ../data/mice/overlaps/df_sample_overlaps_loocv_early_late.pkl
 
 #+begin_src ipython
-try:
-    size=84
-    df_sample['overlaps_diag'] = df_sample['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(size, size) ))
-except:
-    size=115
-    df_sample['overlaps_diag'] = df_sample['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(size, size) ))
+print(df_sample.mouse.unique(), df_sample.shape)
 #+end_src
 
 #+RESULTS:
-: 36a89ebe-69cf-47a1-b9a6-1baa871f1d17
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23'
+:  'ACCM03' 'ACCM04'] (5408, 17)
 
 #+begin_src ipython
-options['epochs'] = ['ED']
-df_sample['overlaps_ED'] = df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(size, size).T , **options))
-# df_sample['overlaps_ED'] = -df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(size, size).T , **options)) / (2.0 * df_sample.sample_odor -1.0)
-# df_sample['overlaps_ED'] += df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(size, size) , **options)) /2
+print(df_sample.mouse.unique())
 #+end_src
 
 #+RESULTS:
-: 41b470c3-44b7-45b3-b868-b94dd99a5d91
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23'
+:  'ACCM03' 'ACCM04']
 
 #+begin_src ipython
-options['epochs'] = ['LD']
-df_sample['overlaps_ED_LD'] = df_sample['overlaps_ED'].apply(lambda x: avg_epochs(np.array(x), **options))
-df_sample['overlaps_diag_LD'] = df_sample['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+
 #+end_src
 
 #+RESULTS:
-: 03c215c1-4276-4428-a541-9f9cca8d3ada
 
 #+begin_src ipython
-options['epochs'] = ['CHOICE']
-df_sample['overlaps_ED_CHOICE'] = df_sample['overlaps_ED'].apply(lambda x: avg_epochs(np.array(x), **options))
-df_sample['overlaps_diag_CHOICE'] = df_sample['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+print(df_sample.keys())
 #+end_src
 
 #+RESULTS:
-: 6e686f42-bcf4-47da-8999-12f498e76199
+: Index(['index', 'sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response',
+:        'laser', 'day', 'choice', 'odr_perf', 'odr_choice', 'odr_response',
+:        'idx', 'overlaps', 'mouse', 'performance', 'pair'],
+:       dtype='object')
 
 #+begin_src ipython
-import seaborn as sns
-df = df_sample.copy()
+# df_sample['overlaps_diag'] = df_sample['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
+df_sample['overlaps_diag'] = (2.0 * df_sample['sample_odor'] -1 )  * df_sample['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
 
-# df = df[df.mouse!='ChRM04']
+for epoch2 in ['ED', 'MD', 'LD']:
+        options['epochs'] = [epoch2]
+        df_sample['overlaps_diag_%s' % epoch2] = df_sample['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+        df_sample['abs_overlaps_diag_%s' % epoch2] = df_sample['overlaps_diag_%s' % epoch2].abs()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['T_WINDOW'] = 0.0
+for epoch in ['ED', 'MD', 'LD']:
+    options['epochs'] = [epoch]
+    df_sample['overlaps_%s' % epoch] = (2.0 * df_sample['sample_odor'] -1 ) * df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+    # df_sample['overlaps_%s' % epoch] = df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+
+    for epoch2 in ['ED', 'MD', 'LD']:
+        options['epochs'] = [epoch2]
+        df_sample['overlaps_%s_%s' % (epoch, epoch2)] = df_sample['overlaps_%s' % epoch].apply(lambda x: avg_epochs(np.array(x), **options))
+        df_sample['overlaps_%s_%s' % (epoch, epoch2)] = df_sample['overlaps_%s_%s' % (epoch, epoch2)].abs()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharex=True)
 
-sns.lineplot(data=df, x='day', y='performance', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'], ax=ax[0])
-df=df[df.performance==0]
-# df = df[df.response=='correct_rej']
+df = df_sample.copy()
+df = df[df.laser==0]
+# df = df[df.odr_perf==1]
+# df = df[df.mouse!='ACCM04']
 
-sns.lineplot(data=df, x='day', y='overlaps_diag_LD', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'], ax=ax[1])
-sns.lineplot(data=df, x='day', y='overlaps_ED_LD', hue='tasks', marker='o', legend=0, palette=['r', 'b', 'g'], ax=ax[2])
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
 
-plt.xlabel('Day')
-plt.ylabel('Overlap')
-plt.show()
-#+end_src
-
-#+RESULTS:
-: df7e0910-39b0-4235-88fe-562444ae01c1
-
-#+begin_src ipython
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
+sns.lineplot(data=df, x='day', y='performance', hue='tasks', marker='o', legend=1, palette=['b', 'r', 'g'], ax=ax[0])
+ax[0].axhline(0.5, ls='--', color='k')
+ax[0].set_xlabel('Day')
+ax[0].set_ylabel('DPA Performance')
+ax[0].legend(fontsize=10)
+ax[0].set_ylim([.475, 1])
 
 df = df_sample.copy()
-# df = df[df.mouse!='ChRM04']
-# df = df[df.performance==1]
-# df = df[df.response=='incorrect_fa']
-# df = df[df.sample_odor==0]
+df = df[df.laser==0].dropna()
+# df = df[df.mouse!='ACCM04']
 
-plot_overlaps(df, 'first', 'ED', ax[0], size=size, y0=1/2.)
-plot_overlaps(df, 'last', 'ED', ax[1],size=size, y0=1/2.)
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
+# print(df.mouse.unique())
 
-# plot_overlaps(df, 'first', 'diag', ax[0], size=size, y0=0.5)
-# plot_overlaps(df, 'last', 'diag', ax[1],size=size, y0=0.5)
+sns.lineplot(data=df, x='day', y='odr_perf', hue='tasks', marker='o', legend=1, palette=['b', 'g'], ax=ax[1])
+ax[1].axhline(0.5, ls='--', color='k')
+ax[1].set_xlabel('Day')
+ax[1].set_ylabel('GNG Performance')
+ax[1].legend(fontsize=10)
 
-ax[0].set_ylabel('Sample Overlap')
-ax[0].set_title('Naive')
-ax[1].set_title('Expert')
+df = df_sample.copy()
+df = df[df.laser==0]
+# df = df[df.mouse!='ACCM04']
+# df = df[df.odr_perf==1]
+# df = df[df.sample==1]
+df = df[df.performance==1]
 
-ax[1].set_xlim([0, 10])
-ax[1].set_xlim([0, 12])
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
 
-plt.savefig('./cosyne/sample_overlap.svg', dpi=300)
+sns.lineplot(data=df, x='day', y='overlaps_ED_LD', hue='tasks', marker='o', legend=1, palette=[ 'r', 'b', 'g'], ax=ax[2])
+
+ax[2].axhline(0., ls='--', color='k')
+ax[2].set_xlabel('Day')
+ax[2].set_ylabel('Sample Overlap')
+ax[2].set_title('Late Delay')
+ax[2].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_overlaps_LD.svg', dpi=300)
 plt.show()
 #+end_src
 
 #+RESULTS:
-: 27b9d8b5-37a7-49cd-b475-3a2e29af38da
+[[./figures/sample_overlaps/figure_34.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.odr_perf==1]
+# df = df[df.mouse!='ACCM04']
+
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
+
+sns.lineplot(data=df, x='day', y='overlaps_ED_LD', hue='tasks', marker='o', legend=1, palette=[ 'b', 'g'], ax=ax[0])
+
+ax[0].axhline(0., ls='--', color='k')
+ax[0].set_xlabel('Day')
+ax[0].set_ylabel('Sample Overlap')
+ax[0].legend(fontsize=10)
+ax[0].set_title('GNG Correct Trials')
+ax[0].set_ylim([-0.5,1.5])
+
+df = df_sample.copy()
+df = df[df.laser==0]
+# df = df[df.mouse!='ACCM04']
+df = df[df.odr_perf==0]
+# df = df[df.sample==1]
+
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
+
+sns.lineplot(data=df, x='day', y='overlaps_ED_LD', hue='tasks', marker='o', legend=1, palette=[ 'b', 'g'], ax=ax[1])
+
+ax[1].axhline(0., ls='--', color='k')
+ax[1].set_xlabel('Day')
+ax[1].set_ylabel('Sample Overlap')
+ax[1].set_title('GNG Incorrect Trials')
+ax[1].legend(fontsize=10)
+ax[1].set_ylim([-0.5, 1.5])
+
+plt.savefig('figures/icrm/sample_gng_perf.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_35.png]]
+
+ #+begin_src ipython
+n_ = len(options['days'])
+fig, ax = plt.subplots(nrows=1, ncols=n_, figsize=(n_*width, height), sharex=True, sharey=True)
+
+df = df_sample.copy()
+df = df[df.laser==0]
+
+# df = df[df.sample_odor==1]
+# df = df[df.odr_perf==1]
+df = df[df.performance==1]
+# df = df[df.response=='incorrect_fa']
+# df = df[df.mouse!='ACCM04']
+
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
+
+# print(df.mouse.unique(), df.shape)
+
+epoch= 'diag'
+
+plot_overlaps(df, 'first', epoch, ax[0], title='Sample', y0=0., if_abs=0)
+# plot_overlaps(df, 'middle', epoch, ax[1], title='Sample', y0=0., if_abs=0)
+plot_overlaps(df, 'last', epoch, ax[n_-1], title='Sample', y0=0., if_abs=0)
+
+ax[0].set_ylabel('Sample Overlap')
+ax[0].set_title('First')
+ax[1].set_title('Middle')
+ax[n_-1].set_title('Last')
+
+# ax[2].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_overlaps_%s.svg' % epoch, dpi=300)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_36.png]]
+
+ #+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharex=True, sharey=True)
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.tasks=='DPA']
+
+epoch= 'ED'
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'first', epoch, ax[0], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'first', epoch, ax[0], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'first', epoch, ax[0], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'first', epoch, ax[0], title='Sample', y0=0.,ls='--')
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'last', epoch, ax[2], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'last', epoch, ax[2], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'last', epoch, ax[2], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'last', epoch, ax[2], title='Sample', y0=0., ls='--')
+
+ax[0].set_ylabel('Sample Overlap')
+ax[0].set_title('First')
+ax[1].set_title('Middle')
+ax[2].set_title('Last')
+
+# ax[2].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_overlaps_%s_pairs.svg' % epoch, dpi=300)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+[[./figures/sample_overlaps/figure_38.png]]
+:END:
+
+ #+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharex=True, sharey=True)
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.tasks=='DualGo']
+
+epoch= 'ED'
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'first', epoch, ax[0], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'first', epoch, ax[0], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'first', epoch, ax[0], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'first', epoch, ax[0], title='Sample', y0=0.,ls='--')
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'last', epoch, ax[2], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'last', epoch, ax[2], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'last', epoch, ax[2], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'last', epoch, ax[2], title='Sample', y0=0., ls='--')
+
+ax[0].set_ylabel('Sample Overlap')
+ax[0].set_title('First')
+ax[1].set_title('Middle')
+ax[2].set_title('Last')
+
+# ax[2].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_overlaps_%s_pairs.svg' % epoch, dpi=300)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_39.png]]
+
+ #+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharex=True, sharey=True)
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.tasks=='DualNoGo']
+
+epoch= 'ED'
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'first', epoch, ax[0], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'first', epoch, ax[0], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'first', epoch, ax[0], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'first', epoch, ax[0], title='Sample', y0=0.,ls='--')
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'middle', epoch, ax[1], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==1)], 'last', epoch, ax[2], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==1) & (df.pair==0)], 'last', epoch, ax[2], title='Sample', y0=0., ls='--')
+
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==1)], 'last', epoch, ax[2], title='Sample', y0=0., ls='-')
+plot_overlaps(df[(df.sample_odor==0) & (df.pair==0)], 'last', epoch, ax[2], title='Sample', y0=0., ls='--')
+
+ax[0].set_ylabel('Sample Overlap')
+ax[0].set_title('First')
+ax[1].set_title('Middle')
+ax[2].set_title('Last')
+
+# ax[2].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_overlaps_%s_pairs.svg' % epoch, dpi=300)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_40.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+ #+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
+
+epoch = 'SAMPLE'
+df = df_sample.copy()
+# df = df[df.performance==0]
+df = df[df.odr_perf==1]
+df = df[df.response=='incorrect_fa']
+df = df[df.mouse!='ACCM04']
+
+plot_overlaps(df, 'first', '%s' % epoch, ax[0], title='Sample', y0=0.)
+
+df = df_sample.copy()
+df = df[df.mouse!='ACCM04']
+# df = df[df.performance==1]
+df = df[df.odr_perf==1]
+df = df[df.response=='correct_rej']
+plot_overlaps(df, 'first', '%s' % epoch, ax[1], title='Sample', y0=0.)
+
+
+ax[0].set_ylabel('Sample %s Overlap' % epoch)
+ax[0].set_title('Incorrect')
+ax[1].set_title('Correct')
+
+# ax[2].legend(fontsize=10)
+plt.savefig('figs/sample_%s_overlaps.svg' % epoch, dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+Cell In[66], line 10
+      7 df = df[df.response=='incorrect_fa']
+      8 df = df[df.mouse!='ACCM04']
+---> 10 plot_overlaps(df, 'first', '%s' % epoch, ax[0], title='Sample', y0=0.)
+     12 df = df_sample.copy()
+     13 df = df[df.mouse!='ACCM04']
+
+Cell In[12], line 8, in plot_overlaps(df, day, epoch, ax, title, y0, size, if_abs)
+      6     mean_overlaps = df_.groupby('tasks')['abs_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+      7 else:
+----> 8     mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+     10 # lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+     11 # upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+     13 time_points = np.linspace(0, 14, size)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/groupby/generic.py:1964, in DataFrameGroupBy.__getitem__(self, key)
+   1957 if isinstance(key, tuple) and len(key) > 1:
+   1958     # if len == 1, then it becomes a SeriesGroupBy and this is actually
+   1959     # valid syntax, so don't raise
+   1960     raise ValueError(
+   1961         "Cannot subset columns with a tuple with more than one element. "
+   1962         "Use a list instead."
+   1963     )
+-> 1964 return super().__getitem__(key)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/base.py:244, in SelectionMixin.__getitem__(self, key)
+    242 else:
+    243     if key not in self.obj:
+--> 244         raise KeyError(f"Column not found: {key}")
+    245     ndim = self.obj[key].ndim
+    246     return self._gotitem(key, ndim=ndim)
+
+KeyError: 'Column not found: overlaps_SAMPLE'
+#+end_example
+[[./figures/sample_overlaps/figure_37.png]]
+:END:
+
+ #+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
+
+epoch = 'SAMPLE'
+df = df_sample.copy()
+# df = df[df.performance==0]
+df = df[df.response=='incorrect_fa']
+
+plot_overlaps(df, 'last', '%s' % epoch, ax[0], title='Sample', y0=0.)
+
+df = df_sample.copy()
+# df = df[df.performance==1]
+df = df[df.response=='correct_rej']
+plot_overlaps(df, 'last', '%s' % epoch, ax[1], title='Sample', y0=0.)
+
+
+ax[0].set_ylabel('Sample %s Overlap' % epoch)
+ax[0].set_title('Incorrect')
+ax[1].set_title('Correct')
+
+# ax[2].legend(fontsize=10)
+plt.savefig('figs/sample_%s_overlaps.svg' % epoch, dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_37.png]]
+
+ #+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+df = df_sample.copy()
+df = df[df.laser==0]
+
+df = df[df.odr_perf==1]
+df = df[df.sample==1]
+
+df = df[df.mouse!='ACCM04']
+# df = df[df.response=='incorrect_fa']
+
+plot_overlaps_mat(df, 'first', vmin=0, vmax=1, title='Sample')
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3790, in Index.get_loc(self, key)
+   3789 try:
+-> 3790     return self._engine.get_loc(casted_key)
+   3791 except KeyError as err:
+
+File index.pyx:152, in pandas._libs.index.IndexEngine.get_loc()
+
+File index.pyx:181, in pandas._libs.index.IndexEngine.get_loc()
+
+File pandas/_libs/hashtable_class_helper.pxi:7080, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+File pandas/_libs/hashtable_class_helper.pxi:7088, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+KeyError: False
+
+The above exception was the direct cause of the following exception:
+
+KeyError                                  Traceback (most recent call last)
+Cell In[37], line 5
+      2 df = df[df.laser==0]
+      4 df = df[df.odr_perf==1]
+----> 5 df = df[df.sample==1]
+      7 df = df[df.mouse!='ACCM04']
+      8 # df = df[df.response=='incorrect_fa']
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py:3893, in DataFrame.__getitem__(self, key)
+   3891 if self.columns.nlevels > 1:
+   3892     return self._getitem_multilevel(key)
+-> 3893 indexer = self.columns.get_loc(key)
+   3894 if is_integer(indexer):
+   3895     indexer = [indexer]
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3797, in Index.get_loc(self, key)
+   3792     if isinstance(casted_key, slice) or (
+   3793         isinstance(casted_key, abc.Iterable)
+   3794         and any(isinstance(x, slice) for x in casted_key)
+   3795     ):
+   3796         raise InvalidIndexError(key)
+-> 3797     raise KeyError(key) from err
+   3798 except TypeError:
+   3799     # If we have a listlike key, _check_indexing_error will raise
+   3800     #  InvalidIndexError. Otherwise we fall through and re-raise
+   3801     #  the TypeError.
+   3802     self._check_indexing_error(key)
+
+KeyError: False
+#+end_example
+:END:
+
+#+begin_src ipython
+df = df_sample.copy()
+df = df[df.laser==0]
+
+df = df[df.odr_perf==1]
+df = df[df.sample==0]
+
+df = df[df.mouse!='ACCM04']
+plot_overlaps_mat(df, 'first', vmin=0, vmax=1, title='Sample')
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+KeyError                                  Traceback (most recent call last)
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3790, in Index.get_loc(self, key)
+   3789 try:
+-> 3790     return self._engine.get_loc(casted_key)
+   3791 except KeyError as err:
+
+File index.pyx:152, in pandas._libs.index.IndexEngine.get_loc()
+
+File index.pyx:181, in pandas._libs.index.IndexEngine.get_loc()
+
+File pandas/_libs/hashtable_class_helper.pxi:7080, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+File pandas/_libs/hashtable_class_helper.pxi:7088, in pandas._libs.hashtable.PyObjectHashTable.get_item()
+
+KeyError: False
+
+The above exception was the direct cause of the following exception:
+
+KeyError                                  Traceback (most recent call last)
+Cell In[38], line 5
+      2 df = df[df.laser==0]
+      4 df = df[df.odr_perf==1]
+----> 5 df = df[df.sample==0]
+      7 df = df[df.mouse!='ACCM04']
+      8 plot_overlaps_mat(df, 'first', vmin=0, vmax=1, title='Sample')
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py:3893, in DataFrame.__getitem__(self, key)
+   3891 if self.columns.nlevels > 1:
+   3892     return self._getitem_multilevel(key)
+-> 3893 indexer = self.columns.get_loc(key)
+   3894 if is_integer(indexer):
+   3895     indexer = [indexer]
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3797, in Index.get_loc(self, key)
+   3792     if isinstance(casted_key, slice) or (
+   3793         isinstance(casted_key, abc.Iterable)
+   3794         and any(isinstance(x, slice) for x in casted_key)
+   3795     ):
+   3796         raise InvalidIndexError(key)
+-> 3797     raise KeyError(key) from err
+   3798 except TypeError:
+   3799     # If we have a listlike key, _check_indexing_error will raise
+   3800     #  InvalidIndexError. Otherwise we fall through and re-raise
+   3801     #  the TypeError.
+   3802     self._check_indexing_error(key)
+
+KeyError: False
+#+end_example
+:END:
+
+#+begin_src ipython
+df = df_sample.copy()
+df = df[df.response=='incorrect_fa']
+plot_overlaps_mat(df, 'last', vmin=0, vmax=1, title='Sample')
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_41.png]]
+
+#+begin_src ipython
+df = df_sample.copy()
+df = df[df.response=='correct_rej']
+plot_overlaps_mat(df, 'last', vmin=0, vmax=1, title='Sample')
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_42.png]]
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
-: 3e04ad0f-9544-4737-a3f1-981a5796efde

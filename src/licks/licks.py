@@ -11,7 +11,7 @@ from src.common.plot_utils import add_vlines
 def plot_lick_rate(licks_counts, bin_edges, n_mice=1):
     # convert count of events to rate (Hz) by dividing by the total time in seconds
     bin_widths = np.diff(bin_edges)
-    rates = licks_counts / bin_widths / n_mice / 64
+    rates = licks_counts / bin_widths / n_mice / 32
 
     plt.plot(bin_edges[:-1], rates[0], "r")
     plt.plot(bin_edges[:-1], rates[1], "b")
@@ -26,8 +26,12 @@ def plot_lick_rate(licks_counts, bin_edges, n_mice=1):
 
 
 def plot_licks_hist(licks_all, n_bins="auto", n_mice=1):
+    # licks_counts, bin_edges = np.histogram(licks_all, bins=n_bins, density=False)
+    # print(licks_counts.shape, bin_edges.shape)
+
     licks_counts, bin_edges, _ = plt.hist(licks_all, bins=n_bins, density=False)
     plt.clf()
+
     plot_lick_rate(licks_counts, bin_edges, n_mice)
     return licks_counts, bin_edges
 
@@ -83,11 +87,12 @@ def vstack_nan(X, Y):
     return np.vstack((X, Y))
 
 
-def add_vlines2(t_STIM=[0, 1], t_DIST=[2.5, 3.5], t_CUE=[4.5, 5], t_TEST=[7, 8], ax=None):
+def add_vlines2(t_STIM=[0, 1], t_DIST=[2.5, 3.5], t_CUE=[4.5, 5], t_TEST=[7, 8], t_RWD=[5, 5.5], t_RWD2=[9,10], ax=None):
     # def add_vlines(t_STIM=[0, 1], t_DIST=[4, 5], t_CUE=[7, 7.5], t_TEST=[11, 12], ax=None):
-    time_periods = [t_STIM, t_DIST, t_CUE, t_TEST]
+    time_periods = [t_STIM, t_DIST, t_CUE, t_RWD, t_TEST, t_RWD2]
 
-    colors = ["b", "b", "g", "b"]
+    colors = ["b", "b", "g", "y", "b", "y"]
+
     if ax is None:
         for period, color in zip(time_periods, colors):
             plt.axvspan(period[0], period[1], alpha=0.1, color=color)
@@ -206,6 +211,8 @@ def get_licks_and_times(data, mouse="ACC_Prl"):
     # print("nogo", np.array(t_NoGo_on).shape, np.array(t_NoGo_off).shape)
     t_nogo = vstack_nan(t_NoGo_on, t_NoGo_off)
 
+    # print(t_sample.shape)
+
     licks = (licks - t_sample[0][0]) / 1000
 
     t_dist = (t_dist - t_sample[0][0]) / 1000
@@ -262,7 +269,8 @@ def convert_to_serie(sample_series, distractor_series, test_series):
     return time_series
 
 
-def split_trials(series, go_distractors, no_go_distractors, responses, trial_length=20):
+def split_trials(series, go_distractors, no_go_distractors, responses, trial_length=21):
+    all_trials = []
     trials_go = []
     trials_no_go = []
     trials_without_distractor = []
@@ -279,6 +287,7 @@ def split_trials(series, go_distractors, no_go_distractors, responses, trial_len
                     end_of_trial > r > series[i + 1][1] for r in responses
                 ):  # Check if a response occurred within this trial
                     trials_without_distractor.append((series[i][1], end_of_trial))
+                    all_trials.append((series[i][1], end_of_trial))
                 i += 2
 
             elif (
@@ -289,6 +298,7 @@ def split_trials(series, go_distractors, no_go_distractors, responses, trial_len
                 if any(
                     end_of_trial > r > series[i + 2][1] for r in responses
                 ):  # Check if a response occurred within this trial
+                    all_trials.append((series[i][1], end_of_trial))
                     if series[i + 1][1] in go_distractors:
                         trials_go.append((series[i][1], end_of_trial))
                     elif series[i + 1][1] in no_go_distractors:
@@ -299,7 +309,7 @@ def split_trials(series, go_distractors, no_go_distractors, responses, trial_len
         else:
             i += 1
 
-    return trials_without_distractor, trials_go, trials_no_go
+    return trials_without_distractor, trials_go, trials_no_go, all_trials
 
 
 # def split_trials(series, go_distractors, no_go_distractors, trial_length=20):
@@ -342,7 +352,11 @@ def get_licks_in_trial(start_time, end_time, lick_timestamps):
 
 
 def hstack_with_padding(arrays):
-    max_length = max(x.shape[0] for x in arrays)  # find the max shape for padding
+    try:
+        max_length = max((x.shape[0] for x in arrays if not np.all(np.isnan(x))), default=0)
+    except:
+        max_length = 0
+
     # pad arrays and stack
     padded_arrays = []
     for a in arrays:
@@ -356,7 +370,7 @@ def hstack_with_padding(arrays):
 
 
 def pad_lists(list_of_lists):
-    max_len = max(len(lst) for lst in list_of_lists)  # find max length
+    max_len = max((len(lst) for lst in list_of_lists if not np.all(np.isnan(lst))), default=0)
     return [lst + [np.nan] * (max_len - len(lst)) for lst in list_of_lists]  # pad lists
 
 
@@ -368,13 +382,12 @@ def get_licks_array(licks, serie, trial_length):
     licks_trial = [get_licks_in_trial(start, start + trial_length, licks) for start, _ in serie]
 
     max_len = max((len(x) for x in licks_trial), default=0)
-
     licks_array = np.array([pad_list(x, max_len) for x in licks_trial])
 
     return licks_array
 
 
-def get_licks_mouse(data, mouse, response="", trial_length=20, verbose=1):
+def get_licks_mouse(data, mouse, response="", trial_length=21, verbose=1):
     # if verbose:
     #     print("get licks time")
 
@@ -404,19 +417,22 @@ def get_licks_mouse(data, mouse, response="", trial_length=20, verbose=1):
     else:
         t_response = np.hstack((t_correct, t_incorrect))
 
-    dpa_trials, go_trials, nogo_trials = split_trials(
+    dpa_trials, go_trials, nogo_trials, all_trials = split_trials(
         events_serie, t_go[0], t_nogo[0], t_response, trial_length
     )
 
     # if verbose:
     #     print("get licks")
 
+    licks_all = get_licks_array(t_licks, all_trials, trial_length)
     licks_dpa = get_licks_array(t_licks, dpa_trials, trial_length)
     licks_go = get_licks_array(t_licks, go_trials, trial_length)
     licks_nogo = get_licks_array(t_licks, nogo_trials, trial_length)
 
     if verbose:
         print(
+            "licks: all",
+            licks_all.shape,
             "licks: DPA",
             licks_dpa.shape,
             "Go",
@@ -425,7 +441,7 @@ def get_licks_mouse(data, mouse, response="", trial_length=20, verbose=1):
             licks_nogo.shape,
         )
 
-    return licks_dpa, licks_go, licks_nogo
+    return licks_dpa, licks_go, licks_nogo, licks_all
 
 
 def get_licks_mice(path, n_session=10, response="", trial_length=20, ini=0):

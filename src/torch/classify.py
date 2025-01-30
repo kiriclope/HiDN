@@ -34,8 +34,6 @@ def y_to_arr(y, **options):
         y = y.dist_odor.to_numpy()
     elif options['features'] == 'choice':
         y = y.choice.to_numpy()
-    elif options['features'] == 'odr_choice':
-        y = y.odr_choice.to_numpy()
     elif options['features'] == 'pair':
         y = y.pair.to_numpy()
 
@@ -51,46 +49,63 @@ def get_classification(model, RETURN='overlaps', **options):
     y_days['idx'] = y_days['index'].copy()
     # print(y_days.head())
 
-    X_B, y_B, cv_B, y_B_labels = None, None, None, None
+    X_B, y_B, y_B_labels = None, None, None
     y_labels = None
+    cv_B = True
 
-    if options['features'] == 'sample':
-        # options['trials'] = 'incorrect'
+    if (options['features'] == 'sample'):
+        # test on incorret trials
+        options['trials'] = 'incorrect'
+
         X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
         y_B_labels = y_B.copy()
         y_B = y_to_arr(y_B, **options)
-
         print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
-        cv_B = options['cv']
-        # options['trials'] = 'correct'
+
+        # train and test on correct trials in X_A, y_A
+        options['trials'] = 'correct'
+
+    if (options['features']=='choice') and not ('ACC' in options['mouse']):
+        # test on laser ON trials
+        options['laser'] = 1
+
+        X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+        y_B_labels = y_B.copy()
+        y_B = y_to_arr(y_B, **options)
+        print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+
+        # train and test on laser OFF trials in X_A, y_A
+        options['laser'] = 0
 
     if (options['features'] == 'distractor') or (options['features'] == 'odr_choice'):
+        # test on odr incorrect trials, DPA, and laser ON trials see src/common/get_data.py
         feat = options['features']
-        if 'DPA' in options['task']:
-            options['features'] = 'sample'
-            options['task'] = 'DPA'
+        options['trials'] = 'incorrect'
 
-            X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
-            y_B_labels = y_B.copy()
-            y_B = y_to_arr(y_B, **options)
+        X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+        y_B_labels = y_B.copy()
+        y_B = np.ones(X_B.shape[0]) # y_to_arr(y_B, **options) % 2
 
-            print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+        print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique(), y_B_labels.odr_perf.unique())
 
-            options['features'] = feat
-            options['task'] = 'Dual'
-            cv_B = options['cv']
+        # train on odr correct trials
+        options['laser'] = 0
+        options['features'] = feat
+        options['task'] = 'Dual'
+        options['trials'] = 'correct'
 
     X, y = get_X_y_S1_S2(X_days, y_days, **options)
     y_labels = y.copy()
 
     if (options['features'] == 'distractor') or (options['features'] == 'odr_choice'):
         y_labels = y_labels.dropna()
+        # y_labels = y_labels[y_labels.tasks!='DPA']
 
     print('y_labels', y_labels.shape, y_labels.tasks.unique())
-    y = y_to_arr(y, **options)
+    y = y_to_arr(y, **options) % 2
 
     if options['verbose']:
-        print('X', X.shape, 'y', y.shape, np.unique(y))
+        print('X', X.shape, 'nans', np.isnan(X).mean(), 'y', y.shape, np.unique(y))
 
     X_avg = avg_epochs(X, **options).astype('float32')
     y_avg = y.copy()
@@ -98,7 +113,7 @@ def get_classification(model, RETURN='overlaps', **options):
 
     if RETURN is None:
         return None
-    elif RETURN is 'DATA':
+    elif RETURN == 'DATA':
         return X_avg, y_labels
     elif RETURN == 'labels':
         pass
@@ -112,6 +127,7 @@ def get_classification(model, RETURN='overlaps', **options):
 
         try:
             scores = np.array(scores)
+            print('scores', scores.shape, np.nanmean(scores)) # 'probas', np.array(probas).shape, 'coefs', coefs.shape)
             probas = np.array(probas)
             coefs = np.array(coefs)
         except:
@@ -120,14 +136,10 @@ def get_classification(model, RETURN='overlaps', **options):
         if 'all' in RETURN:
             probas[y==1, 0, ..., 0] = probas[y==1, 0, ..., 1]
             coefs = coefs[..., 0, :]
-
-        print('scores', scores.shape, np.nanmean(scores)) # 'probas', np.array(probas).shape, 'coefs', coefs.shape)
-
-        if 'all' in RETURN:
             coefs = coefs.reshape(-1, coefs.shape[1] * coefs.shape[-1])
 
         if y_B_labels is not None:
-            scores_A = scores[:y_labels.shape[0], 0]
+            scores_A = np.array(scores[:y_labels.shape[0]][0])
             if 'all' in RETURN:
                 probas_A = probas[:y_labels.shape[0], 0]
         else:
@@ -157,7 +169,8 @@ def get_classification(model, RETURN='overlaps', **options):
             print('df_A', df.shape, 'scores', scores_A.shape, 'labels', y_labels.shape)
 
             if y_B_labels is not None:
-                scores_B = scores[:y_B_labels.shape[0], 1]
+                scores_B = np.array(scores[:y_B_labels.shape[0]][1])
+                print('scores_B', scores_B.shape)
 
                 if 'all' in RETURN:
                     probas_B = probas[:y_B_labels.shape[0], 1]
@@ -183,6 +196,7 @@ def get_classification(model, RETURN='overlaps', **options):
 
             print('df', df.shape)
             return df
+
 
         end = perf_counter()
         print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))

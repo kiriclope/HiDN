@@ -1,3 +1,5 @@
+import glob
+import os
 import pickle
 from importlib import reload
 
@@ -10,6 +12,31 @@ from src.common import constants as gv
 from src.preprocess.helpers import preprocess_df
 
 reload(gv)
+
+def find_mat_files(folder_path):
+    mat_files = np.array(glob.glob(os.path.join(folder_path, '*.mat')))
+    return mat_files[0]
+
+def get_gng_behavior(mouse, day):
+    path = '/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData'
+    cols = ['sample', 'test', 'response', 'pair', 'tasks', 'cue', 'odr_response', 'odr_pair', 'laser']
+    file_name = path + '/%s-DualTask-BehavioralData' % mouse + '/day_%d/' % day
+    file = find_mat_files(file_name)
+
+    data = loadmat(file)
+    df = pd.DataFrame(data['AllTrials']['AllTrials'][0][0], columns=cols)
+
+    df.loc[df.odr_response==1, 'odr_choice'] = 1
+    df.loc[df.odr_response==2, 'odr_choice'] = 0
+    df.loc[df.odr_response==3, 'odr_choice'] = 1
+    df.loc[df.odr_response==4, 'odr_choice'] = 0
+
+    df.loc[df.odr_response==1, 'odr_perf'] = 1
+    df.loc[df.odr_response==2, 'odr_perf'] = 0
+    df.loc[df.odr_response==3, 'odr_perf'] = 0
+    df.loc[df.odr_response==4, 'odr_perf'] = 1
+
+    return df[['odr_response', 'odr_choice', 'odr_perf']]
 
 def get_X_y_day_new(idx_day, data, data_type="raw"):
 
@@ -77,7 +104,11 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
         y_days.loc[data["ODRHitTrial"].flatten() - 1, 'odr_choice'] = 1
         y_days.loc[data["ODRCRTrial"].flatten() - 1, 'odr_choice'] = 0
 
+        y_days.loc[data["ODRHitTrial"].flatten() - 1, 'odr_response'] = 1
+        y_days.loc[data["ODRCRTrial"].flatten() - 1, 'odr_response'] = 4
+
         try:
+            y_days.loc[data["ODRFATrial"].flatten() - 1, 'odr_response'] = 3
             y_days.loc[data["ODRFATrial"].flatten() - 1, 'odr_perf'] = 0
             y_days.loc[data["ODRFATrial"].flatten() - 1, 'odr_choice'] = 1
         except:
@@ -91,6 +122,7 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
 
         try:
             y_days.loc[data["ODRMissTrial"].flatten() - 1, 'odr_perf'] = 0
+            y_days.loc[data["ODRMissTrial"].flatten() - 1, 'odr_response'] = 2
             y_days.loc[data["ODRMissTrial"].flatten() - 1, 'odr_choice'] = 0
         except:
             pass
@@ -344,6 +376,10 @@ def get_X_y_days(**kwargs):
                     y_df = y
                 else:
                     y_df = create_df(y, day=day)
+                    y_be = get_gng_behavior(mouse, day)
+                    y_df['odr_response'] = y_be['odr_response']
+                    y_df['odr_choice'] = y_be['odr_choice']
+                    y_df['odr_perf'] = y_be['odr_perf']
 
                 X_days.append(X)
                 y_days.append(y_df)
@@ -429,6 +465,14 @@ def get_X_y_S1_S2(X, y, **kwargs):
     elif kwargs["trials"] == "incorrect":
         idx_trials = y.response.str.contains("incorrect")
 
+    idx_laser = True
+    if kwargs["laser"] == 1:
+        idx_laser = y.laser == 1
+    elif kwargs["laser"] == 0:
+        idx_laser = y.laser == 0
+    elif kwargs["laser"] == -1:
+        idx_laser = True
+
     idx_tasks = True
     if kwargs["task"] == "DPA":
         idx_tasks = y.tasks == "DPA"
@@ -442,6 +486,14 @@ def get_X_y_S1_S2(X, y, **kwargs):
     if kwargs["features"] == "sample":
         idx_S1 = y.sample_odor == 0
         idx_S2 = y.sample_odor == 1
+
+        # if kwargs['trials'] == 'incorrect':
+        #     idx = y.response.str.contains("incorrect")
+        #     idx_S1 = (y.sample_odor == 0) & idx & (y.laser == 0)
+        #     idx_S2 = (y.sample_odor == 1) & idx & (y.laser == 0)
+        #     # idx_S3 = y.laser == 1
+        #     idx_trials = True
+        #     # idx_laser = True
 
         if kwargs["multilabel"]:
             idx_S3 = y.sample_odor == 2
@@ -486,6 +538,15 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_S1 = y.odr_choice == 1
         idx_S2 = y.odr_choice == 0
 
+        idx_trials = True
+        if kwargs["trials"] == "correct":
+            idx_trials = y.odr_perf == 1
+        elif kwargs["trials"] == "incorrect":
+            idx_tasks = True
+            idx_S1 = y.odr_perf == 0
+            idx_S2 = y.tasks == "DPA"
+
+
     elif kwargs["features"] == "reward":
         idx_S1 = ~y.response.str.contains("incorrect")
         idx_S2 = y.response.str.contains("incorrect")
@@ -498,10 +559,13 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_S1 = y.dist_odor == 0
         idx_S2 = y.dist_odor == 1
 
-        # try:
-        #     idx_trials = y.odr_perf == 1
-        # except:
-        #     pass
+        idx_trials = True
+        if kwargs["trials"] == "correct":
+            idx_trials = y.odr_perf == 1
+        elif kwargs["trials"] == "incorrect":
+            idx_tasks = True
+            idx_S1 = y.odr_perf == 0
+            idx_S2 = y.tasks == "DPA"
 
         if kwargs["multilabel"]:
             idx_S3 = y.dist_odor == 2
@@ -528,14 +592,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_days = y.day > (kwargs["n_first"] + kwargs["n_middle"] + kwargs["n_discard"])
     else:
         idx_days = y.day == kwargs["day"]
-
-    idx_laser = True
-    if kwargs["laser"] == 1:
-        idx_laser = y.laser == 1
-    elif kwargs["laser"] == 0:
-        idx_laser = y.laser == 0
-    elif kwargs["laser"] == -1:
-        idx_laser = True
 
     X_S1 = X[idx_S1 & idx_trials & idx_days & idx_laser & idx_tasks]
     X_S2 = X[idx_S2 & idx_trials & idx_days & idx_laser & idx_tasks]

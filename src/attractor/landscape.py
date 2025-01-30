@@ -1,5 +1,5 @@
 import numpy as np
-from src.decode.bump import circcvl
+# from src.decode.bump import circcvl
 
 class EnergyLandscape():
 

@@ -63,7 +63,7 @@ def add_vlines(ax=None, mouse=""):
     t_LD = [7.5 , 9]
     t_TEST = [9 , 10]
     t_RWD2 = [11 , 12]
-    
+
     if "P" in mouse:
         t_BL = [0 , 2]
         t_STIM = [2 , 3]
@@ -74,17 +74,17 @@ def add_vlines(ax=None, mouse=""):
         t_RWD = [7 , 8]
         t_LD = [8 , 9]
         t_TEST = [9 , 10]
-        t_RWD2 = [10 , 11]
+        t_RWD2 = [10.5 , 11]
 
-    time_periods = [t_STIM, t_DIST, t_TEST, t_CUE]
-    colors = ["b", "b", "b", "g"]
-    
+    time_periods = [t_STIM, t_DIST, t_TEST, t_CUE, t_RWD2, t_RWD]
+    colors = ["b", "b", "b", "g", "y", "y"]
+
     if ax is None:
         for period, color in zip(time_periods, colors):
-            plt.axvspan(period[0], period[1], alpha=0.1, color=color)
+            plt.axvspan(period[0], period[1], alpha=0.05, color=color)
     else:
         for period, color in zip(time_periods, colors):
-            ax.axvspan(period[0], period[1], alpha=0.1, color=color)
+            ax.axvspan(period[0], period[1], alpha=0.05, color=color)
 
 
 def save_fig(fig, figname, path=gv.figdir, format="svg", dpi="figure"):
@@ -93,7 +93,7 @@ def save_fig(fig, figname, path=gv.figdir, format="svg", dpi="figure"):
 
     # pkl.dump(fig, open(path + "/" + figname + ".pkl", "wb"))
     plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
-    
+
     # format = "png"
     # plt.savefig(path + "/" + figname + "." + format, dpi=dpi, format=format)
 

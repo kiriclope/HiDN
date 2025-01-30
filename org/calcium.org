@@ -14,10 +14,13 @@
 #+end_src
 
 #+RESULTS:
+:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
 
 * Imports
 
@@ -80,7 +83,7 @@
 #+RESULTS:
 
 * Data
-** Last
+
 
 #+begin_src ipython
   from scipy.io import loadmat
@@ -91,15 +94,19 @@
   n_days = '05'
 
   file = path + mouse + "/SamedROI_%sDays/Day01/DFF_Data01.mat" % n_days
-  print(file)
-  file = "/home/leon/dual_task/dual_data/data/JawsM15b/SamedROI_06Days/AllDays/DFF_AllDays01.mat"
+  # file = "/home/leon/dual_task/dual_data/data/JawsM15b/SamedROI_06Days/AllDays/DFF_AllDays01.mat"
   file = '/home/leon/dual_task/dual_data/data/JawsM15/SamedROI_06Days/JawsM15_day_1.mat'
+  # file = '/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/DualTask SeriesPer-JawsM15-DualTask-Behavioral Data.mat'
+
+  # file = '/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/20200605_RandomTrials_DualTask_M15/Java-20200605-RandomTrials-DualTask-M15-DualTask.mat'
+
+  print(file)
   data = loadmat(file)
   # data = mat73.loadmat(file)
 #+end_src
 
 #+RESULTS:
-: /home/leon/dual_task/dual_data/data/JawsM12/SamedROI_05Days/Day01/DFF_Data01.mat
+: /home/leon/dual_task/dual_data/data/JawsM15/SamedROI_06Days/JawsM15_day_1.mat
 
 #+begin_src ipython
 print(data.keys())
@@ -109,99 +116,539 @@ print(data.keys())
 : dict_keys(['__header__', '__version__', '__globals__', 'FR_Trial', 'basFrame', 'blockPerDay', 'delayFrame', 'delayPeriodFrame', 'frameRate', 'laserTag', 'rewardFrame', 'sampleFrame', 'testFrame', 'trialPerBlock', 'dff_Mice', 'Cdf_Mice', 'Events', 'trialPerDay'])
 
 #+begin_src ipython
-print(data['dFF_Trial'])
+print(data['Events'].shape)
+#+end_src
+
+#+RESULTS:
+: (192, 9)
+
+#+begin_src ipython
+print(data['Events'][: , 8])
+#+end_src
+
+#+RESULTS:
+: [0 1 0 0 1 0 0 1 0 1 1 1 1 1 0 1 0 0 1 0 1 0 1 0 1 0 0 1 1 0 1 0 0 0 0 1 0
+:  1 1 0 0 0 1 1 1 0 1 1 1 1 1 1 0 0 1 0 1 0 0 1 1 1 0 0 1 0 1 0 1 0 0 0 1 1
+:  0 1 1 0 0 0 1 1 0 1 1 0 0 0 0 1 0 0 1 1 1 0 1 1 0 0 1 0 0 1 1 0 0 1 0 1 1
+:  0 1 0 1 0 1 0 1 0 0 1 1 1 1 0 1 0 0 0 1 0 0 0 1 1 1 0 0 1 1 0 1 0 0 1 0 0
+:  0 1 0 1 1 1 1 0 1 1 0 1 0 1 1 1 0 0 0 0 1 1 0 0 1 0 0 0 1 0 1 1 0 0 1 1 0
+:  0 1 0 1 0 1 1]
+
+#+begin_src ipython
+import glob
+import os
+
+def find_mat_files(folder_path):
+    mat_files = np.array(glob.glob(os.path.join(folder_path, '*.mat')))
+    return mat_files[0] if mat_files else None
+
+path = '/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData'
+cols = ['sample', 'test', 'response', 'pair', 'tasks', 'cue', 'odr_response', 'odr_pair', 'laser']
+mice = ['ChRM04','ChRM23', 'ACCM03', 'ACCM04', 'JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# mice = ['JawsM15']
+
+df_all = []
+for mouse in mice:
+    df = []
+    for day in np.arange(1, 7):
+        try:
+        # if 1:
+            file_name = path + '/%s-DualTask-BehavioralData' % mouse + '/day_%d/' % day
+            print(file_name)
+
+            file = find_mat_files(file_name)
+            print(file)
+
+            data = loadmat(file)
+            df_day = pd.DataFrame(data['AllTrials'][0][0][-1], columns=cols)
+            df_day['day'] = day
+            df.append(df_day)
+        except:
+            pass
+        print(len(df))
+    df_days = pd.concat(df)
+    df_days['mouse'] = mouse
+    df_all.append(df_days)
+
+df_all = pd.concat(df_all)
 #+end_src
 
 #+RESULTS:
 #+begin_example
-[[[ 7.33979190e-02  1.04950223e-01  2.87321378e-02 ...  2.29910524e-02
-    1.17726543e-03  1.52803578e-02]
-  [ 5.42189040e-03 -3.63813786e-02 -9.68795110e-03 ... -1.06944743e-02
-    2.40723691e-03  2.94034666e-02]
-  [-3.99993184e-02  2.80708694e-02 -4.36212905e-02 ... -8.99121163e-02
-   -3.87809942e-02 -7.76235099e-02]
-  ...
-  [ 1.06191689e-01  7.78156057e-02  7.63913541e-03 ...  5.53502612e-01
-    5.92886148e-01  5.48916052e-01]
-  [ 1.81440721e-01  1.22647439e-01  1.61786824e-02 ... -2.42330603e-01
-   -2.62517241e-01 -3.00214710e-01]
-  [ 7.73000682e-02  1.48399541e-02  4.00414485e-02 ...  1.16746719e-01
-    3.75035113e-02  1.78887748e-01]]
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_1/Java-20200521-M4-DualTask-RandomTrials-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_2/Java-20200522-M4-DualTask-RandomTrials-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_3/Java-20200523-M4-DualTask-RandomTrials-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_4/Java-20200524-M4-DualTask-RandomTrials-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_5/Java-20200525-M4-DualTask-RandomTrials-DualTask.mat
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_6/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM04-DualTask-BehavioralData/day_6/Java-20200526-M4-DualTask-RandomTrials-DualTask.mat
+6
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_1/Java-20200615-RandomTrials-DualTask-M23-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_2/Java-20200616-RandomTrials-DualTask-M23-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_3/Java-20200617-RandomTrials-DualTask-M23-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_4/Java-20200618-RandomTrials-DualTask-M23-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_5/Java-20200619-RandomTrials-DualTask-M23-DualTask.mat
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ChRM23-DualTask-BehavioralData/day_6/
+None
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_1/Java-20200912-ACCImaging-OdorPQBYRMK-M3-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_2/Java-20200913-ACCImaging-OdorPQBYRMK-M3-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_3/Java-20200914-ACCImaging-OdorPQBYRMK-M3-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_4/Java-20200915-ACCImaging-OdorPQBYRMK-M3-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_5/Java-20200916-ACCImaging-OdorPQBYRMK-M3-DualTask.mat
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM03-DualTask-BehavioralData/day_6/
+None
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_1/Java-20200821-ACCImaging-M4-OdorPQBYRMK-DualTask-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_2/Java-20200822-ACCImaging-M4-OdorPQBYRMK-DualTask-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_3/Java-20200823-ACCImaging-M4-OdorPQBYRMK-DualTask-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_4/Java-20200824-ACCImaging-M4-OdorPQBYRMK-DualTask-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_5/Java-20200825-ACCImaging-M4-OdorPQBYRMK-DualTask-DualTask.mat
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/ACCM04-DualTask-BehavioralData/day_6/
+None
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_1/Java-20201222-ACCPrl-Imaging-DualTask-M1-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_2/Java-20201223-ACCPrl-Imaging-DualTask-M1-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_3/Java-20201225-ACCPrl-Imaging-DualTask-M1-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_4/Java-20201227-ACCPrl-Imaging-DualTask-M1-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_5/
+None
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM01-DualTask-BehavioralData/day_6/
+None
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_1/Java-20201222-ACCPrl-Imaging-DualTask-M6-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_2/Java-20201223-ACCPrl-Imaging-DualTask-M6-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_3/Java-20201224-ACCPrl-Imaging-DualTask-M6-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_4/Java-20201225-ACCPrl-Imaging-DualTask-M6-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_5/Java-20201226-ACCPrl-Imaging-DualTask-M6-DualTask.mat
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_6/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM06-DualTask-BehavioralData/day_6/Java-20201227-ACCPrl-Imaging-DualTask-M6-DualTask.mat
+6
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_1/
+None
+0
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_2/Java-20210131ACCPrlImagingDualTask-M12-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_3/Java-20210201ACCPrlImagingDualTask-M12-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_4/Java-20210202ACCPrlImagingDualTask-M12-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_5/Java-20210203ACCPrlImagingDualTask-M12-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM12-DualTask-BehavioralData/day_6/
+None
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_1/Java-RandomTrials-DualTask-M15-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_2/Java-RandomTrials-DualTask-M15-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_3/Java-RandomTrials-DualTask-M15-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_4/Java-RandomTrials-DualTask-M15-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_5/Java-RandomTrials-DualTask-M15-DualTask.mat
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_6/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM15-DualTask-BehavioralData/day_6/Java-RandomTrials-DualTask-M15-DualTask.mat
+6
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_1/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_1/Java-RandomTrials-DualTask.mat
+1
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_2/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_2/Java-RandomTrials-DualTask.mat
+2
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_3/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_3/Java-RandomTrials-DualTask.mat
+3
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_4/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_4/Java-RandomTrials-DualTask.mat
+4
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_5/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_5/Java-RandomTrials-DualTask.mat
+5
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_6/
+/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData/JawsM18-DualTask-BehavioralData/day_6/Java-RandomTrials-DualTask.mat
+6
+/home/leon/tmp/ipykernel_1897827/3007157930.py:6: DeprecationWarning: The truth value of an empty array is ambiguous. Returning False, but in future this will result in an error. Use `array.size > 0` to check that an array is not empty.
+  return mat_files[0] if mat_files else None
+/home/leon/tmp/ipykernel_1897827/3007157930.py:6: DeprecationWarning: The truth value of an empty array is ambiguous. Returning False, but in future this will result in an error. Use `array.size > 0` to check that an array is not empty.
+  return mat_files[0] if mat_files else None
+/home/leon/tmp/ipykernel_1897827/3007157930.py:6: DeprecationWarning: The truth value of an empty array is ambiguous. Returning False, but in future this will result in an error. Use `array.size > 0` to check that an array is not empty.
+  return mat_files[0] if mat_files else None
+/home/leon/tmp/ipykernel_1897827/3007157930.py:6: DeprecationWarning: The truth value of an empty array is ambiguous. Returning False, but in future this will result in an error. Use `array.size > 0` to check that an array is not empty.
+  return mat_files[0] if mat_files else None
+/home/leon/tmp/ipykernel_1897827/3007157930.py:6: DeprecationWarning: The truth value of an empty array is ambiguous. Returning False, but in future this will result in an error. Use `array.size > 0` to check that an array is not empty.
+  return mat_files[0] if mat_files else None
+/home/leon/tmp/ipykernel_1897827/3007157930.py:6: DeprecationWarning: The truth value of an empty array is ambiguous. Returning False, but in future this will result in an error. Use `array.size > 0` to check that an array is not empty.
+  return mat_files[0] if mat_files else None
+#+end_example
 
- [[ 6.48348996e-03  2.63022064e-04  2.37095396e-02 ...  3.08061732e-02
-    6.77300354e-02  1.36765675e-02]
-  [-8.41258689e-03  1.36061877e-03 -7.95604174e-03 ...  6.71422547e-01
-    5.63606485e-01  5.47438087e-01]
-  [ 1.12002693e-01  1.94991480e-01  1.48947568e-01 ... -1.62937793e-01
-   -1.68679583e-01 -1.77385667e-01]
-  ...
-  [ 5.14296933e-02 -3.31663989e-02  1.16444388e-01 ... -1.35675177e-01
-   -1.34527739e-01 -1.32933680e-01]
-  [ 2.45857491e-02  2.67410032e-02  3.99981104e-02 ...  6.45162392e-01
-    4.39053462e-01  4.41487138e-01]
-  [ 1.02068797e-01  8.93343801e-02  1.80706876e-02 ... -2.47353325e-01
-   -2.78507045e-01 -3.68645278e-01]]
 
- [[ 4.16618192e-03 -4.38529747e-02 -3.96107102e-02 ...  1.98953302e-01
-    1.37891458e-01  1.39875999e-01]
-  [ 2.99723714e-02 -3.61009743e-02  3.40482798e-02 ... -7.03287875e-02
-   -2.71090835e-02 -1.19910942e-01]
-  [-3.35783282e-02  1.99051418e-02  1.27001681e-02 ...  5.49787984e-02
-    6.76770717e-02  1.14695037e-01]
-  ...
-  [-1.26597837e-01 -4.67058190e-02  4.39986219e-02 ...  8.73309581e-02
-   -6.94513188e-03  1.35643436e-01]
-  [ 7.35238618e-02  1.25917429e-01  2.08113795e-01 ... -7.90432554e-02
-   -1.20867066e-01  1.19657845e-02]
-  [ 1.24568966e-01  2.63204963e-02 -8.96205377e-02 ... -8.97591954e-02
-    6.29323734e-03  3.70367377e-02]]
+#+begin_src ipython
+df_all.loc[df_all.response==1, 'choice'] = 1 # hit
+df_all.loc[df_all.response==2, 'choice'] = 0 # miss
+df_all.loc[df_all.response==3, 'choice'] = 1 # fa
+df_all.loc[df_all.response==4, 'choice'] = 0 # cr
 
- ...
+df_all.loc[df_all.response==1, 'perf'] = 1
+df_all.loc[df_all.response==2, 'perf'] = 0
+df_all.loc[df_all.response==3, 'perf'] = 0
+df_all.loc[df_all.response==4, 'perf'] = 1
 
- [[-8.80730302e-02 -7.57965308e-03 -1.00709361e-04 ...  2.42712666e-01
-    2.50106174e-01  2.62037943e-01]
-  [ 1.00927661e-01  1.95154002e-03 -3.86921375e-03 ... -1.44235905e-01
-   -1.96714165e-01 -1.33942116e-01]
-  [ 3.20843148e-03 -2.22259603e-03 -1.63121650e-02 ... -3.23755380e-02
-    3.79649897e-02 -6.78432564e-02]
-  ...
-  [-1.17482348e-01 -8.84982300e-03  3.63573291e-02 ... -1.67975978e-01
-   -1.99896969e-01 -2.63930722e-01]
-  [-2.33420259e-01 -2.23372743e-01 -3.33815764e-01 ...  3.09976220e-01
-    5.66622391e-01  5.46737499e-01]
-  [ 3.98106474e-01  2.98031313e-01  3.60903287e-01 ...  1.95262816e-01
-   -8.27347579e-02  5.87575873e-02]]
+df_all.loc[df_all.tasks==0, 'tasks'] = 'DPA'
+df_all.loc[df_all.tasks==1, 'tasks'] = 'Go'
+df_all.loc[df_all.tasks==2, 'tasks'] = 'NoGo'
 
- [[-1.04903127e-01  7.00006748e-02 -6.19501186e-03 ...  1.88934936e-01
-    5.40302077e-02 -1.56110661e-02]
-  [-1.52624758e-02  1.05222914e-01  1.73112672e-01 ... -3.92418803e-02
-   -2.23981574e-02  3.36732061e-02]
-  [ 1.06095904e-01  7.08407202e-02  3.38069717e-02 ... -5.73344928e-02
-    4.40154619e-02 -1.23738858e-01]
-  ...
-  [ 7.43205924e-02 -8.50288763e-02 -1.86753013e-02 ...  9.07308546e-04
-   -1.17070545e-01 -2.21143200e-01]
-  [-1.81895000e-01 -8.71492363e-02 -9.43568557e-02 ...  3.24406921e-02
-   -1.76151139e-01 -7.99828992e-03]
-  [ 3.44314609e-02 -4.70539010e-02 -6.61949355e-02 ...  5.71443689e-02
-    1.16046351e-01  1.75147721e-02]]
+print(df_all.head())
+#+end_src
 
- [[-2.25478569e-02  1.18912704e-01  2.03172023e-02 ... -9.19077576e-02
-   -8.55672421e-02 -1.86345003e-01]
-  [-5.22398408e-02  1.27575578e-01  3.05253083e-03 ...  6.59051200e-02
-    1.80700916e-02 -1.07624887e-01]
-  [-1.26098663e-01 -1.09403062e-02 -1.62401741e-01 ... -1.19072925e-01
-   -6.68290834e-02 -5.70779299e-02]
-  ...
-  [ 8.27748034e-03 -3.46336665e-02 -5.91128701e-02 ... -2.68461289e-02
-    4.38460075e-02 -6.42797612e-03]
-  [-4.87648200e-02  8.09083608e-02  7.42117255e-02 ...  8.13953218e-02
-   -8.29157746e-02 -7.97501468e-02]
-  [-4.59347368e-02  6.42094180e-02  5.29339498e-03 ...  3.97307889e-02
-    4.07876791e-02  6.37598704e-02]]]
+#+RESULTS:
+#+begin_example
+   sample  test  response  pair tasks  cue  odr_response  odr_pair  laser  \
+0       2     2         3     4  NoGo    2             3         2      1
+1       1     2         1     1  NoGo    2             3         2      0
+2       2     2         3     4    Go    2             1         1      0
+3       1     2         1     1   DPA    0             0         0      0
+4       2     1         1     2  NoGo    2             3         2      1
+
+   day   mouse  choice  perf
+0    1  ChRM04     1.0   0.0
+1    1  ChRM04     1.0   1.0
+2    1  ChRM04     1.0   0.0
+3    1  ChRM04     1.0   1.0
+4    1  ChRM04     1.0   1.0
 #+end_example
 
 #+begin_src ipython
+df_all.loc[df_all.odr_response==1, 'odr_choice'] = 1
+df_all.loc[df_all.odr_response==2, 'odr_choice'] = 0
+df_all.loc[df_all.odr_response==3, 'odr_choice'] = 1
+df_all.loc[df_all.odr_response==4, 'odr_choice'] = 0
+
+df_all.loc[df_all.odr_response==1, 'odr_perf'] = 1
+df_all.loc[df_all.odr_response==2, 'odr_perf'] = 0
+df_all.loc[df_all.odr_response==3, 'odr_perf'] = 0
+df_all.loc[df_all.odr_response==4, 'odr_perf'] = 1
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+# Let's keep a subpart of the df
+df2 = df_all.copy()
+df2 = df2[df2.laser==0]
+print(df2.mouse.unique())
+
+# formula = "perf ~ odr_choice * day"
+formula = "perf ~ odr_perf * odr_choice"
+
+# We create a model like this
+model = smf.glm(formula=formula, data=df2, family=sm.families.Binomial())
+
+results = model.fit()
+print(results.summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+['ChRM04' 'ChRM23' 'ACCM03' 'ACCM04' 'JawsM01' 'JawsM06' 'JawsM12'
+ 'JawsM15' 'JawsM18']
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:                   perf   No. Observations:                 3648
+Model:                            GLM   Df Residuals:                     3644
+Model Family:                Binomial   Df Model:                            3
+Link Function:                  Logit   Scale:                          1.0000
+Method:                          IRLS   Log-Likelihood:                -2044.9
+Date:                Thu, 16 Jan 2025   Deviance:                       4089.8
+Time:                        12:12:03   Pearson chi2:                 3.65e+03
+No. Iterations:                     4   Pseudo R-squ. (CS):           0.007718
+Covariance Type:            nonrobust
+=======================================================================================
+                          coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------------
+Intercept               0.7012      0.110      6.359      0.000       0.485       0.917
+odr_perf                0.5826      0.127      4.594      0.000       0.334       0.831
+odr_choice              0.0773      0.163      0.474      0.636      -0.242       0.397
+odr_perf:odr_choice    -0.2835      0.185     -1.534      0.125      -0.646       0.079
+=======================================================================================
+#+end_example
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def generate_colors(N, cmap_name='viridis'):
+    cmap = plt.get_cmap(cmap_name)
+    return cmap(np.linspace(0, 1, N))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_betas(label, feature, intercept, results, random_effects, title):
+
+    colors = generate_colors(random_effects.shape[0], 'plasma')
+    space = np.random.normal(0, .05, random_effects.shape[0])
+
+    if intercept:
+        keys = ['(Intercept)', feature]
+    else:
+        keys = [feature]
+
+    for i, key in enumerate(keys):
+        # print(key)
+        if key == '(Intercept)':
+            try:
+                res = results.Estimate['(Intercept)'] + random_effects['X.Intercept.']
+            except:
+                try:
+                    res = random_effects['X.Intercept.']
+                except:
+                    pass
+        else:
+            try:
+                res = results.Estimate[key] + random_effects[key]
+            except:
+                res = results.Estimate[key]
+
+        mean_value = res.mean()
+        std_dev = res.std()
+
+        try:
+            if results['P-val'][key]<0.001:
+                plt.text(i,   0, '***', ha='center', va='bottom')
+            elif results['P-val'][key]<0.01:
+                plt.text(i,   0, '**', ha='center', va='bottom')
+            elif results['P-val'][key]<0.05:
+                plt.text(i,   0, '*', ha='center', va='bottom')
+        except:
+            pass
+
+        print(res)
+        # Plot individual points
+        plt.scatter(i * np.ones(res.shape[0]) + space, res, color=colors)
+        # Plot mean and stddev as error bars
+        plt.plot(i, mean_value, '_k', ms=20)
+        plt.errorbar(i * np.ones(res.shape[0]),
+                     [mean_value]*len(res),
+                     yerr=[std_dev]*len(res), fmt='-', color='k', capsize=15)
+
+    plt.axhline(y=0, color='black', ls='--')
+
+    plt.xticks(np.arange(len(keys)), keys)
+
+    plt.ylabel('$\\beta_{%s}$' % label)
+    plt.title(title)
+    plt.savefig('beta_response.svg')
+    plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def run_model(data, formula, family='binomial'):
+
+    print(formula)
+    model = Lmer(formula=formula, data=data, family=family)
+    results = model.fit()
+    print(results)
+    random_effects = model.ranef
+
+    return results, random_effects
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+    formula = "odr_perf ~ laser + (1 | mouse)"
+    # mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+    df2 = df_all.copy()
+    # df2 = df2[df2.day>3]
+    df2 = df2[df2.mouse.isin(mice)]
+    results, random_effects = run_model(data=df2.dropna().reset_index(), formula=formula)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+odr_perf ~ laser + (1 | mouse)
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: odr_perf~laser+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 3328	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -1229.173 	 AIC: 2464.346
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.607  0.779
+
+No random effect correlations specified
+
+Fixed effects:
+
+             Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  OR_97.5_ci  \
+(Intercept)     2.079   1.376    2.781  0.358  7.995      3.961      16.140
+laser           0.203  -0.002    0.408  0.105  1.225      0.998       1.504
+
+              Prob  Prob_2.5_ci  Prob_97.5_ci  Z-stat  P-val  Sig
+(Intercept)  0.889        0.798         0.942   5.800  0.000  ***
+laser        0.551        0.499         0.601   1.938  0.053    .
+#+end_example
+
+#+begin_src ipython
+print(random_effects)
+#+end_src
+
+#+RESULTS:
+:          (Intercept)
+: JawsM01     1.197387
+: JawsM06    -0.631458
+: JawsM12     0.204778
+: JawsM15    -0.982050
+: JawsM18     0.167201
+
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
+
+df2 = df_all.copy().reset_index()
+df2 = df2[df2.mouse.isin(mice)]
+
+sns.lineplot(data=df2, x='day', y='perf', hue='laser', marker='o', legend=1, palette=['k','y'], ax=ax[0])
+ax[0].axhline(0.5, ls='--', color='k')
+ax[0].set_xlabel('Day')
+ax[0].set_ylabel('DPA Performance')
+ax[0].legend(fontsize=10)
+
+sns.lineplot(data=df2, x='day', y='odr_perf', hue='laser', marker='o', legend=1, palette=['k', 'y',], ax=ax[1])
+ax[1].axhline(0.5, ls='--', color='k')
+ax[1].set_xlabel('Day')
+ax[1].set_ylabel('Go/NoGo Performance')
+ax[1].legend(fontsize=10)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/c144d0c4343be86501201f9ea4ee9df5ca38cf9f.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
+
+df2 = df_all.copy().reset_index()
+df2 = df2[df2.mouse.isin(mice)]
+df2 = df2[df2.laser==0]
+
+sns.lineplot(data=df2, x='day', y='perf', hue='tasks', marker='o', legend=1, palette=['g','b','r'], ax=ax[0])
+ax[0].axhline(0.5, ls='--', color='k')
+ax[0].set_xlabel('Day')
+ax[0].set_ylabel('DPA Performance')
+ax[0].legend(fontsize=10)
+ax[0].set_xticks(np.arange(1, 7, 1))
+
+sns.lineplot(data=df2, x='day', y='odr_perf', hue='tasks', marker='o', legend=1, palette=['g', 'b','r'], ax=ax[1])
+ax[1].axhline(0.5, ls='--', color='k')
+ax[1].set_xlabel('Day')
+ax[1].set_ylabel('Go/NoGo Performance')
+ax[1].legend(fontsize=10)
+ax[1].set_xticks(np.arange(1, 7, 1))
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/f00bb42de5f9df65e268313a9f010f347d8eb20d.png]]
+
+* alt
+
+#+begin_src ipython
+mouse = "JawsM15"
+n_days = '06'
+
 kwargs = {
       'trials': '', 'reload': 0, 'data_type': 'dF', 'preprocess': True,
       'scaler_BL': None, 'avg_noise':True, 'unit_var_BL':False,
@@ -218,36 +665,50 @@ options = set_options(**kwargs)
 #+begin_src ipython
 from src.common.get_data import get_fluo_data
 # options['n_days'] = n_days
+options['NEW_DATA'] = 0
+options['reload']=1
 X, y = get_fluo_data(2, **options)
 print(X.shape, y.shape)
+# print(y.keys())
 #+end_src
 
 #+RESULTS:
-: /home/leon/dual_task/dual_data/data//JawsM01/SamedROI_04Days/Day02/DFF_Data01.mat
-: mouse JawsM01 n_days 4 day 2 type dF all data: X (192, 184, 115) y (192, 8)
-: (192, 184, 115) (192, 8)
+: mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+: (192, 693, 84) (9, 192)
 
 #+begin_src ipython
-print(y.keys())
+y
 #+end_src
 
 #+RESULTS:
-: Index(['sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response', 'laser',
-:        'day', 'choice'],
-:       dtype='object')
+: array([[17, 17, 18, ..., 17, 18, 17],
+:        [11, 11, 11, ..., 12, 11, 12],
+:        [ 2,  2,  4, ...,  3,  4,  4],
+:        ...,
+:        [ 0,  0,  0, ...,  0,  0,  0],
+:        [ 0,  0,  0, ...,  0,  0,  0],
+:        [ 0,  1,  1, ...,  0,  0,  1]], dtype=uint8)
 
 #+begin_src ipython
   X_days, y_days = get_X_y_days(**options)
 #+end_src
 
 #+RESULTS:
-: /home/leon/dual_task/dual_data/data//JawsM01/SamedROI_04Days/Day01/DFF_Data01.mat
-: mouse JawsM01 n_days 4 day 1 type dF all data: X (192, 184, 115) y (192, 8)
-: /home/leon/dual_task/dual_data/data//JawsM01/SamedROI_04Days/Day02/DFF_Data01.mat
-: mouse JawsM01 n_days 4 day 2 type dF all data: X (192, 184, 115) y (192, 8)
-: /home/leon/dual_task/dual_data/data//JawsM01/SamedROI_04Days/Day03/DFF_Data01.mat
-: mouse JawsM01 n_days 4 day 3 type dF all data: X (192, 184, 115) y (192, 8)
-: /home/leon/dual_task/dual_data/data//JawsM01/SamedROI_04Days/Day04/DFF_Data01.mat
+: mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+: mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+: mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+: mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+: mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+: mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+
+#+begin_src ipython
+print(y_days.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
+:        'dist_odor', 'choice', 'performance', 'pair', 'odr_response'],
+:       dtype='object')
 
 #+begin_src ipython
   day = 3
@@ -260,8 +721,8 @@ print(y.keys())
 #+end_src
 
 #+RESULTS:
-: X_S1 (16, 184, 115) X_S2 (16, 184, 115)
-: data (32, 184, 115)
+: X_S1 (16, 444, 84) X_S2 (16, 444, 84)
+: data (32, 444, 84)
 
 ** New setup
 
