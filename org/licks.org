@@ -1,0 +1,301 @@
+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session licks :kernel dual_data
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+: <Figure size 700x432.624 with 0 Axes>
+:END:
+
+* Imports
+
+#+begin_src ipython
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from scipy.io import loadmat
+  import pandas as pd
+
+  from src.licks.licks import *
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import glob
+import os
+import warnings
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
+
+
+  def pkl_load(name, path="."):
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def find_mat_files(folder_path):
+    mat_files = np.array(glob.glob(os.path.join(folder_path, '*.mat')))
+    return mat_files[0]
+#+end_src
+
+#+RESULTS:
+
+* Behavioral Data
+
+#+begin_src ipython
+import glob
+import os
+import warnings
+import numpy as np
+
+# Suppress the "All-NaN slice encountered" RuntimeWarning
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="All-NaN slice encountered")
+
+
+path = '/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData'
+cols = ['sample', 'test', 'response', 'pair', 'tasks', 'cue', 'GNG_response', 'GNG_pair', 'laser']
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# mice = ['JawsM15']
+
+df_all = []
+for mouse in mice:
+    df = []
+    print(mouse)
+    for day in np.arange(1, 7):
+
+        try:
+        # if 1:
+            file_name = path + '/%s-DualTask-BehavioralData' % mouse + '/day_%d/' % day
+            print(file_name)
+            file = find_mat_files(file_name)
+
+            try:
+                data = loadmat(file)
+            except:
+                pass
+
+            licks_dpa, licks_go, licks_nogo, licks_all, labels = get_licks_mouse(data, path, response='', trial_length=14, verbose=0)
+
+            # licks_counts, bin_edges, _ = plt.hist(licks_all[i], bins=84, density=False);
+
+            licks_list = []
+            for i in range(licks_all.shape[0]):
+                try:
+                    licks_counts, bin_edges, _ = plt.hist(licks_all[i], bins=84, density=False);
+                    plt.clf()
+                    licks_list.append(licks_counts)
+                except:
+                    licks_list.append(np.array(licks_counts) * np.nan)
+                    pass
+
+            df_day = pd.DataFrame({'lick_binned': licks_list, 'lick_times': licks_all.tolist(), 'task': labels})
+            df_day['day'] = day
+
+            df.append(df_day)
+        except:
+            print('file missing', mouse, day)
+            pass
+
+    df_days = pd.concat(df)
+    df_days['mouse'] = mouse
+    df_all.append(df_days)
+
+df_all = pd.concat(df_all)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(df_all.mouse.unique())
+#+end_src
+
+#+RESULTS:
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23'
+:  'ACCM03' 'ACCM04']
+
+#+begin_src ipython
+print(df_all.shape[0])
+#+end_src
+
+#+RESULTS:
+: 4608
+
+#+begin_src ipython
+pkl_save(df_all, 'df_licks', path="../data/mice/")
+#+end_src
+
+#+RESULTS:
+: saving to ../data/mice//df_licks.pkl
+
+* load
+
+#+begin_src ipython
+df_all = pkl_load('df_licks', path="../data/mice/")
+#+end_src
+
+#+RESULTS:
+: loading from ../data/mice//df_licks.pkl
+
+#+begin_src ipython
+print(df_all.keys(), df_all.shape)
+#+end_src
+
+#+RESULTS:
+: Index(['lick_binned', 'lick_times', 'day', 'mouse'], dtype='object') (4608, 4)
+
+#+begin_src ipython
+df_all.lick_times
+#+end_src
+
+#+RESULTS:
+#+begin_example
+0     [8.487, 8.631, 8.745, 9.876, 10.019, 10.289, 1...
+1     [4.972000000000001, 5.267000000000003, 5.37700...
+2     [4.750999999999991, 7.731999999999999, 8.34699...
+3     [5.140000000000015, 7.365000000000009, 7.50800...
+4     [5.381999999999977, 5.561999999999983, 5.67699...
+                            ...
+91    [4.947999999999865, 5.152999999999793, 5.30499...
+92    [8.697999999999865, 8.883000000000266, 8.99800...
+93    [8.110000000000582, 8.28900000000067, 8.539000...
+94    [2.3419999999996435, 2.5600000000004, nan, nan...
+95    [5.095999999999549, 5.52599999999984, 5.677999...
+Name: lick_times, Length: 4608, dtype: object
+#+end_example
+
+#+begin_src ipython
+df_ = df_all[df_all.mouse=='ACCM04']
+licks = df_['lick_times'].apply(pd.Series).to_numpy()
+licks_counts, bin_edges, _ = plt.hist(licks.reshape(-1), bins=84, density=False);
+print(licks.shape, licks_counts.shape)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (480, 34) (84,)
+[[./.ob-jupyter/559aa2ffdfc99428dcc000f13b972da047847e33.png]]
+:END:
+
+#+begin_src ipython
+plt.plot(bin_edges[:-1], licks_counts.T)
+add_vlines2()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/e48ace8b89f67164a759f2110c7a039156a0ce68.png]]
+
+* Single Mouse
+
+#+begin_src ipython
+path = '/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData'
+mouse = 'JawsM15'
+day = 1
+file_name = path + '/%s-DualTask-BehavioralData' % mouse + '/day_%d/' % day
+file = find_mat_files(file_name)
+data = loadmat(file)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(data.keys())
+#+end_src
+
+#+RESULTS:
+: dict_keys(['__header__', '__version__', '__globals__', 'AbolishTrials', 'AllData', 'AllSample', 'AllTrials', 'Data', 'Data1', 'DataD', 'DataD_GO', 'DataD_NG', 'DataID', 'DataID1', 'DataID2', 'DataID3', 'DataS', 'Delay', 'Delay1', 'FDelay', 'FirstOdor', 'FirstOdor1', 'ITI', 'LDelay', 'LaserPeriod', 'MeantrialLen', 'Odor', 'Odor1', 'ResponseDelay', 'Sample', 'Sample1', 'SampleD', 'SampleD_GO', 'SampleD_NG', 'SampleS', 'SecondOdor', 'SecondOdor1', 'SerialData', 'Test', 'Test1', 'TrialNum', 'TrialNumD', 'TrialNumS', 'Trials', 'Trials1', 'TrialsD', 'TrialsD_GO', 'TrialsD_NG', 'TrialsS', 'Water', 'Water1', 'laserTime', 'lickTime'])
+
+#+begin_src ipython
+path = 'ACC'
+licks_dpa, licks_go, licks_nogo, licks_trial, labels = get_licks_mouse(data, path, response='', trial_length=14, verbose=1)
+print(licks_dpa.shape)
+licks_all = [np.hstack(licks_dpa), np.hstack(licks_go), np.hstack(licks_nogo)]
+print(np.array(licks_trial[0]).shape)
+licks_density, bins = plot_licks_hist(licks_all, n_bins=84)
+print('lick_density', licks_density.shape)
+plt.savefig('licks_first.svg', dpi=300)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: licks: all (96, 10) licks: DPA (32, 8) Go (32, 10) NoGo (32, 8)
+: (32, 8)
+: (10,)
+: lick_count (3, 84)
+: lick_density (3, 84)
+[[./.ob-jupyter/06396ddff88c84c379b625b55924dae5a29fa89e.png]]
+:END:
+
+#+begin_src ipython
+print(licks_trial.shape)
+licks_counts, bin_edges, _ = plt.hist(np.hstack(licks_trial), bins=84, density=False)
+plt.clf()
+print(licks_counts.shape)
+plt.plot(bin_edges[:-1], licks_counts)
+add_vlines2()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (96, 10)
+: (84,)
+[[./.ob-jupyter/0ddf543d1638c8fd126a19b39085e542535e7320.png]]
+:END:
+
+#+begin_src ipython
+# licks_list = []
+# for i in range(licks_trial.shape[0]):
+#     try:
+#         licks_counts, bin_edges, _ = plt.hist(licks_trial[i], bins=84, density=False);
+#         licks_list.append(licks_counts.copy())
+#         licks_counts[licks_counts==0] *= np.nan
+#         plt.plot(bin_edges[:-1], (i+1)*licks_counts, "|")
+#     except:
+#         pass
+
+# add_vlines2()
+# plt.xlabel("Time (s)")
+# plt.ylabel("Trial #")
+# plt.xlim(-0.5, 14)
+# plt.show()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

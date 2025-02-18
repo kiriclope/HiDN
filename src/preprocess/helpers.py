@@ -366,7 +366,7 @@ def sum_epochs(X, axis=-1, **kwargs):
             X_DELAY = np.nansum(X[..., kwargs["bins_DELAY"]], axis=axis)
             X_epochs[i_epoch] = X_DELAY
 
-    X_epochs = np.moveaxis(X_epochs, 0, axis)
+    X_epochs = np.moveaxis(X_epochs, 0, axis) / len(kwargs["bins_%s" % epoch])
 
     if X_epochs.shape[-1] == 1:
         X_epochs = X_epochs[..., 0]

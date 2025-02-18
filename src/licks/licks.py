@@ -24,14 +24,13 @@ def plot_lick_rate(licks_counts, bin_edges, n_mice=1):
     # plt.xlim([0, 10])
     # plt.show()
 
-
 def plot_licks_hist(licks_all, n_bins="auto", n_mice=1):
     # licks_counts, bin_edges = np.histogram(licks_all, bins=n_bins, density=False)
     # print(licks_counts.shape, bin_edges.shape)
 
     licks_counts, bin_edges, _ = plt.hist(licks_all, bins=n_bins, density=False)
     plt.clf()
-
+    print('lick_count', licks_counts.shape)
     plot_lick_rate(licks_counts, bin_edges, n_mice)
     return licks_counts, bin_edges
 
@@ -237,9 +236,9 @@ def convert_to_serie(sample_series, distractor_series, test_series):
 
     # Iterate while there's data in at least one series
     while (
-        sample_index < len(sample_series)
-        or distractor_index < len(distractor_series)
-        or test_index < len(test_series)
+        (sample_index < len(sample_series))
+        or (distractor_index < len(distractor_series))
+        or (test_index < len(test_series))
     ):
         sample_time = (
             sample_series[sample_index]
@@ -274,6 +273,7 @@ def split_trials(series, go_distractors, no_go_distractors, responses, trial_len
     trials_go = []
     trials_no_go = []
     trials_without_distractor = []
+    labels = []
 
     i = 0
     while i < len(series):
@@ -282,14 +282,17 @@ def split_trials(series, go_distractors, no_go_distractors, responses, trial_len
                 series[i][1] + trial_length
             )  # Added trial length to the sample timestamp
 
+            # DPA trial
             if i + 1 < len(series) and series[i + 1][0] == "test":
                 if any(
                     end_of_trial > r > series[i + 1][1] for r in responses
                 ):  # Check if a response occurred within this trial
                     trials_without_distractor.append((series[i][1], end_of_trial))
                     all_trials.append((series[i][1], end_of_trial))
-                i += 2
+                    labels.append(0)
 
+                i += 2
+            # GNG trials
             elif (
                 i + 2 < len(series)
                 and series[i + 1][0] == "distractor"
@@ -301,48 +304,17 @@ def split_trials(series, go_distractors, no_go_distractors, responses, trial_len
                     all_trials.append((series[i][1], end_of_trial))
                     if series[i + 1][1] in go_distractors:
                         trials_go.append((series[i][1], end_of_trial))
+                        labels.append(1)
                     elif series[i + 1][1] in no_go_distractors:
                         trials_no_go.append((series[i][1], end_of_trial))
+                        labels.append(2)
                 i += 3
             else:
                 i += 1
         else:
             i += 1
 
-    return trials_without_distractor, trials_go, trials_no_go, all_trials
-
-
-# def split_trials(series, go_distractors, no_go_distractors, trial_length=20):
-#     trials_without_dist = []
-#     trials_go = []
-#     trials_no_go = []
-
-#     i = 0
-#     while i < len(series):
-#         if series[i][0] == "sample":
-#             end_of_trial = series[i][1] + trial_length
-
-#             if (
-#                 i + 2 < len(series)
-#                 and series[i + 1][0] == "distractor"
-#                 and series[i + 2][0] == "test"
-#             ):
-#                 # We found a trial with a distractor
-#                 if series[i + 1][1] in go_distractors:
-#                     trials_go.append((series[i][1], end_of_trial))
-#                 elif series[i + 1][1] in no_go_distractors:
-#                     trials_no_go.append((series[i][1], end_of_trial))
-#                 i += 3
-#             elif i + 1 < len(series) and series[i + 1][0] == "test":
-#                 # We found a trial without a distractor
-#                 trials_without_dist.append((series[i][1], end_of_trial))
-#                 i += 2
-#             else:
-#                 i += 1
-#         else:
-#             i += 1
-
-#     return trials_without_dist, trials_go, trials_no_go
+    return trials_without_distractor, trials_go, trials_no_go, all_trials, labels
 
 
 def get_licks_in_trial(start_time, end_time, lick_timestamps):
@@ -417,7 +389,7 @@ def get_licks_mouse(data, mouse, response="", trial_length=21, verbose=1):
     else:
         t_response = np.hstack((t_correct, t_incorrect))
 
-    dpa_trials, go_trials, nogo_trials, all_trials = split_trials(
+    dpa_trials, go_trials, nogo_trials, all_trials, labels = split_trials(
         events_serie, t_go[0], t_nogo[0], t_response, trial_length
     )
 
@@ -441,7 +413,7 @@ def get_licks_mouse(data, mouse, response="", trial_length=21, verbose=1):
             licks_nogo.shape,
         )
 
-    return licks_dpa, licks_go, licks_nogo, licks_all
+    return licks_dpa, licks_go, licks_nogo, licks_all, labels
 
 
 def get_licks_mice(path, n_session=10, response="", trial_length=20, ini=0):

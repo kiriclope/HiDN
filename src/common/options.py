@@ -173,6 +173,7 @@ def set_options(**kwargs):
 
     inv_frame = 0  # 1 / frame_rate
     opts['T_WINDOW'] = 0.5
+    opts["deltaT"] = 0
 
     opts.update(kwargs)
 
@@ -226,19 +227,19 @@ def set_options(**kwargs):
     if "P" in opts["mouse"]:
         opts['duration'] = 14
 
-    time = np.linspace(0, opts['duration'], int( opts['duration'] * frame_rate))
+    time = np.linspace(opts['deltaT'], opts['duration'] + opts['deltaT'], int( opts['duration'] * frame_rate))
     opts["bins"] = np.arange(0, len(time))
 
-    t_BL = [0, 2]
-    t_STIM = [2 + inv_frame, 3]
-    t_ED = [3 + inv_frame, 4.5]
-    t_DIST = [4.5 + inv_frame, 5.5]
-    t_MD = [5.5 + inv_frame, 6.5]
-    t_CUE = [6.5 + inv_frame, 7]
-    t_RWD = [7 + inv_frame, 7.5]
-    t_LD = [7.5 + inv_frame, 9]
-    t_TEST = [9 + inv_frame, 10]
-    t_RWD2 = [11 + inv_frame, 12]
+    t_BL = [0 + opts["deltaT"], 2 + opts["deltaT"]]
+    t_STIM = [2 + opts["deltaT"], 3+ opts["deltaT"]]
+    t_ED = [3 + opts["deltaT"], 4.5+ opts["deltaT"]]
+    t_DIST = [4.5 + opts["deltaT"], 5.5+ opts["deltaT"]]
+    t_MD = [5.5 + opts["deltaT"], 6.5+ opts["deltaT"]]
+    t_CUE = [6.5 + opts["deltaT"], 7+ opts["deltaT"]]
+    t_RWD = [7 + opts["deltaT"], 7.5+ opts["deltaT"]]
+    t_LD = [7.5 + opts["deltaT"], 9+ opts["deltaT"]]
+    t_TEST = [9 + opts["deltaT"], 10+ opts["deltaT"]]
+    t_RWD2 = [11 + opts["deltaT"], 12+ opts["deltaT"]]
 
     if "P" in opts["mouse"]:
         t_BL = [0 + inv_frame, 2]
@@ -280,7 +281,7 @@ def set_options(**kwargs):
 
     opts["bins_TEST"] = opts["bins"][int((t_TEST[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[1]) * frame_rate)]
 
-    opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1]-opts['T_WINDOW']) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
+    opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1]- opts['T_WINDOW']) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 
     opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[1] * frame_rate)]
 

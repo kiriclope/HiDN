@@ -88,6 +88,11 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
         y_days.loc[data["FATrial"].flatten() - 1, 'choice'] = 1
         y_days.loc[data["missTrial"].flatten() - 1, 'choice'] = 0
 
+        y_days.loc[data["hitTrial"].flatten() - 1, 'pair'] = 1
+        y_days.loc[data["CRTrial"].flatten() - 1, 'pair'] = 0
+        y_days.loc[data["FATrial"].flatten() - 1, 'pair'] = 0
+        y_days.loc[data["missTrial"].flatten() - 1, 'pair'] = 1
+
     except:
 
         y_days.loc[data["ODPAHitTrial"].flatten() - 1, 'response'] = "correct_hit"
@@ -97,6 +102,10 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
         y_days.loc[data["ODPAHitTrial"].flatten() - 1, 'choice'] = 1
         y_days.loc[data["ODPACRTrial"].flatten() - 1, 'choice'] = 0
         y_days.loc[data["ODPAFATrial"].flatten() - 1, 'choice'] = 1
+
+        y_days.loc[data["ODPAHitTrial"].flatten() - 1, 'pair'] = 1
+        y_days.loc[data["ODPACRTrial"].flatten() - 1, 'pair'] = 0
+        y_days.loc[data["ODPAFATrial"].flatten() - 1, 'pair'] = 0
 
         y_days.loc[data["ODRHitTrial"].flatten() - 1, 'odr_perf'] = 1
         y_days.loc[data["ODRCRTrial"].flatten() - 1, 'odr_perf'] = 1
@@ -117,6 +126,7 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
         try:
             y_days.loc[data["ODPAMissTrial"].flatten() - 1, 'response'] = "incorrect_miss"
             y_days.loc[data["ODPAMissTrial"].flatten() - 1, 'choice'] = 0
+            y_days.loc[data["ODPAMissTrial"].flatten() - 1, 'pair'] = 1
         except:
             pass
 
@@ -500,17 +510,8 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S4 = y.sample_odor == 3
 
     elif kwargs["features"] == "pair":
-        if kwargs["trials"] == "correct":
-            # pair
-            idx_S1 = y.response == "correct_hit"
-            # unpair
-            idx_S2 = y.response == "correct_rej"
-        else:
-            # pair
-            idx_S1 = (y.response == "correct_hit") | (y.response == "incorrect_miss")
-            # unpair
-            # idx_S2 = (y.response == "incorrect_fa") | (y.response == "correct_rej")
-            idx_S2 = (y.response == "correct_rej") | (y.response == "incorrect_fa")
+        idx_S1 = y.pair == 1
+        idx_S2 = y.pair == 0
 
     elif kwargs["features"] == "fa":
         # lick

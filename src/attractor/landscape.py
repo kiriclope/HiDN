@@ -51,8 +51,8 @@ class EnergyLandscape():
 
         Emin = np.nanmin(energy)
         energy = (energy - Emin)
-        denom = np.nansum(energy)
-        energy = energy / denom
+        # denom = np.nansum(energy)
+        # energy = energy / denom
 
         return energy
 

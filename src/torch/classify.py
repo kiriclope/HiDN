@@ -65,7 +65,7 @@ def get_classification(model, RETURN='overlaps', **options):
         # train and test on correct trials in X_A, y_A
         options['trials'] = 'correct'
 
-    if (options['features']=='choice') and not ('ACC' in options['mouse']):
+    if ((options['features']=='choice') or (options['features']=='pair')) and not ('ACC' in options['mouse']):
         # test on laser ON trials
         options['laser'] = 1
 
