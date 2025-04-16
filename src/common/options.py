@@ -13,7 +13,7 @@ def set_options(**kwargs):
     opts = dict()
 
     opts["NEW_DATA"] = 1
-    opts["path"] = "/home/leon/dual_task/dual_data/"
+    opts["path"] = "/storage/leon/dual_task/"
     opts["fname"] =''
 
     opts["mice"] = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']    # ['AP02', 'AP12', 'PP09', 'PP17', 'RP13']
@@ -279,9 +279,10 @@ def set_options(**kwargs):
 
     opts["bins_LD"] = opts["bins"][int((t_LD[0] + opts['T_WINDOW']) * frame_rate) : int(t_LD[1] * frame_rate)]
 
-    opts["bins_TEST"] = opts["bins"][int((t_TEST[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[1]) * frame_rate)]
+    opts["bins_TEST"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_TEST[1] - opts['T_WINDOW']) * frame_rate)]
 
-    opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1]- opts['T_WINDOW']) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
+    opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
+    # opts["bins_CHOICE"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 
     opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[1] * frame_rate)]
 

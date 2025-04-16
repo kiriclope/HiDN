@@ -53,7 +53,7 @@ def get_classification(model, RETURN='overlaps', **options):
     y_labels = None
     cv_B = True
 
-    if (options['features'] == 'sample'):
+    if (options['features'] == 'sample') or (options['features']=='pair'):
         # test on incorret trials
         options['trials'] = 'incorrect'
 
@@ -65,17 +65,22 @@ def get_classification(model, RETURN='overlaps', **options):
         # train and test on correct trials in X_A, y_A
         options['trials'] = 'correct'
 
-    if ((options['features']=='choice') or (options['features']=='pair')) and not ('ACC' in options['mouse']):
+    if (options['features']=='choice') and not ('ACC' in options['mouse']):
+        cv_B = False
         # test on laser ON trials
-        options['laser'] = 1
+        # options['laser'] = 1
 
-        X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
-        y_B_labels = y_B.copy()
-        y_B = y_to_arr(y_B, **options)
-        print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+        # X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+        # y_B_labels = y_B.copy()
+        # y_B = y_to_arr(y_B, **options)
+        # print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
 
         # train and test on laser OFF trials in X_A, y_A
         options['laser'] = 0
+
+    if (options['features']=='choice') and ('ACC' in options['mouse']):
+        # test on laser ON trials
+        cv_B = False
 
     if (options['features'] == 'distractor') or (options['features'] == 'odr_choice'):
         # test on odr incorrect trials, DPA, and laser ON trials see src/common/get_data.py

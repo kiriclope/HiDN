@@ -18,7 +18,7 @@ def find_mat_files(folder_path):
     return mat_files[0]
 
 def get_gng_behavior(mouse, day):
-    path = '/home/leon/dual_task/dual_data/data/2Samples-DualTask-BehavioralData'
+    path = '/storage/leon/dual_task/data/2Samples-DualTask-BehavioralData'
     cols = ['sample', 'test', 'response', 'pair', 'tasks', 'cue', 'odr_response', 'odr_pair', 'laser']
     file_name = path + '/%s-DualTask-BehavioralData' % mouse + '/day_%d/' % day
     file = find_mat_files(file_name)
@@ -169,9 +169,7 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
 
 def get_X_y_days_multi(mouse=gv.mouse):
 
-    data = mat73.loadmat(
-        "/home/leon/dual_task/dual_data/data/%s/dataProcessed.mat" % mouse
-    )
+    data = mat73.loadmat("/storage/leon/dual_task/data/%s/dataProcessed.mat" % mouse)
 
     X_days = np.swapaxes(data["Cdf_Mice"], 0, 1)
     y_ = np.zeros((X_days.shape[0], 7))
@@ -494,8 +492,10 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_tasks = y.tasks == "DualNoGo"
 
     if kwargs["features"] == "sample":
-        idx_S1 = y.sample_odor == 0
-        idx_S2 = y.sample_odor == 1
+        idx_S1 = (y.sample_odor == 0) & (y.test_odor == 0)
+        idx_S2 = (y.sample_odor == 0) & (y.test_odor == 1)
+        idx_S3 = (y.sample_odor == 1) & (y.test_odor == 1)
+        idx_S4 = (y.sample_odor == 1) & (y.test_odor == 0)
 
         # if kwargs['trials'] == 'incorrect':
         #     idx = y.response.str.contains("incorrect")
@@ -534,6 +534,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
     elif kwargs["features"] == "choice":
         idx_S1 = y.choice == 1
         idx_S2 = y.choice == 0
+        idx_trials = True
 
     elif kwargs["features"] == "odr_choice":
         idx_S1 = y.odr_choice == 1
@@ -580,8 +581,8 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_S2 = y.tasks == kwargs["task"]
 
     if isinstance(kwargs["day"], str):
-        print("multiple days, discard", kwargs["n_discard"],
-              'first', kwargs["n_first"], 'middle', kwargs["n_middle"])
+        # print("multiple days, discard", kwargs["n_discard"],
+        # 'first', kwargs["n_first"], 'middle', kwargs["n_middle"])
         if kwargs["day"] == "first":
             idx_days = (y.day > kwargs["n_discard"]) & (y.day <= kwargs["n_first"] + kwargs["n_discard"])
 
@@ -591,6 +592,8 @@ def get_X_y_S1_S2(X, y, **kwargs):
             )
         if kwargs["day"] == "last":
             idx_days = y.day > (kwargs["n_first"] + kwargs["n_middle"] + kwargs["n_discard"])
+        if kwargs["day"] == "all":
+            idx_days = True
     else:
         idx_days = y.day == kwargs["day"]
 
@@ -600,9 +603,9 @@ def get_X_y_S1_S2(X, y, **kwargs):
     X_S3 = X[idx_S3 & idx_trials & idx_days & idx_laser & idx_tasks]
     X_S4 = X[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
 
-    print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
-    if X_S3.shape[0] > 0:
-        print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
+    # print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
+    # if X_S3.shape[0] > 0:
+    #     print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
 
     X_S1_S2 = np.vstack((X_S1, X_S2, X_S3, X_S4))
 
@@ -613,4 +616,4 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
     y_S1_S2 = pd.concat((y_S1, y_S2, y_S3, y_S4))
 
-    return X_S1_S2 * 1000.0, y_S1_S2
+    return X_S1_S2, y_S1_S2

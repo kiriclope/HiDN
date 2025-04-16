@@ -1,10 +1,25 @@
 import numpy as np
-# from src.decode.bump import circcvl
+from src.decode.bump import circcvl
+from hmmlearn import hmm
+from sklearn.preprocessing import StandardScaler
 
 class EnergyLandscape():
 
-    def __init__(self, verbose=False):
+    def __init__(self, IF_HMM=0, verbose=False):
+        self.IF_HMM = IF_HMM
         self.verbose = verbose
+
+
+    def get_transition_hmm(self, X_discrete, num_bins, covariance_type='diag', n_iter=50):
+        model = hmm.GaussianHMM(n_components=num_bins, covariance_type=covariance_type, n_iter=n_iter, init_params="")
+        model.transmat_ = np.ones((num_bins, num_bins)) / num_bins
+
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_discrete)
+        model.fit(X_scaled)
+
+        return model.transmat_
+
 
     def get_transition_matrix(self, X_discrete, num_bins):
 
@@ -37,6 +52,12 @@ class EnergyLandscape():
 
         A = np.vstack((p_transition.T - np.eye(n_states), np.ones(n_states)))
 
+        # A = np.append(
+        #     arr=p_transition.T - np.eye(n_states),
+        #     values=np.ones(n_states).reshape(1, -1),
+        #     axis=0
+        # )
+
         # Moore-Penrose pseudoinverse = (A^TA)^{-1}A^T
         pinv = np.linalg.pinv(A)
         # Return last row
@@ -44,24 +65,30 @@ class EnergyLandscape():
 
     def get_energy(self, steady_state, window=10):
         # Compute the energy landscape as the negative log of the steady state distribution (Boltzmann, kb=1)
+        # Pi = exp(-Ei / kb / T) / Z where Z = sum(Pi)
+
         Z = np.sum(steady_state)
-        energy = -np.log(steady_state) + np.log(Z)
+        energy = -np.log(steady_state) - np.log(Z)
 
         # energy = circcvl(energy, windowSize=window)
 
         Emin = np.nanmin(energy)
         energy = (energy - Emin)
-        # denom = np.nansum(energy)
-        # energy = energy / denom
+        denom = np.nansum(energy)
+        energy = energy / denom
 
         return energy
 
-    def fit(self, X, bins, window=10):
+    def fit(self, X, bins, window=10, covariance_type='diag', n_iter=1000):
 
         X_discrete = np.digitize(X, bins, right=False)-1
         num_bins = len(bins)
 
-        self.transition_matrix = self.get_transition_matrix(X_discrete, num_bins=num_bins)
+        if self.IF_HMM:
+            self.transition_matrix = self.get_transition_hmm(X_discrete, num_bins=num_bins, covariance_type=covariance_type, n_iter=n_iter)
+        else:
+            self.transition_matrix = self.get_transition_matrix(X_discrete, num_bins=num_bins)
+
         if self.verbose:
             print('Transition matrix', self.transition_matrix.shape)
 
@@ -70,7 +97,11 @@ class EnergyLandscape():
             print('Steady States', self.steady_state.shape)
 
         energy = self.get_energy(self.steady_state, window)
+
         if self.verbose:
             print('Energy', energy.shape)
+
+        if window>0:
+            energy = circcvl(energy, windowSize=window)
 
         return energy

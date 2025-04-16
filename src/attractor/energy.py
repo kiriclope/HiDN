@@ -5,6 +5,7 @@ from hmmlearn import hmm
 from src.decode.bump import decode_bump, circcvl
 from src.preprocess.helpers import standard_scaler_BL, preprocess_X
 
+
 def gaussian(x, mu, sig):
     return np.exp(-np.power(x - mu, 2.) / (2 * np.power(sig, 2.)))
 
@@ -105,6 +106,7 @@ def compute_steady_state(p_transition, VERBOSE=0):
         values=np.ones(n_states).reshape(1, -1),
         axis=0
     )
+
     # Moore-Penrose pseudoinverse = (A^TA)^{-1}A^T
     pinv = np.linalg.pinv(A)
     # Return last row

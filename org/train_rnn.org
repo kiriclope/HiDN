@@ -439,8 +439,9 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
 
           self.DT = DT
           self.TAU = TAU
-          # self.GAIN = nn.Parameter(torch.tensor(1.0).to(DEVICE))
-          self.GAIN = nn.Parameter(torch.ones((1, 1, self.N_NEURON)).to(DEVICE))
+
+          self.GAIN = nn.Parameter(torch.tensor(1.0).to(DEVICE))
+          # self.GAIN = nn.Parameter(torch.ones((1, 1, self.N_NEURON)).to(DEVICE))
 
           self.SIGMA = nn.Parameter(torch.tensor(SIGMA).to(torch.float).to(DEVICE))
           # self.SIGMA = SIGMA
@@ -591,7 +592,7 @@ smoothed_data = moving_average_multidim(X_data, window_size, axis=-1)
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/4fc2a49d0ccaaea3552d6b3459df4ea9ce4ccce1.png]]
+[[./.ob-jupyter/19b57f473e0fdaa9a1ff1e6365c650e0b033f2d7.png]]
 
 ** Training
 
@@ -642,33 +643,6 @@ model = FullRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-RuntimeError                              Traceback (most recent call last)
-Cell In[1312], line 1
-----> 1 model = FullRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
-
-Cell In[1301], line 15, in FullRNN.__init__(self, N_NEURON, N_BATCH, DT, TAU, SIGMA, NONLINEAR, DEVICE, DROP)
-     12 # self.GAIN = nn.Parameter(torch.tensor(1.0).to(DEVICE))
-     13 self.GAIN = nn.Parameter(torch.ones((1, 1, self.N_NEURON)).to(DEVICE))
----> 15 self.SIGMA = nn.Parameter(torch.tensor(SIGMA).to(DEVICE))
-     16 # self.SIGMA = SIGMA
-     18 self.EXP_DT_TAU = torch.exp(-torch.tensor(self.DT / self.TAU).to(DEVICE))
-
-File ~/mambaforge/envs/torch/lib/python3.10/site-packages/torch/nn/parameter.py:40, in Parameter.__new__(cls, data, requires_grad)
-     36     data = torch.empty(0)
-     37 if type(data) is torch.Tensor or type(data) is Parameter:
-     38     # For ease of BC maintenance, keep this path for standard Tensor.
-     39     # Eventually (tm), we should change the behavior for standard Tensor to match.
----> 40     return torch.Tensor._make_subclass(cls, data, requires_grad)
-     42 # Path for custom tensors: set a flag on the instance to indicate parameter-ness.
-     43 t = data.detach().requires_grad_(requires_grad)
-
-RuntimeError: Only Tensors of floating point and complex dtype can require gradients
-#+end_example
-:END:
 
 #+begin_src ipython
 learning_rate = 0.1
@@ -681,21 +655,27 @@ run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs, thr
 #+end_src
 
 #+RESULTS:
-: Epoch 0/100, Training Loss: 0.1678, Validation Loss: 0.1757
-: Epoch 10/100, Training Loss: 0.1120, Validation Loss: 0.1769
-: Epoch 20/100, Training Loss: 0.1898, Validation Loss: 0.1779
-: Epoch 30/100, Training Loss: 0.1344, Validation Loss: 0.1785
-: Epoch 40/100, Training Loss: 0.1098, Validation Loss: 0.1790
-: Epoch 50/100, Training Loss: 0.1635, Validation Loss: 0.1792
-: Epoch 60/100, Training Loss: 0.1413, Validation Loss: 0.1794
-: Epoch 70/100, Training Loss: 0.1767, Validation Loss: 0.1795
+#+begin_example
+Epoch 0/100, Training Loss: 0.2940, Validation Loss: 0.2146
+Epoch 10/100, Training Loss: 0.1363, Validation Loss: 0.1875
+Epoch 20/100, Training Loss: 0.1646, Validation Loss: 0.1883
+Epoch 30/100, Training Loss: 0.2930, Validation Loss: 0.1883
+Epoch 40/100, Training Loss: 0.1349, Validation Loss: 0.1886
+Epoch 50/100, Training Loss: 0.1485, Validation Loss: 0.1887
+Epoch 60/100, Training Loss: 0.1319, Validation Loss: 0.1892
+Epoch 70/100, Training Loss: 0.1537, Validation Loss: 0.1892
+Epoch 80/100, Training Loss: 0.1988, Validation Loss: 0.1892
+Epoch 90/100, Training Loss: 0.1602, Validation Loss: 0.1892
+#+end_example
 
 #+begin_src ipython
 print(model.GAIN, model.SIGMA)
 #+end_src
 
 #+RESULTS:
-: f7a90a85-43ae-432e-a08a-49e89f449175
+: Parameter containing:
+: tensor(1.9003, device='cuda:0', requires_grad=True) Parameter containing:
+: tensor(0.0126, device='cuda:0', requires_grad=True)
 
 ** Testing
 
@@ -728,7 +708,7 @@ print(model.GAIN, model.SIGMA)
 #+end_src
 
 #+RESULTS:
-: b022a11c-ed57-4a05-a289-63eb98f606f5
+: (50, 83, 693) (50, 83, 693)
 
 #+begin_src ipython
   import matplotlib.pyplot as plt
@@ -755,7 +735,7 @@ print(model.GAIN, model.SIGMA)
 #+end_src
 
 #+RESULTS:
-: cd12a5a0-71ba-476b-9246-0656c7264090
+[[./.ob-jupyter/94180b39f313aae7d4a6032270b1908c2f7df115.png]]
 
 #+begin_src ipython
   # weights = (model.U @ model.V.T).cpu().detach().numpy()
@@ -764,7 +744,6 @@ print(model.GAIN, model.SIGMA)
 #+end_src
 
 #+RESULTS:
-: 0419a231-d784-41b4-b483-49fc666e8367
 
 #+begin_src ipython
 fig, ax = plt.subplots(1, 2, figsize= [2 * width, height])
@@ -774,7 +753,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: b34608be-2ef6-4175-8196-09d1e9f959fe
+[[./.ob-jupyter/0889cf922a65e9d77da46b2b7a2a51e731833f4a.png]]
 
 #+begin_src ipython
   X_days, y_days = get_X_y_days(**options)
@@ -790,7 +769,8 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 1ddd93a6-67c9-4838-b44b-2d62afb29036
+: (32, 693, 84)
+: (32, 84, 693) (32, 13)
 
 #+begin_src ipython
 plt.plot(S, 'o')
@@ -800,7 +780,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 9a198326-e587-4148-bbed-6e47ae6bc352
+[[./.ob-jupyter/ae3949c97fb6306271281453efcee0c9b0eee31f.png]]
 
 #+begin_src ipython
 lbd, U = np.linalg.eig(weights.T)
@@ -811,7 +791,6 @@ U = np.real(U[idx])
 #+end_src
 
 #+RESULTS:
-: 88006e8c-1c34-476e-8d59-19161887e53a
 
 #+begin_src ipython
 plt.plot(lbd[-11:], 'o')
@@ -821,21 +800,21 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: c6bd18c7-0eef-4d0b-9e23-1c2112ef4399
+[[./.ob-jupyter/6690ed63c1c2895e379577308aa5b747d12bcc8b.png]]
 
 #+begin_src ipython
 print(lbd[-11:])
 #+end_src
 
 #+RESULTS:
-: 3948482c-6b0e-45d6-abd3-0262fe87b50d
+: [43.842422 45.913536 45.913536 46.597084 46.597084 46.68539  48.66639
+:  48.66639  49.313313 49.313313 52.095642]
 
 #+begin_src ipython
 idx = 0
 #+end_src
 
 #+RESULTS:
-: c1f965ed-7c33-4ade-bd83-5cb82bda45bd
 
 #+begin_src ipython
 overlap = torch.tensor(X_data).to(torch.float).to(device) @ torch.tensor(U).to(torch.float).to(device)
@@ -866,14 +845,13 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 48f37fba-0596-4eb7-8097-0d656939063a
+[[./.ob-jupyter/ba215bf915c102c46896ee5ff0220f3b6b9fb705.png]]
 
 #+begin_src ipython
 idx = 3
 #+end_src
 
 #+RESULTS:
-: 1e606e46-01f5-4889-8d6e-41c12a1783ae
 
 #+begin_src ipython
 overlap = torch.tensor(X_data).to(torch.float).to(device) @ torch.tensor(Vt.T).to(torch.float).to(device)
@@ -906,11 +884,10 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: d8748a7d-c030-4e09-ba4c-bf399828bc5c
+[[./.ob-jupyter/27e1fa388864a4314b8da69eea386e5692760f9b.png]]
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
-: 14834626-1215-4186-b088-5fd3b0f599ac
