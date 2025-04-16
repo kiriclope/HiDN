@@ -1,0 +1,353 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session trajectories :kernel dual_data :output-dir ./figures/trajec_overlaps :file (lc/org-babel-tangle-figure-filename)
+
+
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+  import traceback
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import pandas as pd
+  import seaborn as sns
+
+  from time import perf_counter
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+  from src.decode.bump import circcvl
+
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.classify import get_classification
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
+
+
+  def pkl_load(name, path="."):
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12']
+  # mice = ['PP09', 'PP17']
+  # mice = 'JawsM15'
+
+  kwargs = {
+      'mouse': mice[0], 'laser': 0,
+      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 5, 'n_repeats': 16,
+      'class_weight': 0,
+      'multilabel': 0,
+      'mne_estimator':'generalizing', # sliding or generalizing
+      'n_jobs': 128,
+  }
+
+  kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'last']
+  # kwargs['days'] = 'all'
+  options = set_options(**kwargs)
+
+  dum = 'overlaps_loocv'
+ #+end_src
+
+#+RESULTS:
+
+* Choice
+
+#+begin_src ipython
+if len(options['days'])>3:
+    name = 'df_choice_%s_days' % dum
+elif len(options['days'])==2:
+    name = 'df_choice_%s_early_late' % dum
+else:
+    name = 'df_choice_%s' % dum
+
+if len(mice)==1:
+    df_choice = pkl_load('%s' % name, path="../data/%s/overlaps" % options['mouse'])
+elif len(mice)==2:
+    df_choice = pkl_load('%s' % name, path="../data/mice/overlaps_ACC")
+else:
+    df_choice = pkl_load('%s' % name, path="../data/mice/overlaps")#.reset_index()
+#+end_src
+
+#+RESULTS:
+: loading from ../data/mice/overlaps/df_choice_overlaps_loocv_early_late.pkl
+
+#+begin_src ipython
+df_choice['overlaps_diag'] = df_choice['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
+for epoch2 in ['RWD', 'LD', 'TEST', 'CHOICE', 'RWD2']:
+        options['epochs'] = [epoch2]
+        df_choice['overlaps_diag_%s' % epoch2] = df_choice['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+# df_choice['overlaps_diag'] = (2.0 * df_choice['choice'] -1 )  * df_choice['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['T_WINDOW'] = 0.5
+options = set_options(**options)
+for epoch in ['ED', 'CUE', 'RWD' ,'LD', 'TEST', 'CHOICE', 'RWD2']:
+    options['epochs'] = [epoch]
+    df_choice['overlaps_%s' % epoch] = df_choice['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+
+    for epoch2 in ['ED', 'CUE', 'RWD', 'LD', 'TEST', 'CHOICE', 'RWD2']:
+        options['epochs'] = [epoch2]
+        df_choice['overlaps_%s_%s' % (epoch, epoch2)] = df_choice['overlaps_%s' % epoch].apply(lambda x: avg_epochs(np.array(x), **options))
+#+end_src
+
+#+RESULTS:
+
+
+#+RESULTS:
+
+* Sample
+
+#+begin_src ipython
+if len(options['days'])>3:
+    name = 'df_sample_%s_days' % dum
+elif len(options['days'])==2:
+    name = 'df_sample_%s_early_late' % dum
+else:
+    name = 'df_sample_%s' % dum
+
+if len(mice)==1:
+    df_sample = pkl_load('%s' % name, path="../data/%s/overlaps" % options['mouse'])
+elif len(mice)==2:
+    df_sample = pkl_load('%s' % name, path="../data/mice/overlaps_ACC")
+else:
+    df_sample = pkl_load('%s' % name, path="../data/mice/overlaps")#.reset_index()
+#+end_src
+
+#+RESULTS:
+: loading from ../data/mice/overlaps/df_sample_overlaps_loocv_early_late.pkl
+
+#+begin_src ipython
+options['T_WINDOW'] = 0.0
+options = set_options(**options)
+df_sample['overlaps_diag'] = df_sample['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
+df_sample['sign_overlaps_diag'] = (2.0 * df_sample['sample_odor'] -1 )  * df_sample['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
+
+for epoch2 in ['ED', 'MD', 'LD', 'TEST', 'CHOICE']:
+        options['epochs'] = [epoch2]
+        df_sample['overlaps_diag_%s' % epoch2] = df_sample['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+        df_sample['sign_overlaps_diag_%s' % epoch2] = df_sample['sign_overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['T_WINDOW'] = 0.0
+options = set_options(**options)
+
+for epoch in ['ED', 'MD', 'LD', 'TEST', 'CHOICE']:
+    options['epochs'] = [epoch]
+    df_sample['sign_overlaps_%s' % epoch] = (2.0 * df_sample['sample_odor'] -1 ) * df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+    df_sample['overlaps_%s' % epoch] = df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+
+    for epoch2 in ['ED', 'MD', 'LD', 'TEST', 'CHOICE']:
+        options['epochs'] = [epoch2]
+        df_sample['overlaps_%s_%s' % (epoch, epoch2)] = df_sample['overlaps_%s' % epoch].apply(lambda x: avg_epochs(np.array(x), **options))
+        df_sample['sign_overlaps_%s_%s' % (epoch, epoch2)] = df_sample['sign_overlaps_%s' % epoch].apply(lambda x: avg_epochs(np.array(x), **options))
+#+end_src
+
+#+RESULTS:
+
+* Trajectories
+
+#+begin_src ipython
+df_sample = df_sample[df_sample.laser==0]
+df_choice = df_choice[df_choice.laser==0]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Diag
+
+#+begin_src ipython
+epoch = 'diag'
+diag_sample = df_sample.groupby(['tasks', 'day', 'pair', 'choice', 'performance', 'response'])['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+diag_choice = df_choice.groupby(['tasks', 'day', 'pair', 'choice', 'performance', 'response'])['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+diag_sample = diag_sample.reset_index()
+diag_choice = diag_choice.reset_index()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=2, ncols=3, figsize=(3*width, 2*height))
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+colors = ['r', 'b', 'g']
+day = ['first', 'last']
+for i in range(3):
+   for j in range(2) :
+       sample = diag_sample[diag_sample.tasks==tasks[i]]
+       choice = diag_choice[diag_choice.tasks==tasks[i]]
+
+       sample = sample[sample.day==day[j]]
+       choice = choice[choice.day==day[j]]
+       # print(sample[sample.performance==0].sign_overlaps_diag.to_list())
+
+       ax[j][i].plot(circcvl(sample[sample.response=='incorrect_fa'].sign_overlaps_diag.to_list()[0]),
+                  circcvl(choice[choice.response=='incorrect_fa'].overlaps_diag.to_list()[0]), color=colors[i], ls='--')
+
+       ax[j][i].plot(circcvl(sample[sample.response=='correct_rej'].sign_overlaps_diag.to_list()[0]),
+                  circcvl(choice[choice.response=='correct_rej'].overlaps_diag.to_list()[0]), color=colors[i], ls='-')
+
+       ax[j][i].set_xlabel('Sample Overlap')
+       ax[j][i].set_ylabel('Choice Overlap')
+       ax[j][i].set_xlim([-.1, 1.1])
+       ax[j][i].set_ylim([-2, 2])
+       ax[j][i].axhline(0, ls='--', color='k')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/trajec_overlaps/figure_14.png]]
+
+
+** Off diag
+
+#+begin_src ipython
+epoch = 'ED'
+ED_sample = df_sample.groupby(['tasks', 'day', 'pair', 'choice', 'performance', 'response'])['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+epoch = 'CHOICE'
+CHOICE_choice = df_choice.groupby(['tasks', 'day', 'pair', 'choice', 'performance', 'response'])['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+ED_sample = ED_sample.reset_index()
+CHOICE_choice = CHOICE_choice.reset_index()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=2, ncols=3, figsize=(3*width, 2*height))
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+colors = ['r', 'b', 'g']
+day = ['first', 'last']
+
+for i in range(3):
+   for j in range(2) :
+       sample = ED_sample[ED_sample.tasks==tasks[i]]
+       choice = CHOICE_choice[CHOICE_choice.tasks==tasks[i]]
+
+       sample = sample[sample.day==day[j]]
+       choice = choice[choice.day==day[j]]
+       # print(sample[sample.performance==0].sign_overlaps_diag.to_list())
+
+       # ax[j][i].plot(circcvl(sample[sample.performance==0].sign_overlaps_ED.to_list()[0]),
+       #            circcvl(choice[choice.performance==0].overlaps_CHOICE.to_list()[0]), color=colors[i], ls='--')
+
+       # ax[j][i].plot(circcvl(sample[sample.performance==1].sign_overlaps_ED.to_list()[0]),
+       #            circcvl(choice[choice.performance==1].overlaps_CHOICE.to_list()[0]), color=colors[i], ls='-')
+
+       ax[j][i].plot(circcvl(sample[sample.response=='incorrect_fa'].sign_overlaps_ED.to_list()[0]),
+                  circcvl(choice[choice.response=='incorrect_fa'].overlaps_CHOICE.to_list()[0]), color=colors[i], ls='--')
+
+       ax[j][i].plot(circcvl(sample[sample.response=='correct_rej'].sign_overlaps_ED.to_list()[0]),
+                  circcvl(choice[choice.response=='correct_rej'].overlaps_CHOICE.to_list()[0]), color=colors[i], ls='-')
+
+       ax[j][i].set_xlabel('Sample Overlap')
+       ax[j][i].set_ylabel('Choice Overlap')
+       ax[j][i].set_xlim([-.1, 1.1])
+       ax[j][i].set_ylim([-1, 1])
+       ax[j][i].axhline(0, ls='--', color='k')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/trajec_overlaps/figure_17.png]]
+
+
+ #+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

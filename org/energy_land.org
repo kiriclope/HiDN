@@ -365,7 +365,10 @@ def angle_AB(A, B):
       A_norm = A / (np.linalg.norm(A) + 1e-5)
       B_norm = B / (np.linalg.norm(B) + 1e-5)
 
-      return int(np.arccos(A_norm @ B_norm) * 180 / np.pi)
+      cos_theta = A_norm @ B_norm.T
+      angle_radians = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+
+      return np.degrees(angle_radians)
 #+end_src
 
 #+RESULTS:
@@ -392,11 +395,13 @@ def angle_AB(A, B):
       u, v = a, b
 
       if GM:
-          v = b - np.dot(b, a) / np.dot(a, a) * a
+          for i in range(b.shape[0]):
+              v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
 
       if IF_NORM:
-          u = a / np.linalg.norm(a)
-          v = b / np.linalg.norm(b)
+          for i in range(b.shape[0]):
+              u[i] = u[i] / np.linalg.norm(u[i])
+              v[i] = v[i] / np.linalg.norm(v[i])
 
       return np.arctan2(v, u) % (2.0 * np.pi)
 #+end_src
@@ -547,63 +552,103 @@ def circcvl(signal, windowSize=10, axis=-1):
 #+RESULTS:
 
 #+begin_src ipython
-  import numpy as np
-  from scipy.optimize import differential_evolution
-  from scipy.interpolate import interp1d
-  import matplotlib.pyplot as plt
+def circular_distance(angle1, angle2, mod):
+    difference = (angle2 - angle1) % mod
+    circular_distance = min(difference, mod - difference)
+    return circular_distance
 
-  def get_distance(x, y):
-      distance = abs(x - y)
-      if distance>180:
-          distance -= 360
-          distance *= -1
-      return distance
+def remove_close_entries(nums, threshold, modulus):
+    # First, remove duplicates:
+    unique_nums = list(set(nums))
 
-  def find_multiple_minima_from_values(x_vals, y_vals, num_minima=2, num_runs=50, tol=0.05, popsize=50, maxiter=10000, min_distance=0.1, ax=None, color='k'):
-      # Interpolate the energy landscape
-      energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
+    # Sort the numbers
+    unique_nums.sort()
 
-      # Define the bounds for the differential evolution
-      bounds = [(x_vals.min(), x_vals.max())]
+    # Filter entries based on circular distance threshold
+    filtered_nums = []
+    for num in unique_nums:
+        if not filtered_nums:  # If the list is empty, add the first element
+            filtered_nums.append(num)
+        elif all(circular_distance(num, existing_num, modulus) >= threshold for existing_num in filtered_nums):
+            filtered_nums.append(num)
 
-      results = []
+    return filtered_nums
 
-      for _ in range(num_runs):
-          result = differential_evolution(energy_function, bounds, strategy='rand1bin',
-                                          maxiter=maxiter, popsize=popsize, tol=tol,
-                                          seed=np.random.randint(0, 10000))
+# Example usage:
+nums = [10.4, 22.2, 10, 5.2, 30, 22, 24]
+threshold = 3
+modulus = 40
+result = remove_close_entries(nums, threshold, modulus)
+print(result)
+#+end_src
 
-          results.append((result.x[0], result.fun))
+#+RESULTS:
+: [5.2, 10, 22, 30]
 
-      # Filter unique minima within a tolerance and minimum distance
-      unique_minima = []
-      angles = []
-      for x_val, energy in results:
+#+begin_src ipython
+def remove_close_entries_with_indices(nums, threshold, modulus):
+    # Create a list of tuples (value, index)
+    indexed_nums = list(enumerate(nums))
 
-          if not any(np.isclose(x_val, um[0], atol=tol) or get_distance(x_val, um[0]) < min_distance for um in unique_minima):
-              unique_minima.append([x_val, energy])
-              angles.append(x_val)
+    # Sort based on the values but keep the original indices
+    indexed_nums.sort(key=lambda x: x[1])
 
-      # Ensure we only return the requested number of unique minima
-      unique_minima = sorted(unique_minima, key=lambda x: x[1])[:num_minima]
+    # Function to calculate circular distance
+    def circular_distance(x, y, mod):
+        return min((x - y) % mod, (y - x) % mod)
 
-      if ax is None:
-          fig, ax = plt.subplots()
-      # Plot the function
-      x = np.linspace(x_vals.min(), x_vals.max(), 400)
-      y = [energy_function(xi) for xi in x]  # Without noise for plotting
-      # ax.plot(x, y)
+    filtered_indices = []
+    filtered_nums = []
 
-      for min_x, _ in unique_minima:
-          ax.plot(min_x, np.abs(energy_function(min_x)), 'o', color=color, markeredgecolor='k')  # Mark the minima points
+    for idx, num in indexed_nums:
+        if not filtered_nums:
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
+        elif all(circular_distance(num, existing_num, modulus) >= threshold for existing_num in filtered_nums):
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
 
-      return angles
+    return filtered_indices
 
-  # Example usage
-  # x_vals = np.linspace(-2, 2, 50)
-  # y_vals = np.sin(np.pi * x_vals) * 2 + np.cos(2 * np.pi * x_vals) * 2 + 0.1 * x_vals * 2 + np.random.normal(0, 0.1, size=x_vals.shape)
+# Example usage:
+nums = [10, 22, 10, 5, 30, 22]
+threshold = 10
+modulus = 360
+result_indices = remove_close_entries_with_indices(nums, threshold, modulus)
+print(result_indices)
+elements = [nums[i] for i in result_indices]
+print(elements)
+#+end_src
 
-  # find_multiple_minima_from_values(x_vals, y_vals, num_minima=4, num_runs=10, tol=0.05, popsize=15, maxiter=100, min_distance=0.1)
+#+RESULTS:
+: [3, 1]
+: [5, 22]
+
+#+begin_src ipython
+import numpy as np
+from scipy.optimize import differential_evolution
+from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt
+
+def find_multiple_minima_from_values(x_vals, y_vals, num_runs=100, tol=0.05, popsize=2, maxiter=1000, min_distance=35):
+
+    energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
+    bounds = [(x_vals.min(), x_vals.max())]
+    results = []
+
+    result_old = 999
+    for _ in range(num_runs):
+        result = differential_evolution(energy_function, bounds, strategy='rand1bin',
+                                        maxiter=maxiter, popsize=popsize, tol=tol,
+                                        seed=np.random.randint(0, 10000))
+
+        results.append((result.x[0], result.fun))
+
+    results = np.array(results)
+    indices = remove_close_entries_with_indices(results[:, 0], min_distance, 360)
+    results = results[indices]
+
+    return results
 #+end_src
 
 #+RESULTS:
@@ -653,47 +698,48 @@ def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
 
 #+begin_src ipython
   DEVICE = 'cuda:0'
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-
+  #  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   # mice = ['AP02', 'AP12']
   # mice = ['PP09', 'PP17']
 
   kwargs = {
       'mouse': mice[1], 'laser': 0,
-      'trials': '', 'reload': 0, 'data_type': 'dF',
-      'prescreen': None, 'pval': 0.05,
+      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05, 'n_comp': 0,
       'preprocess': False, 'scaler_BL': 'robust',
       'avg_noise': True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
       'bootstrap': 1, 'n_boots': 1000,
-      'n_splits': 5, 'n_repeats': 16,
+      'n_splits': 3, 'n_repeats': 10,
       'class_weight': 0,
       'multilabel':0,
       'mne_estimator': 'generalizing', # sliding or generalizing
       'n_jobs': 128,
       'bolasso_penalty': 'l2',
-      'bolasso_pval': 0.05,
+      'bolasso_pval': 0.001,
   }
 
-  kwargs['days'] = ['first', 'middle', 'last']
+  # kwargs['days'] = ['first', 'middle', 'last']
   # kwargs['days'] = ['first', 'last']
-  # kwargs['days'] = 'all'
+  kwargs['days'] = 'all'
   options = set_options(**kwargs)
+  print(options['days'])
   options['cv'] = LeaveOneOut()
+  options['mice'] = mice
 
-  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
-  safe_f1 = make_scorer(safe_f1_score, needs_proba=True)
-
+  IF_BOOT = 0
   options['hp_scoring'] = lambda estimator, X_test, y_test: np.abs(overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1))
-  # options['scoring'] = options['hp_scoring']
+  options['hp_scoring'] = 'accuracy'
+  options['scoring'] = options['hp_scoring']
   options['scoring'] = overlaps_scorer
-
 #+end_src
 
 #+RESULTS:
+: [1 2 3 4 5 6]
 
 * Landscape vs days
 
@@ -714,15 +760,23 @@ from src.torch.classify import get_classification
 
  #+begin_src ipython
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-Cs = np.logspace(-2, 2, 10)
+from sklearn.svm import LinearSVC
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 
-net = LogisticRegressionCV(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None, tol=0.001, cv=5, Cs=Cs)
-# net = LogisticRegressionCV(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratios=[0.95], max_iter=100, tol=.001, Cs=Cs, cv=3)
+# net = LinearSVC(penalty='l1', loss='squared_hinge', dual='auto', tol=0.0001, C=1.0, multi_class='ovr', fit_intercept=True, intercept_scaling=1, class_weight=None, verbose=0, random_state=None, max_iter=1000)
 
-# net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None, tol=0.001)
-# net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
+# net = LinearDiscriminantAnalysis(solver="lsqr", shrinkage=1)
 
-params = {'model__C': np.logspace(-2, 2, 10)}
+Cs = np.logspace(-3, 3, 10)
+
+if IF_BOOT:
+    net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None, tol=0.001)
+    # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
+else:
+    net = LogisticRegressionCV(penalty='l1', solver='liblinear', n_jobs=None, tol=0.001, cv=3, Cs=Cs, class_weight='balanced')
+    # net = LogisticRegressionCV(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratios=[0.95], max_iter=100, tol=.001, Cs=Cs, cv=3)
+
+params = {'model__C': Cs}
 
 options['n_jobs'] = -1
 options['verbose'] = 0
@@ -733,8 +787,10 @@ options['verbose'] = 1
 #+RESULTS:
 
      #+begin_src ipython
-options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18'] #, 'ACCM03', 'ACCM04']
-# options['mice'] = ['JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# options['mice'] = ['ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# options['mice'] = ['JawsM01']
      #+end_src
 
 #+RESULTS:
@@ -760,644 +816,1593 @@ for mouse in options['mice']:
     for day in options['days']:
         options['day'] = day
 
+        options['trials'] = 'correct'
         options['task'] = 'all'
         options['features'] = 'sample'
         options['epochs'] = ['ED']
 
         try:
-            # coefs, bias = get_classification(model, RETURN='coefs', **options)
-            # coefs_sample.append(coefs[:, 0])
-            coefs, bias = get_classification(model, RETURN='bolasso', **options)
-            coefs_sample.append(coefs)
+            if IF_BOOT:
+                coefs, bias = get_classification(model, RETURN='coefs', **options)
+                coefs_sample.append(coefs[:, 0])
+            else:
+                coefs, bias = get_classification(model, RETURN='bolasso', **options)
+                coefs_sample.append(coefs)
         except:
-            # coefs_sample.append(coefs[:, 0] * np.nan)
-            coefs_sample.append(coefs * np.nan)
+            if IF_BOOT:
+                coefs_sample.append(coefs[:, 0] * np.nan)
+            else:
+                coefs_sample.append(coefs * np.nan)
 
-        options['task'] = 'Dual'
-        options['features'] = 'distractor'
-        options['epochs'] = ['MD']
+        options['task'] = 'all'
+        options['features'] = 'choice'
+        options['epochs'] = ['TEST']
 
         try:
-            # coefs, bias = get_classification(model, RETURN='coefs', **options)
-            # coefs_dist.append(coefs[:, 0])
-            coefs, bias = get_classification(model, RETURN='bolasso', **options)
-            coefs_dist.append(coefs)
+            if IF_BOOT:
+                coefs, bias = get_classification(model, RETURN='coefs', **options)
+                coefs_dist.append(coefs[:, 0])
+            else:
+                coefs, bias = get_classification(model, RETURN='bolasso', **options)
+                coefs_dist.append(coefs)
         except:
-            # coefs_dist.append(coefs[:, 0] * np.nan)
-            coefs_dist.append(coefs * np.nan)
+            if IF_BOOT:
+                coefs_dist.append(coefs[:, 0] * np.nan)
+            else:
+                coefs_dist.append(coefs * np.nan)
 
         options['task'] = 'all'
         options['features'] = 'choice'
         options['epochs'] = ['CHOICE']
+        options['trials'] = ''
 
         try:
-            # coefs, bias = get_classification(model, RETURN='coefs', **options)
-            # coefs_choice.append(coefs[:, 0])
-            coefs, bias = get_classification(model, RETURN='bolasso', **options)
-            coefs_choice.append(coefs)
+            if IF_BOOT:
+                 coefs, bias = get_classification(model, RETURN='coefs', **options)
+                 coefs_choice.append(coefs[:, 0])
+            else:
+                coefs, bias = get_classification(model, RETURN='bolasso', **options)
+                coefs_choice.append(coefs)
         except:
-            # coefs_choice.append(coefs[:, 0] * np.nan)
-            coefs_choice.append(coefs * np.nan)
+            if IF_BOOT:
+                coefs_choice.append(coefs[:, 0] * np.nan)
+            else:
+                coefs_choice.append(coefs * np.nan)
 
     coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
     coefs_mice.append(coefs_save)
 
     print(coefs_save.shape)
-    pkl_save(coefs_save, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="../data/%s/" % options['mouse'])
+    pkl_save(coefs_save, '%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="/storage/leon/dual_task/data/%s/" % options['mouse'])
     #+end_src
 
 #+RESULTS:
 #+begin_example
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 184, 84) X_S2 (96, 184, 84)
-X_B (192, 184, 84) y_B (192,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 184, 84) X_S2 (96, 184, 84)
-y_labels (192, 11) ['DualGo' 'DualNoGo' 'DPA']
-X (192, 184, 84) y (192,) [0. 1.]
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (42, 184, 84) y_B (42,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (54, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (54, 184, 84) nans 0.0 y (54,) [0. 1.]
 boots_coefs (1000, 184)
 p_val (184,)
+significant 89
+X_fs (54, 89)
+samples (54,) features (184,) non zero 89
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 13) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (96, 13) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (25, 184, 84) y_B (25,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (71, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (71, 184, 84) nans 0.0 y (71,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 163
+X_fs (71, 163)
+samples (71,) features (184,) non zero 163
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 155
+X_fs (96, 155)
+samples (96,) features (184,) non zero 155
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 161
+X_fs (96, 161)
+samples (96,) features (184,) non zero 161
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (5, 184, 84) y_B (5,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (91, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (91, 184, 84) nans 0.0 y (91,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 168
+X_fs (91, 168)
+samples (91,) features (184,) non zero 168
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 149
+X_fs (96, 149)
+samples (96,) features (184,) non zero 149
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 156
+X_fs (96, 156)
+samples (96,) features (184,) non zero 156
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (5, 184, 84) y_B (5,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (91, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (91, 184, 84) nans 0.0 y (91,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 158
+X_fs (91, 158)
+samples (91,) features (184,) non zero 158
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 166
+X_fs (96, 166)
+samples (96,) features (184,) non zero 166
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 184)
+p_val (184,)
+significant 164
+X_fs (96, 164)
+samples (96,) features (184,) non zero 164
+(3, 4, 184)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (44, 201, 84) y_B (44,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (52, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (52, 201, 84) nans 0.0 y (52,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
 significant 172
-X_fs (192, 172)
-samples (192,) features (184,) non zero 172
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 184, 84) X_S2 (64, 184, 84)
-y_labels (128, 11) ['DualGo' 'DualNoGo']
-X (128, 184, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 178
-X_fs (128, 178)
-samples (128,) features (184,) non zero 178
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (163, 184, 84) X_S2 (29, 184, 84)
-y_labels (192, 11) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 184, 84) y (192,) [0. 1.]
-boots_coefs (1000, 184)
-p_val (184,)
+X_fs (52, 172)
+samples (52,) features (201,) non zero 172
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 181
+X_fs (96, 181)
+samples (96,) features (201,) non zero 181
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 189
+X_fs (96, 189)
+samples (96,) features (201,) non zero 189
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (33, 201, 84) y_B (33,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (63, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (63, 201, 84) nans 0.0 y (63,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 172
+X_fs (63, 172)
+samples (63,) features (201,) non zero 172
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (96, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 163
+X_fs (96, 163)
+samples (96,) features (201,) non zero 163
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (96, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 173
+X_fs (96, 173)
+samples (96,) features (201,) non zero 173
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (28, 201, 84) y_B (28,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (68, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (68, 201, 84) nans 0.0 y (68,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 175
+X_fs (68, 175)
+samples (68,) features (201,) non zero 175
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 168
+X_fs (96, 168)
+samples (96,) features (201,) non zero 168
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 168
+X_fs (96, 168)
+samples (96,) features (201,) non zero 168
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (20, 201, 84) y_B (20,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (76, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (76, 201, 84) nans 0.0 y (76,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 174
+X_fs (76, 174)
+samples (76,) features (201,) non zero 174
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (96, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 171
+X_fs (96, 171)
+samples (96,) features (201,) non zero 171
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (96, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 174
+X_fs (96, 174)
+samples (96,) features (201,) non zero 174
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (14, 201, 84) y_B (14,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (82, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (82, 201, 84) nans 0.0 y (82,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 175
+X_fs (82, 175)
+samples (82,) features (201,) non zero 175
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 170
+X_fs (96, 170)
+samples (96,) features (201,) non zero 170
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
+significant 165
+X_fs (96, 165)
+samples (96,) features (201,) non zero 165
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 6 LASER 0
+X_B (6, 201, 84) y_B (6,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (90, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (90, 201, 84) nans 0.0 y (90,) [0. 1.]
+boots_coefs (1000, 201)
+p_val (201,)
 significant 176
-X_fs (192, 176)
-samples (192,) features (184,) non zero 176
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 184, 84) X_S2 (96, 184, 84)
-X_B (192, 184, 84) y_B (192,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 184, 84) X_S2 (96, 184, 84)
-y_labels (192, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 184, 84) y (192,) [0. 1.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 178
-X_fs (192, 178)
-samples (192,) features (184,) non zero 178
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 184, 84) X_S2 (64, 184, 84)
-y_labels (128, 11) ['DualGo' 'DualNoGo']
-X (128, 184, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 174
-X_fs (128, 174)
-samples (128,) features (184,) non zero 174
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES choice TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (106, 184, 84) X_S2 (86, 184, 84)
-y_labels (192, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 184, 84) y (192,) [0. 1.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 174
-X_fs (192, 174)
-samples (192,) features (184,) non zero 174
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (0, 184, 84) X_S2 (0, 184, 84)
-X_B (0, 184, 84) y_B (0,) [] []
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (0, 184, 84) X_S2 (0, 184, 84)
-y_labels (0, 11) []
-X (0, 184, 84) y (0,) []
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (0, 184, 84) X_S2 (0, 184, 84)
-y_labels (0, 11) []
-X (0, 184, 84) y (0,) []
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 10)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (0, 184, 84) X_S2 (0, 184, 84)
-y_labels (0, 11) []
-X (0, 184, 84) y (0,) []
-(3, 3, 184)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 201, 84) X_S2 (96, 201, 84)
-X_B (192, 201, 84) y_B (192,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 201, 84) X_S2 (96, 201, 84)
-y_labels (192, 12) ['DualNoGo' 'DualGo' 'DPA']
-X (192, 201, 84) y (192,) [0. 1.]
+X_fs (90, 176)
+samples (90,) features (201,) non zero 176
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
 boots_coefs (1000, 201)
 p_val (201,)
-significant 190
-X_fs (192, 190)
-samples (192,) features (201,) non zero 190
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 201, 84) X_S2 (64, 201, 84)
-y_labels (128, 12) ['DualGo' 'DualNoGo']
-X (128, 201, 84) y (128,) [0. 1. 2. 3.]
+significant 156
+X_fs (96, 156)
+samples (96,) features (201,) non zero 156
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 201, 84) nans 0.0 y (96,) [0. 1.]
 boots_coefs (1000, 201)
 p_val (201,)
-significant 197
-X_fs (128, 197)
-samples (128,) features (201,) non zero 197
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (139, 201, 84) X_S2 (53, 201, 84)
-y_labels (192, 12) ['DPA' 'DualNoGo' 'DualGo']
-X (192, 201, 84) y (192,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 196
-X_fs (192, 196)
-samples (192,) features (201,) non zero 196
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 201, 84) X_S2 (96, 201, 84)
-X_B (192, 201, 84) y_B (192,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 201, 84) X_S2 (96, 201, 84)
-y_labels (192, 12) ['DualNoGo' 'DualGo' 'DPA']
-X (192, 201, 84) y (192,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 190
-X_fs (192, 190)
-samples (192,) features (201,) non zero 190
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 201, 84) X_S2 (64, 201, 84)
-y_labels (128, 12) ['DualGo' 'DualNoGo']
-X (128, 201, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 201)
-p_val (201,)
+significant 157
+X_fs (96, 157)
+samples (96,) features (201,) non zero 157
+(3, 6, 201)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (38, 423, 84) y_B (38,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (58, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (58, 423, 84) nans 0.0 y (58,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 347
+X_fs (58, 347)
+samples (58,) features (423,) non zero 347
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 354
+X_fs (96, 354)
+samples (96,) features (423,) non zero 354
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 351
+X_fs (96, 351)
+samples (96,) features (423,) non zero 351
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (33, 423, 84) y_B (33,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (63, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (63, 423, 84) nans 0.0 y (63,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 365
+X_fs (63, 365)
+samples (63,) features (423,) non zero 365
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (96, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 356
+X_fs (96, 356)
+samples (96,) features (423,) non zero 356
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (96, 13) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 343
+X_fs (96, 343)
+samples (96,) features (423,) non zero 343
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (35, 423, 84) y_B (35,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (61, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (61, 423, 84) nans 0.0 y (61,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 374
+X_fs (61, 374)
+samples (61,) features (423,) non zero 374
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 351
+X_fs (96, 351)
+samples (96,) features (423,) non zero 351
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 338
+X_fs (96, 338)
+samples (96,) features (423,) non zero 338
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (26, 423, 84) y_B (26,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (70, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (70, 423, 84) nans 0.0 y (70,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 370
+X_fs (70, 370)
+samples (70,) features (423,) non zero 370
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 349
+X_fs (96, 349)
+samples (96,) features (423,) non zero 349
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 369
+X_fs (96, 369)
+samples (96,) features (423,) non zero 369
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (25, 423, 84) y_B (25,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (71, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (71, 423, 84) nans 0.0 y (71,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 355
+X_fs (71, 355)
+samples (71,) features (423,) non zero 355
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 349
+X_fs (96, 349)
+samples (96,) features (423,) non zero 349
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (96, 13) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 423, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 423)
+p_val (423,)
+significant 355
+X_fs (96, 355)
+samples (96,) features (423,) non zero 355
+(3, 5, 423)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (37, 693, 84) y_B (37,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (59, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (59, 693, 84) nans 0.0 y (59,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 611
+X_fs (59, 611)
+samples (59,) features (693,) non zero 611
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 562
+X_fs (96, 562)
+samples (96,) features (693,) non zero 562
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 587
+X_fs (96, 587)
+samples (96,) features (693,) non zero 587
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (33, 693, 84) y_B (33,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (63, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (63, 693, 84) nans 0.0 y (63,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 609
+X_fs (63, 609)
+samples (63,) features (693,) non zero 609
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (96, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 575
+X_fs (96, 575)
+samples (96,) features (693,) non zero 575
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (96, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 579
+X_fs (96, 579)
+samples (96,) features (693,) non zero 579
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (23, 693, 84) y_B (23,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (73, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (73, 693, 84) nans 0.0 y (73,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 619
+X_fs (73, 619)
+samples (73,) features (693,) non zero 619
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 589
+X_fs (96, 589)
+samples (96,) features (693,) non zero 589
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 578
+X_fs (96, 578)
+samples (96,) features (693,) non zero 578
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (7, 693, 84) y_B (7,) [0. 1.] ['DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (89, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (89, 693, 84) nans 0.0 y (89,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 625
+X_fs (89, 625)
+samples (89,) features (693,) non zero 625
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (96, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 561
+X_fs (96, 561)
+samples (96,) features (693,) non zero 561
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (96, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 568
+X_fs (96, 568)
+samples (96,) features (693,) non zero 568
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (26, 693, 84) y_B (26,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (70, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (70, 693, 84) nans 0.0 y (70,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 604
+X_fs (70, 604)
+samples (70,) features (693,) non zero 604
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 577
+X_fs (96, 577)
+samples (96,) features (693,) non zero 577
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 587
+X_fs (96, 587)
+samples (96,) features (693,) non zero 587
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 6 LASER 0
+X_B (6, 693, 84) y_B (6,) [0. 1.] ['DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (90, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (90, 693, 84) nans 0.0 y (90,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 627
+X_fs (90, 627)
+samples (90,) features (693,) non zero 627
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (96, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 597
+X_fs (96, 597)
+samples (96,) features (693,) non zero 597
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+y_labels (96, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 693, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 693)
+p_val (693,)
+significant 617
+X_fs (96, 617)
+samples (96,) features (693,) non zero 617
+(3, 6, 693)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (32, 444, 84) y_B (32,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (64, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (64, 444, 84) nans 0.0 y (64,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 374
+X_fs (64, 374)
+samples (64,) features (444,) non zero 374
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 381
+X_fs (96, 381)
+samples (96,) features (444,) non zero 381
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (96, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 374
+X_fs (96, 374)
+samples (96,) features (444,) non zero 374
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (13, 444, 84) y_B (13,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (83, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (83, 444, 84) nans 0.0 y (83,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 396
+X_fs (83, 396)
+samples (83,) features (444,) non zero 396
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (96, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 350
+X_fs (96, 350)
+samples (96,) features (444,) non zero 350
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (96, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 374
+X_fs (96, 374)
+samples (96,) features (444,) non zero 374
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (8, 444, 84) y_B (8,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (88, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (88, 444, 84) nans 0.0 y (88,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 385
+X_fs (88, 385)
+samples (88,) features (444,) non zero 385
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 369
+X_fs (96, 369)
+samples (96,) features (444,) non zero 369
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 370
+X_fs (96, 370)
+samples (96,) features (444,) non zero 370
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (2, 444, 84) y_B (2,) [1.] ['DPA' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (94, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (94, 444, 84) nans 0.0 y (94,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 385
+X_fs (94, 385)
+samples (94,) features (444,) non zero 385
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 375
+X_fs (96, 375)
+samples (96,) features (444,) non zero 375
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 384
+X_fs (96, 384)
+samples (96,) features (444,) non zero 384
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (1, 444, 84) y_B (1,) [0.] ['DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (95, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (95, 444, 84) nans 0.0 y (95,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 385
+X_fs (95, 385)
+samples (95,) features (444,) non zero 385
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 372
+X_fs (96, 372)
+samples (96,) features (444,) non zero 372
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 385
+X_fs (96, 385)
+samples (96,) features (444,) non zero 385
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 6 LASER 0
+X_B (2, 444, 84) y_B (2,) [0.] ['DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (94, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (94, 444, 84) nans 0.0 y (94,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 392
+X_fs (94, 392)
+samples (94,) features (444,) non zero 392
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 384
+X_fs (96, 384)
+samples (96,) features (444,) non zero 384
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 444, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 444)
+p_val (444,)
+significant 389
+X_fs (96, 389)
+samples (96,) features (444,) non zero 389
+(3, 6, 444)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (39, 668, 84) y_B (39,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (57, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (57, 668, 84) nans 0.0 y (57,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 586
+X_fs (57, 586)
+samples (57,) features (668,) non zero 586
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (96, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (4, 668, 84) y_B (4,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (92, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (92, 668, 84) nans 0.0 y (92,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 598
+X_fs (92, 598)
+samples (92,) features (668,) non zero 598
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 555
+X_fs (96, 555)
+samples (96,) features (668,) non zero 555
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 574
+X_fs (96, 574)
+samples (96,) features (668,) non zero 574
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (11, 668, 84) y_B (11,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (85, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (85, 668, 84) nans 0.0 y (85,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 566
+X_fs (85, 566)
+samples (85,) features (668,) non zero 566
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 579
+X_fs (96, 579)
+samples (96,) features (668,) non zero 579
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (96, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 604
+X_fs (96, 604)
+samples (96,) features (668,) non zero 604
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (2, 668, 84) y_B (2,) [0.] ['DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (94, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (94, 668, 84) nans 0.0 y (94,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 581
+X_fs (94, 581)
+samples (94,) features (668,) non zero 581
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 574
+X_fs (96, 574)
+samples (96,) features (668,) non zero 574
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 590
+X_fs (96, 590)
+samples (96,) features (668,) non zero 590
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (10, 668, 84) y_B (10,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (86, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (86, 668, 84) nans 0.0 y (86,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 596
+X_fs (86, 596)
+samples (86,) features (668,) non zero 596
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (96, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 570
+X_fs (96, 570)
+samples (96,) features (668,) non zero 570
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (96, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 592
+X_fs (96, 592)
+samples (96,) features (668,) non zero 592
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 6 LASER 0
+X_B (12, 668, 84) y_B (12,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (84, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (84, 668, 84) nans 0.0 y (84,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 563
+X_fs (84, 563)
+samples (84,) features (668,) non zero 563
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 6 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 583
+X_fs (96, 583)
+samples (96,) features (668,) non zero 583
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 6 LASER 0
+y_labels (96, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 668, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 668)
+p_val (668,)
+significant 580
+X_fs (96, 580)
+samples (96,) features (668,) non zero 580
+(3, 6, 668)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (32, 232, 84) y_B (32,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (64, 13) ['DualGo' 'DPA' 'DualNoGo']
+X (64, 232, 84) nans 0.0 y (64,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 185
+X_fs (64, 185)
+samples (64,) features (232,) non zero 185
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 13) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
 significant 195
-X_fs (128, 195)
-samples (128,) features (201,) non zero 195
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES choice TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (112, 201, 84) X_S2 (80, 201, 84)
-y_labels (192, 12) ['DPA' 'DualNoGo' 'DualGo']
-X (192, 201, 84) y (192,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 191
-X_fs (192, 191)
-samples (192,) features (201,) non zero 191
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 201, 84) X_S2 (96, 201, 84)
-X_B (192, 201, 84) y_B (192,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 201, 84) X_S2 (96, 201, 84)
-y_labels (192, 12) ['DPA' 'DualNoGo' 'DualGo']
-X (192, 201, 84) y (192,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 193
-X_fs (192, 193)
-samples (192,) features (201,) non zero 193
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 201, 84) X_S2 (64, 201, 84)
-y_labels (128, 12) ['DualGo' 'DualNoGo']
-X (128, 201, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 197
-X_fs (128, 197)
-samples (128,) features (201,) non zero 197
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 11)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (84, 201, 84) X_S2 (108, 201, 84)
-y_labels (192, 12) ['DPA' 'DualNoGo' 'DualGo']
-X (192, 201, 84) y (192,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
+X_fs (96, 195)
+samples (96,) features (232,) non zero 195
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (96, 13) ['DualGo' 'DPA' 'DualNoGo']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 208
+X_fs (96, 208)
+samples (96,) features (232,) non zero 208
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (30, 232, 84) y_B (30,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (66, 13) ['DualNoGo' 'DPA' 'DualGo']
+X (66, 232, 84) nans 0.0 y (66,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 209
+X_fs (66, 209)
+samples (66,) features (232,) non zero 209
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 200
+X_fs (96, 200)
+samples (96,) features (232,) non zero 200
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (96, 13) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 213
+X_fs (96, 213)
+samples (96,) features (232,) non zero 213
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (28, 232, 84) y_B (28,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (68, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (68, 232, 84) nans 0.0 y (68,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 201
+X_fs (68, 201)
+samples (68,) features (232,) non zero 201
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
 significant 194
-X_fs (192, 194)
-samples (192,) features (201,) non zero 194
-(3, 3, 201)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 423, 84) X_S2 (96, 423, 84)
-X_B (192, 423, 84) y_B (192,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 423, 84) X_S2 (96, 423, 84)
-y_labels (192, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 423, 84) y (192,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 404
-X_fs (192, 404)
-samples (192,) features (423,) non zero 404
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 423, 84) X_S2 (64, 423, 84)
-y_labels (128, 11) ['DualGo' 'DualNoGo']
-X (128, 423, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 404
-X_fs (128, 404)
-samples (128,) features (423,) non zero 404
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (93, 423, 84) X_S2 (99, 423, 84)
-y_labels (192, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 423, 84) y (192,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 403
-X_fs (192, 403)
-samples (192,) features (423,) non zero 403
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 423, 84) X_S2 (96, 423, 84)
-X_B (192, 423, 84) y_B (192,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 423, 84) X_S2 (96, 423, 84)
-y_labels (192, 11) ['DualNoGo' 'DualGo' 'DPA']
-X (192, 423, 84) y (192,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 409
-X_fs (192, 409)
-samples (192,) features (423,) non zero 409
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 423, 84) X_S2 (64, 423, 84)
-y_labels (128, 11) ['DualGo' 'DualNoGo']
-X (128, 423, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 407
-X_fs (128, 407)
-samples (128,) features (423,) non zero 407
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES choice TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (115, 423, 84) X_S2 (77, 423, 84)
-y_labels (192, 11) ['DualNoGo' 'DualGo' 'DPA']
-X (192, 423, 84) y (192,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 408
-X_fs (192, 408)
-samples (192,) features (423,) non zero 408
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (48, 423, 84) X_S2 (48, 423, 84)
-X_B (96, 423, 84) y_B (96,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (48, 423, 84) X_S2 (48, 423, 84)
-y_labels (96, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (96, 423, 84) y (96,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 401
-X_fs (96, 401)
-samples (96,) features (423,) non zero 401
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (32, 423, 84) X_S2 (32, 423, 84)
-y_labels (64, 11) ['DualGo' 'DualNoGo']
-X (64, 423, 84) y (64,) [0. 1. 2. 3.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 413
-X_fs (64, 413)
-samples (64,) features (423,) non zero 413
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 10)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (55, 423, 84) X_S2 (41, 423, 84)
-y_labels (96, 11) ['DPA' 'DualGo' 'DualNoGo']
-X (96, 423, 84) y (96,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 411
-X_fs (96, 411)
-samples (96,) features (423,) non zero 411
-(3, 3, 423)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 693, 84) X_S2 (96, 693, 84)
-X_B (192, 693, 84) y_B (192,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 693, 84) X_S2 (96, 693, 84)
-y_labels (192, 12) ['DualNoGo' 'DualGo' 'DPA']
-X (192, 693, 84) y (192,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 673
-X_fs (192, 673)
-samples (192,) features (693,) non zero 673
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-y_labels (128, 12) ['DualGo' 'DualNoGo']
-X (128, 693, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 673
-X_fs (128, 673)
-samples (128,) features (693,) non zero 673
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (100, 693, 84) X_S2 (92, 693, 84)
-y_labels (192, 12) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 693, 84) y (192,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 661
-X_fs (192, 661)
-samples (192,) features (693,) non zero 661
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 693, 84) X_S2 (96, 693, 84)
-X_B (192, 693, 84) y_B (192,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 693, 84) X_S2 (96, 693, 84)
-y_labels (192, 12) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 693, 84) y (192,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 669
-X_fs (192, 669)
-samples (192,) features (693,) non zero 669
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-y_labels (128, 12) ['DualGo' 'DualNoGo']
-X (128, 693, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 673
-X_fs (128, 673)
-samples (128,) features (693,) non zero 673
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES choice TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (94, 693, 84) X_S2 (98, 693, 84)
-y_labels (192, 12) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 693, 84) y (192,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 650
-X_fs (192, 650)
-samples (192,) features (693,) non zero 650
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 693, 84) X_S2 (96, 693, 84)
-X_B (192, 693, 84) y_B (192,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 693, 84) X_S2 (96, 693, 84)
-y_labels (192, 12) ['DualNoGo' 'DPA' 'DualGo']
-X (192, 693, 84) y (192,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 672
-X_fs (192, 672)
-samples (192,) features (693,) non zero 672
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 693, 84) X_S2 (64, 693, 84)
-y_labels (128, 12) ['DualGo' 'DualNoGo']
-X (128, 693, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 672
-X_fs (128, 672)
-samples (128,) features (693,) non zero 672
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 11)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (70, 693, 84) X_S2 (122, 693, 84)
-y_labels (192, 12) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 693, 84) y (192,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 660
-X_fs (192, 660)
-samples (192,) features (693,) non zero 660
-(3, 3, 693)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 444, 84) X_S2 (96, 444, 84)
-X_B (192, 444, 84) y_B (192,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 444, 84) X_S2 (96, 444, 84)
-y_labels (192, 10) ['DualNoGo' 'DualGo' 'DPA']
-X (192, 444, 84) y (192,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 429
-X_fs (192, 429)
-samples (192,) features (444,) non zero 429
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 444, 84) X_S2 (64, 444, 84)
-y_labels (128, 10) ['DualGo' 'DualNoGo']
-X (128, 444, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 435
-X_fs (128, 435)
-samples (128,) features (444,) non zero 435
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (139, 444, 84) X_S2 (53, 444, 84)
-y_labels (192, 10) ['DPA' 'DualNoGo' 'DualGo']
-X (192, 444, 84) y (192,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 424
-X_fs (192, 424)
-samples (192,) features (444,) non zero 424
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 444, 84) X_S2 (96, 444, 84)
-X_B (192, 444, 84) y_B (192,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 444, 84) X_S2 (96, 444, 84)
-y_labels (192, 10) ['DualGo' 'DualNoGo' 'DPA']
-X (192, 444, 84) y (192,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 433
-X_fs (192, 433)
-samples (192,) features (444,) non zero 433
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 444, 84) X_S2 (64, 444, 84)
-y_labels (128, 10) ['DualGo' 'DualNoGo']
-X (128, 444, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 432
-X_fs (128, 432)
-samples (128,) features (444,) non zero 432
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES choice TASK all TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (106, 444, 84) X_S2 (86, 444, 84)
-y_labels (192, 10) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 444, 84) y (192,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 425
-X_fs (192, 425)
-samples (192,) features (444,) non zero 425
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 444, 84) X_S2 (96, 444, 84)
-X_B (192, 444, 84) y_B (192,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (96, 444, 84) X_S2 (96, 444, 84)
-y_labels (192, 10) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 444, 84) y (192,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 434
-X_fs (192, 434)
-samples (192,) features (444,) non zero 434
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES distractor TASK Dual TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (64, 444, 84) X_S2 (64, 444, 84)
-y_labels (128, 10) ['DualGo' 'DualNoGo']
-X (128, 444, 84) y (128,) [0. 1. 2. 3.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 438
-X_fs (128, 438)
-samples (128,) features (444,) non zero 438
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 9)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (97, 444, 84) X_S2 (95, 444, 84)
-y_labels (192, 10) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 444, 84) y (192,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 422
-X_fs (192, 422)
-samples (192,) features (444,) non zero 422
-(3, 3, 444)
+X_fs (96, 194)
+samples (96,) features (232,) non zero 194
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 201
+X_fs (96, 201)
+samples (96,) features (232,) non zero 201
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (30, 232, 84) y_B (30,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (66, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (66, 232, 84) nans 0.0 y (66,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 207
+X_fs (66, 207)
+samples (66,) features (232,) non zero 207
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 202
+X_fs (96, 202)
+samples (96,) features (232,) non zero 202
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DualGo' 'DPA']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 202
+X_fs (96, 202)
+samples (96,) features (232,) non zero 202
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (17, 232, 84) y_B (17,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (79, 13) ['DualNoGo' 'DPA' 'DualGo']
+X (79, 232, 84) nans 0.0 y (79,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 204
+X_fs (79, 204)
+samples (79,) features (232,) non zero 204
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DPA' 'DualGo']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 196
+X_fs (96, 196)
+samples (96,) features (232,) non zero 196
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 12)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (96, 13) ['DualNoGo' 'DPA' 'DualGo']
+X (96, 232, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 232)
+p_val (232,)
+significant 202
+X_fs (96, 202)
+samples (96,) features (232,) non zero 202
+(3, 5, 232)
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (90, 361, 84) y_B (90,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (102, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (102, 361, 84) nans 0.0 y (102,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 320
+X_fs (102, 320)
+samples (102,) features (361,) non zero 320
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 306
+X_fs (192, 306)
+samples (192,) features (361,) non zero 306
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 299
+X_fs (192, 299)
+samples (192,) features (361,) non zero 299
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (74, 361, 84) y_B (74,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (118, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (118, 361, 84) nans 0.0 y (118,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 315
+X_fs (118, 315)
+samples (118,) features (361,) non zero 315
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (192, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 321
+X_fs (192, 321)
+samples (192,) features (361,) non zero 321
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (192, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 316
+X_fs (192, 316)
+samples (192,) features (361,) non zero 316
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (40, 361, 84) y_B (40,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (152, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (152, 361, 84) nans 0.0 y (152,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 328
+X_fs (152, 328)
+samples (152,) features (361,) non zero 328
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (192, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 291
+X_fs (192, 291)
+samples (192,) features (361,) non zero 291
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (192, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 311
+X_fs (192, 311)
+samples (192,) features (361,) non zero 311
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (24, 361, 84) y_B (24,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (168, 15) ['DualGo' 'DualNoGo' 'DPA']
+X (168, 361, 84) nans 0.0 y (168,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 319
+X_fs (168, 319)
+samples (168,) features (361,) non zero 319
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (192, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 307
+X_fs (192, 307)
+samples (192,) features (361,) non zero 307
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (192, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 316
+X_fs (192, 316)
+samples (192,) features (361,) non zero 316
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (11, 361, 84) y_B (11,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (181, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (181, 361, 84) nans 0.0 y (181,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 326
+X_fs (181, 326)
+samples (181,) features (361,) non zero 326
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 311
+X_fs (192, 311)
+samples (192,) features (361,) non zero 311
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (192, 361, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 361)
+p_val (361,)
+significant 300
+X_fs (192, 300)
+samples (192,) features (361,) non zero 300
+(3, 5, 361)
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 1 LASER 0
+X_B (96, 113, 84) y_B (96,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (96, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (96, 113, 84) nans 0.0 y (96,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 98
+X_fs (96, 98)
+samples (96,) features (113,) non zero 98
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 1 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 101
+X_fs (192, 101)
+samples (192,) features (113,) non zero 101
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 1 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DualGo' 'DPA']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 100
+X_fs (192, 100)
+samples (192,) features (113,) non zero 100
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 2 LASER 0
+X_B (79, 113, 84) y_B (79,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (113, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (113, 113, 84) nans 0.0 y (113,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 99
+X_fs (113, 99)
+samples (113,) features (113,) non zero 99
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 2 LASER 0
+y_labels (192, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 92
+X_fs (192, 92)
+samples (192,) features (113,) non zero 92
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 2 LASER 0
+y_labels (192, 15) ['DPA' 'DualGo' 'DualNoGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 98
+X_fs (192, 98)
+samples (192,) features (113,) non zero 98
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 3 LASER 0
+X_B (69, 113, 84) y_B (69,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (123, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (123, 113, 84) nans 0.0 y (123,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 93
+X_fs (123, 93)
+samples (123,) features (113,) non zero 93
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 3 LASER 0
+y_labels (192, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 95
+X_fs (192, 95)
+samples (192,) features (113,) non zero 95
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 3 LASER 0
+y_labels (192, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 91
+X_fs (192, 91)
+samples (192,) features (113,) non zero 91
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 4 LASER 0
+X_B (62, 113, 84) y_B (62,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (130, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (130, 113, 84) nans 0.0 y (130,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 101
+X_fs (130, 101)
+samples (130,) features (113,) non zero 101
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 4 LASER 0
+y_labels (192, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 92
+X_fs (192, 92)
+samples (192,) features (113,) non zero 92
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 4 LASER 0
+y_labels (192, 15) ['DualGo' 'DPA' 'DualNoGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 96
+X_fs (192, 96)
+samples (192,) features (113,) non zero 96
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES sample TASK all TRIALS incorrect DAYS 5 LASER 0
+X_B (39, 113, 84) y_B (39,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+DATA: FEATURES sample TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (153, 15) ['DPA' 'DualNoGo' 'DualGo']
+X (153, 113, 84) nans 0.0 y (153,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 97
+X_fs (153, 97)
+samples (153,) features (113,) non zero 97
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS correct DAYS 5 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 95
+X_fs (192, 95)
+samples (192,) features (113,) non zero 95
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 14)
+DATA: FEATURES choice TASK all TRIALS  DAYS 5 LASER 0
+y_labels (192, 15) ['DualNoGo' 'DPA' 'DualGo']
+X (192, 113, 84) nans 0.0 y (192,) [0. 1.]
+boots_coefs (1000, 113)
+p_val (113,)
+significant 90
+X_fs (192, 90)
+samples (192,) features (113,) non zero 90
+(3, 5, 113)
 #+end_example
 
 #+begin_src ipython
@@ -1405,7 +2410,15 @@ print(len(coefs_mice))
 #+end_src
 
 #+RESULTS:
-: 5
+: 9
+
+#+begin_src ipython
+idx = 3
+print(options['mice'][idx], coefs_mice[idx].shape)
+#+end_src
+
+#+RESULTS:
+: JawsM15 (3, 6, 693)
 
 #+begin_src ipython
 angle_SD_mice = []
@@ -1420,12 +2433,16 @@ for j, mouse in enumerate(options['mice']):
     try:
         coefs = coefs_mice[j]
 
-        for i in range(6):
+        for i in range(len(options['days'])):
             try:
                 angle_SD.append(angle_AB(-coefs[0][i], -coefs[1][i]))
                 angle_SC.append(angle_AB(-coefs[0][i], -coefs[2][i]))
                 angle_DC.append(angle_AB(-coefs[2][i], -coefs[1][i]))
-            except:
+
+            except Exception as e:
+                error_message = str(e)
+                print(f"An error occurred: {error_message}")
+                print(i)
                 angle_SD.append(np.nan)
                 angle_SC.append(np.nan)
                 angle_DC.append(np.nan)
@@ -1441,6 +2458,8 @@ for j, mouse in enumerate(options['mice']):
 #+end_src
 
 #+RESULTS:
+: An error occurred: index 4 is out of bounds for axis 0 with size 4
+: 4
 
 #+begin_src ipython
 angle_SD_mice = np.array(angle_SD_mice)
@@ -1451,9 +2470,16 @@ angle_DC_mice = np.array(angle_DC_mice)
 #+RESULTS:
 
 #+begin_src ipython
-fig, ax = plt.subplots(1, 3, figsize= [3*width , width * golden_ratio], sharey=False)
+print(angle_SD_mice.shape, options['days'])
+#+end_src
 
-options['days'] = np.arange(1, 7)
+#+RESULTS:
+: (9, 5) [1 2 3 4 5]
+
+#+begin_src ipython
+fig, ax = plt.subplots(1, 3, figsize= [3*width , width * golden_ratio], sharex=True)
+
+# options['days'] = np.arange(1, 7)
 
 for i in range(angle_SD_mice.shape[0]):
     ax[0].plot(options['days'], angle_SD_mice[i]-90, '-o', alpha=0.2)
@@ -1474,18 +2500,18 @@ ax[2].plot(options['days'], np.nanmean(angle_DC_mice-90, 0), '-ko')
 ax[2].set_xlabel('Day')
 ax[2].set_ylabel('Angle Go/noGo vs Choice(°)')
 ax[2].axhline(0, ls='--', color='k')
+# ax[0].set_xticks([1,2,3,4,5,6])
 
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_28.png]]
+[[./figures/landscape/figure_32.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(1, 3, figsize= [3*width , width * golden_ratio], sharey=True)
 
-options['days'] = np.arange(1, 7)
-# options['days'] = ['first', ]
+# options['days'] = np.arange(1, 7)
 
 for i in range(angle_SD_mice.shape[0]):
     ax[0].plot(options['days'], np.abs(angle_SD_mice[i]-90), '-o', alpha=0.2)
@@ -1511,140 +2537,289 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_29.png]]
+[[./figures/landscape/figure_33.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
 
 * Reload data
 
 #+begin_src ipython
-idx = 2
-options['days'] = ['first', 'middle', 'last']
-coefs = coefs_mice[idx]
-theta = get_theta(-coefs[0], -coefs[-1], IF_NORM=0, GM=0)
-print(theta.shape)
-index = np.argsort(theta, -1)
-print(index.shape)
-#+end_src
+coefs_mice = []
 
-#+RESULTS:
-: (3, 423)
-: (3, 423)
+for mouse in options['mice']:
+    options['mouse'] = mouse
+    coefs_mice.append(pkl_load('%s_coefs_%.2f_l1_ratio%s' % (options['mouse'], options['l1_ratio'], options['fname']), path="/storage/leon/dual_task/data/%s/" % options['mouse']))
 
-#+begin_src ipython
-options['mouse'] = options['mice'][idx]
-options['features'] = 'sample'
-options['verbose'] = 1
-
-options['trials'] = ''
-options['reload'] = 0
-
-X_list = []
-y_list = []
-tasks = ["DPA", "DualGo", "DualNoGo"]
-
-for i, day in enumerate(options['days']):
-    X_dum = []
-    y_dum = []
-    options['day'] = day
-    for task in tasks:
-        options['task'] = task
-        X_days, y_days = get_X_y_days(**options)
-        X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
-        # y_data[y_data==-1] = 0
-
-
-        X_dum.append(X_data[..., index[i], :])
-        y_dum.append(y_data.sample_odor.to_numpy())
-
-    X_list.append(X_dum)
-    y_list.append(y_dum)
-
-try:
-    X_list = np.array(X_list)
-    y_list = np.array(y_list)
-
-    print(X_list.shape, y_list.shape)
-except:
-    pass
-#+end_src
-
-#+RESULTS:
-#+begin_example
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DPA TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (32, 423, 84) X_S2 (32, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (32, 423, 84) X_S2 (32, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS first LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (32, 423, 84) X_S2 (32, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DPA TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (32, 423, 84) X_S2 (32, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (32, 423, 84) X_S2 (32, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS middle LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (32, 423, 84) X_S2 (32, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DPA TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (16, 423, 84) X_S2 (16, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DualGo TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (16, 423, 84) X_S2 (16, 423, 84)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-DATA: FEATURES sample TASK DualNoGo TRIALS  DAYS last LASER 0
-multiple days, discard 0 first 2 middle 2
-X_S1 (16, 423, 84) X_S2 (16, 423, 84)
-#+end_example
-
-
-#+begin_src ipython
-# X_list = np.array(X_list)
-# print(X_list.shape, y_list.shape)
-# print(np.array(X_list[0]).mean(0).shape)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-import matplotlib.pyplot as plt
+X_mouse, y_mouse = [], []
 
-def add_vdashed(ax=None, y0=693, mouse=""):
-    # Define time intervals
-    t_STIM = [2, 3]
-    t_DIST = [4.5, 5.5]
-    t_CUE = [6.5, 7]
-    t_TEST = [9, 10]
+for idx, mouse in enumerate(options['mice']):
+    options['mouse'] = mouse
+    options['features'] = 'sample'
+    options['verbose'] = 0
 
-    # Add vertical dashed lines and text labels for each interval
-    if ax is not None:
-        # Draw vertical lines
-        for t in [t_STIM, t_DIST, t_CUE, t_TEST]:
-            ax.axvline(x=t[0], linestyle='--', color='k', lw=2)
-            ax.axvline(x=t[1], linestyle='--', color='k', lw=2)
+    options['trials'] = ''
+    options['reload'] = 0
 
-        # Add text labels at the middle of each interval
-        ax.text((t_STIM[0] + t_STIM[1]) / 2, y0, 'A/B', color='black',
-                horizontalalignment='center', verticalalignment='center', fontsize=16)
-        ax.text((t_DIST[0] + t_DIST[1]) / 2, y0, 'GnG', color='black',
-                horizontalalignment='center', verticalalignment='center', fontsize=16)
-        ax.text((t_CUE[0] + t_CUE[1]) / 2, y0, 'CUE', color='black',
-                horizontalalignment='center', verticalalignment='center', fontsize=16)
-        ax.text((t_TEST[0] + t_TEST[1]) / 2, y0, 'TEST', color='black',
-                horizontalalignment='center', verticalalignment='center', fontsize=16)
+    options = set_options(**options)
+
+    coefs = coefs_mice[idx]
+    theta = get_theta(coefs[0], coefs[-1], IF_NORM=1, GM=1)
+    index = np.argsort(theta, -1)
+    print(theta.shape, index.shape)
+
+    X_list = []
+    y_list = []
+    tasks = ["DPA", "DualGo", "DualNoGo"]
+
+    for i, day in enumerate(options['days']):
+        X_dum = []
+        y_dum = []
+        options['day'] = day
+        for task in tasks:
+            options['task'] = task
+            X_days, y_days = get_X_y_days(**options)
+            X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+            X_dum.append(X_data[..., index[i], :])
+            y_dum.append(y_data.sample_odor.to_numpy())
+
+        X_list.append(X_dum)
+        y_list.append(y_dum)
+
+    X_mouse.append(X_list)
+    y_mouse.append(y_list)
 #+end_src
 
 #+RESULTS:
+: (4, 184) (4, 184)
+: (6, 201) (6, 201)
+: (5, 423) (5, 423)
+: (6, 693) (6, 693)
+: (6, 444) (6, 444)
+: (6, 668) (6, 668)
+: (5, 232) (5, 232)
+: (5, 361) (5, 361)
+: (5, 113) (5, 113)
+
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Energy
+
+#+begin_src ipython
+from src.attractor.landscape import EnergyLandscape
+energy = EnergyLandscape(IF_HMM=0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+num_bins = 64
+window = 10
+bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
+if len(options['days'])>3:
+     days = np.arange(1, 7)
+else:
+     days = options['days']
+
+print(days)
+#+end_src
+
+#+RESULTS:
+: [1 2 3 4 5 6]
+
+#+begin_src ipython
+epoch = np.concatenate((options['bins_BL'], options['bins_DELAY']))
+energy_mouse, ci_mouse = [], []
+
+for idx, mouse in enumerate(options['mice']):
+    X_list = X_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    energy_day = []
+    ci_day = []
+
+    for i, day in enumerate(options['days']):
+        X = np.vstack(X_list[i])
+        X = X[..., options['bins_ED']]
+        # X = X[..., epoch]
+
+        # X = X_list[i][0]
+        # X = X[..., options['bins_DELAY']]
+        # X = X[..., epoch]
+
+        # print(X.shape)
+        _, phi = decode_bump(X, axis=1)
+
+        landscape = energy.fit(phi, bins, window=window)
+        energy_day.append(landscape)
+
+        ci = None
+        ci_day.append(ci)
+
+    energy_mouse.append(energy_day)
+    ci_mouse.append(ci_day)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+cmap = plt.get_cmap('Blues')
+colors = [cmap((i+1)/6) for i in range(7)]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from scipy.signal import find_peaks, find_peaks_cwt
+
+minima_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])[:, 0]
+        # print(minimas)
+
+        if len(minimas)<2:
+            minimas = [minimas[0], minimas[0]]
+
+        minima_mouse[idx][i] = minimas[:2]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+y_loc = []
+for idx, mouse in enumerate(options['mice']):
+     id = ~np.isnan(minima_mouse[idx].T)
+     minima = minima_mouse[idx].T
+
+     # y1 = locations[minima[0][id[0]].astype('int')] * np.pi / 180.0
+     # y2 = locations[minima[1][id[1]].astype('int')] * np.pi / 180.0
+
+     y1 = minima[0][id[0]].astype('int') * np.pi / 180.0
+     y2 = minima[1][id[1]].astype('int') * np.pi / 180.0
+
+     y_mean = (np.sin(y1)+np.sin(y2)) / 2
+
+     while len(y_mean)<len(days):
+          y_mean = np.append(y_mean, np.nan)
+
+     y_loc.append(y_mean)
+
+y_loc = np.array(y_loc)
+
+plt.plot(np.arange(1, len(days)+1), np.nanmean(y_loc, 0), '-o')
+plt.plot(np.arange(1, len(days)+1), y_loc.T, '-', alpha=.2)
+
+# plt.xticks(np.arange(1, 7))
+plt.axhline(0, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('Y-loc (a.u.)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_43.png]]
+
+#+begin_src ipython
+from scipy.signal import find_peaks
+fig, ax = plt.subplots(3, 3, figsize= [3*width, 3*width * golden_ratio])
+ax_flat = ax.flatten()
+
+minima_mouse = np.zeros((9, 6, 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    peaks_list, minimas_list = [], []
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    ax = ax_flat[idx]
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+        ax.plot(locations, energy_day[i] * 100 , color=colors[i])
+        ax.set_title(mouse)
+
+        # peaks = find_peaks_cwt(energy_day[i], widths=np.arange(1, 10))[:2]
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))[:2]
+
+        # peaks,  _ = find_peaks(energy_day[i], width=8)[:2]
+        # minimas, _ = find_peaks(-energy_day[i], width=8)[:2]
+
+        # ax.plot(locations[peaks], energy_day[i][peaks] * 100, '^', color=colors[i])
+        # ax.plot(locations[minimas], energy_day[i][minimas] * 100, 'o', color=colors[i])
+
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])
+        ax.plot(minimas[:, 0], minimas[:, 1] * 100, 'o', color=colors[i])
+
+        minima_mouse[idx][i] = minimas[:2, 0]
+
+        # if len(peaks)<2:
+        #     peaks =[peaks[0], peaks[0]]
+        # if len(minimas)<2:
+        #     minimas = [minimas[0], minimas[0]]
+
+        # peaks_list.append(peaks[:1])
+        # minimas_list.append(minimas[:1])
+
+        # print(peaks, minimas)
+
+        ax.set_xlabel('Pref Loc (°)')
+        ax.set_ylabel('Energy')
+        # ax.set_ylim([0, 3])
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_44.png]]
+
+   #+begin_src ipython
+   import numpy as np
+
+   def bimodal_gaussian(x, A1, mu1, sigma1, A2, mu2, sigma2):
+       g1 = A1 * np.exp(-(x - mu1)**2 / (2 * sigma1**2))
+       g2 = A2 * np.exp(-(x - mu2)**2 / (2 * sigma2**2))
+       return g1 + g2
+   #+end_src
+
+#+RESULTS:
+
+   #+begin_src ipython
+   from scipy.optimize import curve_fit
+   initial_guesses = [1, 0, 5, 1, 180, 5] # Example: [A1, mu1, sigma1, A2, mu2, sigma2]
+   # params, covariance = curve_fit(bimodal_gaussian, locations, energy_day[0]*100, p0=initial_guesses)
+   # print(params[1], params[4])
+   #+end_src
+
+#+RESULTS:
+
+* Bumps
 
 #+begin_src ipython
 def plot_bump(X, y, trial, windowSize=10, width=7, s=0):
@@ -1722,10 +2897,6 @@ def plot_bump(X, y, trial, windowSize=10, width=7, s=0):
     # cbar.set_ticks([-0.5, 0.0, 0.5, 1.0, 1.5])
  #+end_src
 
-#+RESULTS:
-
-* Bumps
-
 #+begin_src ipython
 from src.preprocess.helpers import preprocess_X
 day = -1
@@ -1742,8 +2913,28 @@ plt.show()
 
 #+RESULTS:
 :RESULTS:
-: 21
-[[./figures/landscape/figure_35.png]]
+: 13
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+Cell In[166], line 9
+      6 idx = np.random.randint(X_norm.shape[0]//2)
+      7 print(idx)
+----> 9 plot_bump(X_norm, y_list[day][ task], trial=idx, windowSize=int(0.1 * X_norm.shape[1]), s=1)
+     10 plt.savefig('./cosyne/dpa_bump.svg', dpi=300)
+     11 plt.show()
+
+Cell In[147], line 67, in plot_bump(X, y, trial, windowSize, width, s)
+     65 ax[i].set_xlim([0, 12])
+     66 if i==0:
+---> 67     add_vdashed(ax[i], y0=X_.shape[0]+10)
+     68 else:
+     69     add_vdashed(ax[i], y0=370)
+
+TypeError: add_vdashed() got an unexpected keyword argument 'y0'
+#+end_example
+[[./figures/landscape/figure_45.png]]
 :END:
 
 #+begin_src ipython
@@ -1761,8 +2952,28 @@ plt.show()
 
 #+RESULTS:
 :RESULTS:
-: 3
-[[./figures/landscape/figure_36.png]]
+: 13
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+Cell In[167], line 8
+      6 idx = np.random.randint(X_norm.shape[0]//2)
+      7 print(idx)
+----> 8 plot_bump(X_norm, y_list[day][ task], trial=idx, windowSize=int(0.1 * X_norm.shape[1]))
+      9 plt.savefig('./cosyne/dualgo_bump.svg', dpi=300)
+     10 plt.show()
+
+Cell In[147], line 67, in plot_bump(X, y, trial, windowSize, width, s)
+     65 ax[i].set_xlim([0, 12])
+     66 if i==0:
+---> 67     add_vdashed(ax[i], y0=X_.shape[0]+10)
+     68 else:
+     69     add_vdashed(ax[i], y0=370)
+
+TypeError: add_vdashed() got an unexpected keyword argument 'y0'
+#+end_example
+[[./figures/landscape/figure_46.png]]
 :END:
 
 #+begin_src ipython
@@ -1780,559 +2991,26 @@ plt.show()
 
 #+RESULTS:
 :RESULTS:
-: 22
-[[./figures/landscape/figure_37.png]]
-:END:
-
-* Energy
-
-#+begin_src ipython
-from src.attractor.landscape import EnergyLandscape
-energy = EnergyLandscape()
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-num_bins = 96
-bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  energy_day = []
-  ci_day = []
-
-  for i, day in enumerate(options['days']):
-      # X = np.vstack(X_list[i, ..., options['bins_ED']])
-      print('X', X_list.shape)
-
-      X = X_list[i, 0, :, options['bins_DELAY']]
-      print('X', X.shape)
-
-      _, phi = decode_bump(X, axis=-1)
-
-      print('phi', phi.shape, phi.min() * 180 / np.pi, phi.max() * 180 / np.pi)
-
-      landscape = energy.fit(phi, bins, window=10)
-      energy_day.append(landscape)
-
-      ci = None
-      ci_day.append(ci)
-#+end_src
-
-#+RESULTS:
-: X (3, 3, 64, 444, 84)
-: X (36, 64, 84)
-: phi (36, 64) 0.0 359.9398412457152
-: X (3, 3, 64, 444, 84)
-: X (36, 64, 84)
-: phi (36, 64) 0.611908029910187 359.8651881568341
-: X (3, 3, 64, 444, 84)
-: X (36, 64, 84)
-: phi (36, 64) 0.5353325172432484 359.7536377076096
-
-#+begin_src ipython
-  cmap = plt.get_cmap('Blues')
-  colors = [cmap((i+1)/len(options['days'])) for i in range(len(options['days']))]
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-for i, day in enumerate(options['days']):
-      plt.plot(np.linspace(0, 360, landscape.shape[0]), circcvl(energy_day[i], windowSize=10) * 100, color=colors[i])
-
-plt.xlabel('Pref Loc (°)')
-plt.ylabel('Energy')
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./figures/landscape/figure_42.png]]
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-* Energy
-
-#+begin_src ipython
-    opts = set_options(T_WINDOW=0.0)
-    bins0 = None
-    bins = None
-    # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-    # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
-    # bins0 = opts['bins_ED']
-    # bins = np.concatenate( (opts['bins_BL'], opts['bins_STIM'], opts['bins_ED']))
-    # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED'], opts['bins_MD'], opts['bins_LD']))
-    # bins = opts['bins_PRE_DIST']
-    bins = opts['bins_DELAY']
-
-    # bins = np.concatenate( (opts['bins_BL'], opts['bins_ED']))
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  task = 0
-  kwargs['task'] = task
-
-  num_bins = 96
-  print('num_bins', num_bins)
-
-  window = 0.1
-  print('window', window)
-
-  IF_HMM = 0
-  n_iter = 100
-  IF_BOOT=0
-  IF_NORM=0
-#+end_src
-
-#+RESULTS:
-: num_bins 96
-: window 0.1
-
-#+begin_src ipython
-  energy_day = []
-  ci_day = []
-
-  for i, day in enumerate(options['days']):
-      energy, ci = get_energy(X_list[i], y_list[i], task, num_bins, bins, bins0, window, IF_BOOT, IF_NORM, IF_HMM, n_iter)
-      energy_day.append(energy)
-      ci_day.append(ci)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  from scipy.signal import find_peaks
-  import numpy as np
-
-  def find_minima(energy, ax, color, window=0.1, prominence=1, distance=90, height=0.5):
-      energy = energy[1:]
-      windowSize = int(window * energy.shape[0])
-
-      # Smooth the energy data
-      # window = np.ones(windowSize) / windowSize
-      # energy_smoothed = np.convolve(energy, window, mode='same')
-      energy_smoothed = circcvl(energy, windowSize=windowSize)
-
-      # Invert the energy to find minima as peaks
-      inv_energy = np.max(energy_smoothed) - energy_smoothed
-      # inv_energy = np.mean(energy_smoothed) - energy_smoothed
-
-      # Find peaks with higher prominence for global minima identification
-      peaks, properties = find_peaks(inv_energy, prominence=prominence, distance=distance, height=height)
-
-      theta = np.linspace(0, 360, energy.shape[0], endpoint=False)
-      minima_angles = theta[peaks]
-      minima_energy = energy[peaks]
-
-      # Filter out closely spaced minima based on the threshold
-      filtered_minima_angles = []
-      filtered_minima_energy = []
-
-      for i in range(len(minima_angles)):
-          if minima_energy[i]>0:
-              filtered_minima_angles.append(minima_angles[i])
-              filtered_minima_energy.append(0)
-
-      print(filtered_minima_angles)
-      # print(minima_energy)
-
-      # Plot results
-      ax.plot(filtered_minima_angles[:2], filtered_minima_energy[:2], 'o', color=color, ms=10)
-
-      # if len(filtered_minima_angles) >= 2:
-      #     angular_distances = np.abs(filtered_minima_angles[0] % 180 - filtered_minima_angles[1] % 180)
-      #     print(f"The distance between the two main minima is {angular_distances} degrees.")
-      # else:
-      #     print("Less than two main minima found.")
-
-      return filtered_minima_angles[:2], filtered_minima_energy[:2]
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-from matplotlib.patches import Circle
-
-def plot_fix_points(phi, ax, color='k', title=''):
-
-    x = np.cos(phi)
-    y = np.sin(phi)
-
-    ax.plot(x, y, 'o', ms=15, color=color, markeredgecolor='k')
-    circle = Circle((0., 0.), 1, fill=False, edgecolor='k')
-    ax.add_patch(circle)
-
-    ax.set_aspect('equal')
-    ax.set_title(title)
-    ax.axis('off')
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  days = options['days']
-  cmap = plt.get_cmap('Blues')
-  colors = [cmap((i+1)/len(options['days'])) for i in range(len(options['days']))]
-  window = .1
-
-  min_angles, min_energies = [], []
-  theta = np.linspace(0, 360, energy_day[0].shape[0], endpoint=False)
-  windowSize = int(window * energy_day[0].shape[0])
-
-  fig, ax = plt.subplots(1, 2, figsize= [2*width, height])
-  for i, day in enumerate(options['days']):
-      plot_theta_energy(0, energy_day[i], ci_day[i],
-                        window=window, ax=ax[0], SMOOTH=1, color=colors[i])
-
-      minima = find_multiple_minima_from_values(theta, circcvl(energy_day[i]*100, windowSize), num_minima=2,
-                                                num_runs=360, tol=.1, ax=ax[0], min_distance=40, popsize=1, color=colors[i])
-      # print(minima)
-      plot_fix_points(np.array(minima[:2]) * np.pi / 180.0, ax[1], color=colors[i])
-      min_angles.append(minima[:2])
-      # maxima = find_multiple_minima_from_values(theta, -circcvl(energy_day[i][1:]*100, windowSize), num_minima=10, num_runs=1000,
-      #                                           tol=.01, ax=ax[0],
-      #                                           min_distance=0, popsize=1, color='w')
-      # # print(maxima)
-      # plot_fix_points(np.array(maxima[:2]) * np.pi / 180.0, ax[1], color='w')
-
-  fig.savefig('./cosyne/%s_landscape_days.svg' % options['mouse'], dpi=300)
-  # fig.savefig('./cosyne/%s_landscape_days.svg' % options['mouse'], dpi=300)
-#+end_src
-
-#+RESULTS:
-[[./figures/landscape/figure_49.png]]
-
- #+begin_src ipython
-print(min_angles)
-a = np.array(min_angles[:])
-pkl_save(a, 'minima_%s' % options['mouse'], path=".")
-#+end_src
-
-#+RESULTS:
-: [[27.814288319019422, 121.47710789250513], [354.37476510895465, 163.77766964907946], [206.38321738390303, 38.692533620273146]]
-
-#+begin_src ipython
-plt.plot((np.sin(a[:,0]*np.pi/180)+np.sin(a[:,1]*np.pi/180))/2, '-o')
-plt.xlabel('Day')
-plt.ylabel('Y-location')
-fig.savefig('./cosyne/%s_land_y.svg' % options['mouse'], dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./figures/landscape/figure_51.png]]
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-yloc = []
-for mouse in options['mice']:
-    a = pkl_load('minima_%s' % mouse, path=".")
-    if a.shape[0]==5:
-        a = np.vstack((a, [np.nan, np.nan]))
-    yloc.append(a)
-yloc = np.array(yloc[:])
-yloc_mean = np.nanmean(np.array(yloc[:]), 0)
-#+end_src
-
-#+RESULTS:
-:RESULTS:
+: 7
 # [goto error]
 #+begin_example
 ---------------------------------------------------------------------------
-FileNotFoundError                         Traceback (most recent call last)
-Cell In[246], line 3
-      1 yloc = []
-      2 for mouse in options['mice']:
-----> 3     a = pkl_load('minima_%s' % mouse, path=".")
-      4     if a.shape[0]==5:
-      5         a = np.vstack((a, [np.nan, np.nan]))
+TypeError                                 Traceback (most recent call last)
+Cell In[168], line 8
+      6 idx = np.random.randint(X_norm.shape[0]//2)
+      7 print(idx)
+----> 8 plot_bump(X_norm, y_list[day][ task], trial=idx, windowSize=64)
+      9 plt.savefig('./cosyne/dualnogo_bump.svg', dpi=300)
+     10 plt.show()
 
-Cell In[11], line 8, in pkl_load(name, path)
-      7 def pkl_load(name, path="."):
-----> 8     return pkl.load(open(path + "/" + name + '.pkl', "rb"))
+Cell In[147], line 67, in plot_bump(X, y, trial, windowSize, width, s)
+     65 ax[i].set_xlim([0, 12])
+     66 if i==0:
+---> 67     add_vdashed(ax[i], y0=X_.shape[0]+10)
+     68 else:
+     69     add_vdashed(ax[i], y0=370)
 
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/IPython/core/interactiveshell.py:284, in _modified_open(file, *args, **kwargs)
-    277 if file in {0, 1, 2}:
-    278     raise ValueError(
-    279         f"IPython won't let you open fd={file} by default "
-    280         "as it is likely to crash IPython. If you know what you are doing, "
-    281         "you can use builtins' open."
-    282     )
---> 284 return io_open(file, *args, **kwargs)
-
-FileNotFoundError: [Errno 2] No such file or directory: './minima_JawsM01.pkl'
+TypeError: add_vdashed() got an unexpected keyword argument 'y0'
 #+end_example
-:END:
-
-#+begin_src ipython
-print(yloc.shape)
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: AttributeError                            Traceback (most recent call last)
-: Cell In[247], line 1
-: ----> 1 print(yloc.shape)
-:
-: AttributeError: 'list' object has no attribute 'shape'
-:END:
-
-#+begin_src ipython
-for i in range(yloc.shape[0]):
-    plt.plot(np.arange(1, 7), (np.sin(yloc[i,:,0]*np.pi/180)+np.sin(yloc[i,:,1]*np.pi/180))/2, '-o', alpha=0.1)
-plt.plot(np.arange(1, 7), (np.sin(yloc_mean[:,0]*np.pi/180)+np.sin(yloc_mean[:,1]*np.pi/180))/2, '-ko')
-plt.axhline(0, ls='--', color='k')
-plt.xlabel('Day')
-plt.ylabel('GnG-projection')
-plt.xticks([1,2,3,4,5,6])
-plt.savefig('./cosyne/landscape_yloc.svg', dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: AttributeError                            Traceback (most recent call last)
-: Cell In[248], line 1
-: ----> 1 for i in range(yloc.shape[0]):
-:       2     plt.plot(np.arange(1, 7), (np.sin(yloc[i,:,0]*np.pi/180)+np.sin(yloc[i,:,1]*np.pi/180))/2, '-o', alpha=0.1)
-:       3 plt.plot(np.arange(1, 7), (np.sin(yloc_mean[:,0]*np.pi/180)+np.sin(yloc_mean[:,1]*np.pi/180))/2, '-ko')
-:
-: AttributeError: 'list' object has no attribute 'shape'
-:END:
-
-#+begin_src ipython
-ang_list = []
-for mouse in options['mice']:
-    angle = pkl_load('angle_%s' % mouse, path=".")
-    if len(angle) ==5:
-        angle = np.hstack( (angle, np.nan))
-
-    ang_list.append(angle)
-ang_list = np.array(ang_list)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-print(ang_list)
-#+end_src
-#+RESULTS:
-: [[89. 81. nan nan nan nan]
-:  [90. 89. 87. nan nan nan]
-:  [90. 89. 90. nan nan nan]
-:  [95. 89. 89. nan nan nan]
-:  [90. 91. 89. nan nan nan]]
-
-#+begin_src ipython
-for i in range(yloc.shape[0]):
-    plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
-plt.plot(np.arange(1, 7), np.nanmean(ang_list, 0), '-ko')
-plt.axhline(90, ls='--', color='k')
-plt.xlabel('Day')
-plt.ylabel('Angle A/B-GnG (°)')
-plt.xticks([1,2,3,4,5,6])
-plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: AttributeError                            Traceback (most recent call last)
-: Cell In[251], line 1
-: ----> 1 for i in range(yloc.shape[0]):
-:       2     plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
-:       3 plt.plot(np.arange(1, 7), np.nanmean(ang_list, 0), '-ko')
-:
-: AttributeError: 'list' object has no attribute 'shape'
-:END:
-
-#+begin_src ipython
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy import stats
-
-# Sample data
-# yloc, ang_list = ... (Ensure these are defined appropriately)
-
-confidence_level = 0.95
-
-mean_angles = np.nanmean(ang_list, axis=0)
-n = ang_list.shape[0]
-
-# Standard error of the mean
-sem = stats.sem(ang_list, axis=0, nan_policy='omit')
-
-# Compute confidence intervals
-confidence_intervals = stats.t.interval(confidence_level, n-1, loc=mean_angles, scale=sem)
-
-# Plotting
-for i in range(yloc.shape[0]):
-    plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
-
-plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
-
-# Plot confidence intervals
-plt.fill_between(np.arange(1, 7), confidence_intervals[0], confidence_intervals[1], color='gray', alpha=0.2, label='Confidence Interval')
-
-plt.axhline(90, ls='--', color='k')
-plt.xlabel('Day')
-plt.ylabel('Angle A/B-GnG (°)')
-plt.xticks([1, 2, 3, 4, 5, 6])
-
-plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: AttributeError                            Traceback (most recent call last)
-: Cell In[252], line 20
-:      17 confidence_intervals = stats.t.interval(confidence_level, n-1, loc=mean_angles, scale=sem)
-:      19 # Plotting
-: ---> 20 for i in range(yloc.shape[0]):
-:      21     plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
-:      23 plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
-:
-: AttributeError: 'list' object has no attribute 'shape'
-:END:
-
-   #+begin_src ipython
-   import numpy as np
-   import matplotlib.pyplot as plt
-   from scipy import stats
-
-   # Function to perform bootstrap resampling
-   def bootstrap_conf_int(data, num_samples=1000, confidence_level=0.95):
-       bootstrap_samples = np.random.choice(data, (num_samples, len(data)), replace=True)
-       bootstrap_means = np.nanmean(bootstrap_samples, axis=1)
-       lower_bound = np.nanpercentile(bootstrap_means, (1 - confidence_level) / 2 * 100)
-       upper_bound = np.nanpercentile(bootstrap_means, (1 + confidence_level) / 2 * 100)
-       return lower_bound, upper_bound
-
-   # Sample data
-   mean_angles = np.nanmean(ang_list, axis=0)
-   lower_bounds, upper_bounds = [], []
-
-   for i in range(mean_angles.size):
-       lb, ub = bootstrap_conf_int(ang_list[:, i])
-       lower_bounds.append(lb)
-       upper_bounds.append(ub)
-
-   # Plotting
-   for i in range(yloc.shape[0]):
-       plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
-
-   plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
-
-   # Plot bootstrap confidence intervals
-   plt.fill_between(np.arange(1, 7), lower_bounds, upper_bounds, color='gray', alpha=0.1, label='Bootstrap CI')
-
-   plt.axhline(90, ls='--', color='k')
-   plt.xlabel('Day')
-   plt.ylabel('Angle A/B-GnG (°)')
-   plt.xticks([1, 2, 3, 4, 5, 6])
-
-   plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
-   plt.show()
-   #+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: AttributeError                            Traceback (most recent call last)
-: Cell In[253], line 23
-:      20     upper_bounds.append(ub)
-:      22 # Plotting
-: ---> 23 for i in range(yloc.shape[0]):
-:      24     plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
-:      26 plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
-:
-: AttributeError: 'list' object has no attribute 'shape'
-:END:
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy import stats
-
-# Sample data
-# yloc, ang_list = ... # Ensure these are already defined
-
-# Function to calculate the mean of the sample
-def mean_func(data, axis):
-    return np.nanmean(data, axis=axis)
-
-# Bootstrapping using scipy.stats.bootstrap
-confidence_level = 0.95
-lower_bounds, upper_bounds = [], []
-
-# Calculate the bootstrap confidence intervals for each day
-for i in range(ang_list.shape[1]):
-    res = stats.bootstrap((ang_list[:, i],), mean_func, vectorized=True, n_resamples=1000, confidence_level=confidence_level, method='percentile')
-    lower_bounds.append(res.confidence_interval.low)
-    upper_bounds.append(res.confidence_interval.high)
-
-mean_angles = np.nanmean(ang_list, axis=0)
-
-# Plotting
-for i in range(yloc.shape[0]):
-    plt.plot(np.arange(1, 7), ang_list[i], '-o', alpha=0.1)
-
-plt.plot(np.arange(1, 7), mean_angles, '-ko', label='Mean')
-
-# Plot bootstrap confidence intervals
-plt.fill_between(np.arange(1, 7), lower_bounds, upper_bounds, color='gray', alpha=0.2, label='Bootstrap CI')
-
-plt.axhline(90, ls='--', color='k')
-plt.xlabel('Day')
-plt.ylabel('Angle A/B-GnG (°)')
-plt.xticks([1, 2, 3, 4, 5, 6])
-
-plt.savefig('./cosyne/landscape_angle.svg', dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: [0;31m---------------------------------------------------------------------------[0m
-: [0;31mAttributeError[0m                            Traceback (most recent call last)
-: Cell [0;32mIn[254], line 25[0m
-: [1;32m     22[0m mean_angles [38;5;241m=[39m np[38;5;241m.[39mnanmean(ang_list, axis[38;5;241m=[39m[38;5;241m0[39m)
-: [1;32m     24[0m [38;5;66;03m# Plotting[39;00m
-: [0;32m---> 25[0m [38;5;28;01mfor[39;00m i [38;5;129;01min[39;00m [38;5;28mrange[39m([41myloc[49m[38;5;241;41m.[39;49m[41mshape[49m[[38;5;241m0[39m]):
-: [1;32m     26[0m     plt[38;5;241m.[39mplot(np[38;5;241m.[39marange([38;5;241m1[39m, [38;5;241m7[39m), ang_list[i], [38;5;124m'[39m[38;5;124m-o[39m[38;5;124m'[39m, alpha[38;5;241m=[39m[38;5;241m0.1[39m)
-: [1;32m     28[0m plt[38;5;241m.[39mplot(np[38;5;241m.[39marange([38;5;241m1[39m, [38;5;241m7[39m), mean_angles, [38;5;124m'[39m[38;5;124m-ko[39m[38;5;124m'[39m, label[38;5;241m=[39m[38;5;124m'[39m[38;5;124mMean[39m[38;5;124m'[39m)
-:
-: [0;31mAttributeError[0m: 'list' object has no attribute 'shape'
+[[./figures/landscape/figure_47.png]]
 :END:

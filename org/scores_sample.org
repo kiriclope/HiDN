@@ -202,37 +202,69 @@ from pymer4.models import Lmer
 #+end_src
 
 #+RESULTS:
+#+begin_example
+During startup - Warning messages:
+1: package ‘methods’ was built under R version 4.4.2
+2: package ‘datasets’ was built under R version 4.4.2
+3: package ‘utils’ was built under R version 4.4.2
+4: package ‘grDevices’ was built under R version 4.4.2
+5: package ‘graphics’ was built under R version 4.4.2
+6: package ‘stats’ was built under R version 4.4.2
+R[write to console]: In addition:
+R[write to console]: Warning message:
+R[write to console]: package ‘tools’ was built under R version 4.4.2
+#+end_example
 
 #+begin_src ipython
-def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0):
-    df_ = df[df.day == day].copy()
-    colors = ['r', 'b', 'g']
+def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None):
+    if day=='all':
+        df_ = df.copy()
+    else:
+        df_ = df[df.day == day].copy()
+
+    if colors is None:
+        colors = ['r', 'b', 'g']
 
     if if_proba:
-        mean_overlaps = df_.groupby('tasks')['probas_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
     else:
         mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
 
-    # lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
-    # upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
 
     time_points = np.linspace(0, 14, size)
 
     for i, task in enumerate(mean_overlaps.index):
-        ax.plot(time_points, mean_overlaps[task], label=f"Day {task}", color=colors[i])
-        # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        if label is None:
+            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls)
+            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        else:
+            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls)
+
+        if cis is not None:
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
 
     ax.set_xlabel('Time (s)')
     # ax.set_ylabel('%s Overlap' % title)
     add_vlines(ax)
     ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
 
 def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
     stacked = np.stack(x)
     return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
 #+end_src
 
+
 #+RESULTS:
+
 
 #+begin_src ipython
 def bootstrap_ci(data, n_bootstrap=1000, ci=95):
@@ -824,16 +856,16 @@ except:
 #+RESULTS:
 
 #+begin_src ipython
-options['epochs'] = ['ED']
-df_sample['overlaps_ED'] = df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(size, size).T , **options))
-#+end_src
+options['T_WINDOW'] = 0.
+options = set_options(**options)
 
-#+RESULTS:
+for epoch in ['ED', 'MD', 'LD', 'TEST', 'CHOICE']:
+    options['epochs'] = [epoch]
+    df_sample['overlaps_%s' % epoch] = df_sample['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
 
-#+begin_src ipython
-options['epochs'] = ['LD']
-df_sample['overlaps_ED_LD'] = df_sample['overlaps_ED'].apply(lambda x: avg_epochs(np.array(x), **options))
-df_sample['overlaps_diag_LD'] = df_sample['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+    for epoch2 in ['ED', 'MD', 'LD', 'TEST', 'CHOICE']:
+        options['epochs'] = [epoch2]
+        df_sample['overlaps_%s_%s' % (epoch, epoch2)] = df_sample['overlaps_%s' % epoch].apply(lambda x: avg_epochs(np.array(x), **options))
 #+end_src
 
 #+RESULTS:
@@ -882,7 +914,113 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/scores/figure_29.png]]
+[[./figures/scores/figure_28.png]]
+
+#+begin_src ipython
+def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None):
+    if day=='all':
+        df_ = df.copy()
+    else:
+        df_ = df[df.day == day].copy()
+
+    if colors is None:
+        colors = ['r', 'b', 'g']
+
+    if if_proba:
+        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    else:
+        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    time_points = np.linspace(0, 14, size)
+
+    for i, task in enumerate(mean_overlaps.index):
+        if label is None:
+            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls)
+            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        else:
+            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls)
+
+        if cis is not None:
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    # ax.set_ylabel('%s Overlap' % title)
+    add_vlines(ax)
+    ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+ #+begin_src ipython
+n_ = len(options['days'])+1
+fig, ax = plt.subplots(nrows=1, ncols=n_, figsize=(n_*width, height), sharex=True, sharey=True)
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.day=='first']
+
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
+
+# print(df.mouse.unique(), df.shape)
+
+epoch= 'diag'
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.tasks=='DPA']
+
+df_ = df[df.day=='last']
+plot_overlaps(df_, 'all', epoch, ax[0], title='Sample', y0=0.5,  label='correct', cis=True)
+
+df_ = df[df.day=='first']
+plot_overlaps(df_, 'all', epoch, ax[0], title='Sample', y0=0.5,  ls='--', label='incorrect', cis=True)
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.tasks=='DualGo']
+
+df_ = df[df.day=='last']
+plot_overlaps(df_, 'all', epoch, ax[1], title='Sample', y0=0.5,  colors=['b'], label='correct', cis=True)
+
+df_ = df[df.day=='first']
+plot_overlaps(df_, 'all', epoch, ax[1], title='Sample', y0=0.5,  ls='--', colors=['b'], label='incorrect', cis=True)
+
+df = df_sample.copy()
+df = df[df.laser==0]
+df = df[df.tasks=='DualNoGo']
+
+df_ = df[df.day=='last']
+plot_overlaps(df_, 'all', epoch, ax[2], title='Sample', y0=0.5,  colors=['g'], label='correct', cis=True)
+
+df_ = df[df.day=='first']
+plot_overlaps(df_, 'all', epoch, ax[2], title='Sample', y0=0.5,  ls='--', colors=['g'], label='incorrect', cis=True)
+
+ax[0].set_ylabel('Sample Accuracy')
+ax[0].set_title('DPA')
+ax[1].set_title('Go')
+ax[n_-1].set_title('NoGo')
+
+# ax[2].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_scores_corr_incorr_%s.svg' % epoch, dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/scores/figure_30.png]]
 
 #+begin_src ipython
 df = df_sample.copy()
@@ -899,7 +1037,7 @@ df = df[df.laser==0]
 df = df[df.pair==0]
 # df = df[df.day=='first']
 
-sns.lineplot(data=df, x='performance', y='overlaps_ED_LD', hue='tasks', marker='o', legend=1, palette=['b', 'g'])
+sns.lineplot(data=df, x='performance', y='overlaps_CHOICE_CHOICE', hue='tasks', marker='o', legend=1, palette=['b', 'r', 'g'])
 
 plt.xlabel('Trial')
 plt.ylabel('Sample Accuracy')
@@ -908,12 +1046,13 @@ plt.legend(fontsize=10)
 plt.xticks([0, 1], ['Incorrect', 'Correct'])
 # plt.title('Middle')
 # plt.savefig('figures/icrm/dpa_vs_gng_perf.svg', dpi=300)
+plt.axhline(0.5, ls='--', color='k')
 
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/scores/figure_31.png]]
+[[./figures/scores/figure_32.png]]
 
 #+begin_src ipython
 df_sample.keys()

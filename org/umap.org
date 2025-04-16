@@ -1,0 +1,496 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session umap :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from time import perf_counter
+
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Other
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      cos_theta = A_norm @ B_norm.T
+      angle_radians = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+
+      return np.degrees(angle_radians)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+** Plots
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          for i in range(b.shape[0]):
+              v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
+
+      if IF_NORM:
+          for i in range(b.shape[0]):
+              u[i] = u[i] / np.linalg.norm(u[i])
+              v[i] = v[i] / np.linalg.norm(v[i])
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  #  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12']
+  # mice = ['PP09', 'PP17']
+
+  kwargs = {
+      'mouse': mice[1], 'laser': 0,
+      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05, 'n_comp': 0,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise': True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 1000,
+      'n_splits': 3, 'n_repeats': 10,
+      'class_weight': 0,
+      'multilabel':0,
+      'mne_estimator': 'generalizing', # sliding or generalizing
+      'n_jobs': 128,
+      'bolasso_penalty': 'l2',
+      'bolasso_pval': 0.05,
+  }
+
+  # kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'last']
+  # kwargs['days'] = 'all'
+  options = set_options(**kwargs)
+  print(options['days'])
+  options['mice'] = mice
+#+end_src
+
+#+RESULTS:
+: ['first', 'last']
+
+#+begin_src ipython
+X_mouse, y_mouse = [], []
+
+for idx, mouse in enumerate(options['mice']):
+    options['mouse'] = mouse
+    options['features'] = 'sample'
+    options['verbose'] = 0
+
+    options['trials'] = ''
+    options['reload'] = 0
+
+    options = set_options(**options)
+
+    X_list = []
+    y_list = []
+    tasks = ["DPA", "DualGo", "DualNoGo"]
+
+    for i, day in enumerate(options['days']):
+        X_dum = []
+        y_dum = []
+        options['day'] = day
+        for task in tasks:
+            options['task'] = task
+            X_days, y_days = get_X_y_days(**options)
+            X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+            X_dum.append(X_data)
+            y_dum.append(y_data.sample_odor.to_numpy())
+
+        X_list.append(X_dum)
+        y_list.append(y_dum)
+
+    X_mouse.append(X_list)
+    y_mouse.append(y_list)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+X = np.array(X_mouse[3][-1])
+y = np.array(y_mouse[3][-1])
+print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 96, 693, 84) (3, 96)
+
+#+begin_src ipython
+import numpy as np
+
+def smooth_data(data, window_size):
+    """Apply a simple moving average to smooth the data."""
+    return np.convolve(data, np.ones(window_size), 'valid') / window_size
+
+# Apply smoothing to each neuron's time series
+#smoothed_data = np.apply_along_axis(smooth_data, axis=2, arr=X, window_size=5)
+
+# Now proceed with PCA or UMAP on =smoothed_data=
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.preprocessing import StandardScaler
+import umap
+from sklearn.decomposition import PCA, SparsePCA
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+from contrastive import CPCA
+
+idx = 3
+
+scaler = StandardScaler()
+pca = PCA(n_components=3)
+# pca = SparsePCA(n_components=3)
+# pca = umap.UMAP(n_components=3)
+# pca = TSNE(n_components=3)
+# pca = CPCA()
+
+colors = ['r', 'b', 'g']
+X_traj = []
+
+X_stack = np.vstack(X_mouse[idx][-1])
+print(X_stack.shape)
+
+X_t0 = X_stack[:, :, options['bins_BL']].mean(-1)
+X_t = X_stack[:, :, options['bins_ED']].mean(-1)
+print(X_t.shape)
+
+X_t = scaler.fit_transform(X_t)
+pca.fit(X_t)
+# pca.fit(X_t, X_t0)
+
+for i in range(3):
+    X = np.array(X_mouse[idx][-1][i])
+    n_time = X.shape[2]
+    X_traj_ = []
+
+    for t in range(18, 65):
+        X_t = X[:, :, t]
+
+        X_t = scaler.transform(X_t)
+        # X_pca_t = pca.fit_transform(X_t)
+        X_pca_t = pca.transform(X_t)
+        # X_pca_t = np.array(pca.transform(X_t, n_alphas=10, max_log_alpha=3, n_alphas_to_return=1))
+
+        X_traj_.append(X_pca_t.T)
+
+    X_traj.append(X_traj_)
+
+X_traj = np.array(X_traj)
+#+end_src
+
+#+RESULTS:
+: (288, 693, 84)
+: (288, 693)
+
+#+begin_src ipython
+print(X_t.shape)
+print(X_pca_t.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 693)
+: (96, 3)
+
+#+begin_src ipython
+mean_traj = np.array([np.mean(X_traj[..., :8], axis=-1), np.mean(X_traj[..., 8:16], axis=-1),
+                      np.mean(X_traj[..., 16:24], axis=-1), np.mean(X_traj[..., 24:32], axis=-1)])
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+for i in range(1):
+    plt.plot(mean_traj[0, i, :, 0], mean_traj[0, i, :, 2], color=colors[i], marker='^')
+    plt.plot(mean_traj[1, i, :, 0], mean_traj[1, i, :, 2], color=colors[i], ls='--', marker='^')
+    plt.plot(mean_traj[2, i, :, 0], mean_traj[2, i, :, 2], color=colors[i], ls='-', marker='o')
+    plt.plot(mean_traj[3, i, :, 0], mean_traj[3, i, :, 2], color=colors[i], ls='--', marker='o')
+
+    plt.plot(mean_traj[0, i, 0, 0], mean_traj[0, i, 0, 1], color='k', marker='*', ms=15)
+    plt.plot(mean_traj[1, i, 0, 0], mean_traj[1, i, 0, 1], color='k', marker='*', ms=15)
+    plt.plot(mean_traj[2, i, 0, 0], mean_traj[2, i, 0, 1], color='k', marker='*', ms=15)
+    plt.plot(mean_traj[3, i, 0, 0], mean_traj[3, i, 0, 1], color='k', marker='*', ms=15)
+
+    plt.plot(mean_traj[0, i, 36, 0], mean_traj[0, i, 36, 1], color='k', marker='s', ms=15)
+    plt.plot(mean_traj[1, i, 36, 0], mean_traj[1, i, 36, 1], color='k', marker='s', ms=15)
+    plt.plot(mean_traj[2, i, 36, 0], mean_traj[2, i, 36, 1], color='k', marker='s', ms=15)
+    plt.plot(mean_traj[3, i, 36, 0], mean_traj[3, i, 36, 1], color='k', marker='s', ms=15)
+
+plt.xlabel('PC1')
+plt.ylabel('PC2')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_14.png]]
+
+#+begin_src ipython
+from sklearn.preprocessing import StandardScaler
+import umap
+from sklearn.decomposition import PCA, SparsePCA
+import numpy as np
+import matplotlib.pyplot as plt
+
+idx = 3
+
+scaler = StandardScaler()
+pca = PCA(n_components=3)
+# pca = SparsePCA(n_components=3)
+# pca = umap.UMAP(n_components=3)
+
+colors = ['r', 'b', 'g']
+X_traj2 = []
+
+X_stack = np.vstack(X_mouse[idx][-1])
+print(X_stack.shape)
+
+X_t = X_stack[:, :, options['bins_CHOICE']].mean(-1)
+# X_t = X_stack[:, :, options['bins_CHOICE']].reshape(-1, X_stack.shape[1])
+X_t = scaler.fit_transform(X_t)
+pca.fit(X_t)
+
+for i in range(3):
+    X = np.array(X_mouse[idx][-1][i])
+    n_time = X.shape[2]
+    X_traj_ = []
+
+    for t in range(18, 65):
+        X_t = X[:, :, t]
+
+        X_t = scaler.transform(X_t)
+        X_pca_t = pca.transform(X_t)
+
+        X_traj_.append(X_pca_t.T)
+
+    X_traj2.append(X_traj_)
+
+X_traj2 = np.array(X_traj2)
+#+end_src
+
+#+RESULTS:
+: (288, 693, 84)
+
+#+begin_src ipython
+mean_traj2 = np.array([np.mean(X_traj2[..., :8], axis=-1), np.mean(X_traj2[..., 8:16], axis=-1),
+                      np.mean(X_traj2[..., 16:24], axis=-1), np.mean(X_traj2[..., 24:32], axis=-1)])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+for i in range(1):
+    plt.plot(mean_traj2[0, i, :, 0], mean_traj2[0, i, :, 1], color=colors[i], marker='^')
+    plt.plot(mean_traj2[1, i, :, 0], mean_traj2[1, i, :, 1], color=colors[i], ls='--', marker='^')
+    plt.plot(mean_traj2[2, i, :, 0], mean_traj2[2, i, :, 1], color=colors[i], ls='-', marker='o')
+    plt.plot(mean_traj2[3, i, :, 0], mean_traj2[3, i, :, 1], color=colors[i], ls='--', marker='o')
+
+    plt.plot(mean_traj2[0, i, 0, 0], mean_traj2[0, i, 0, 1], color='k', marker='*', ms=15)
+    plt.plot(mean_traj2[1, i, 0, 0], mean_traj2[1, i, 0, 1], color='k', marker='*', ms=15)
+    plt.plot(mean_traj2[2, i, 0, 0], mean_traj2[2, i, 0, 1], color='k', marker='*', ms=15)
+    plt.plot(mean_traj2[3, i, 0, 0], mean_traj2[3, i, 0, 1], color='k', marker='*', ms=15)
+
+    plt.plot(mean_traj2[0, i, 36, 0], mean_traj2[0, i, 36, 1], color='k', marker='s', ms=15)
+    plt.plot(mean_traj2[1, i, 36, 0], mean_traj2[1, i, 36, 1], color='k', marker='s', ms=15)
+    plt.plot(mean_traj2[2, i, 36, 0], mean_traj2[2, i, 36, 1], color='k', marker='s', ms=15)
+    plt.plot(mean_traj2[3, i, 36, 0], mean_traj2[3, i, 36, 1], color='k', marker='s', ms=15)
+
+plt.xlabel('PC1')
+plt.ylabel('PC2')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_16.png]]
+
+#+begin_src ipython
+options['bins_TEST']
+#+end_src
+
+#+RESULTS:
+: array([54, 55, 56, 57, 58, 59])
+
+#+begin_src ipython
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+
+# Plot the PCA trajectory
+for i in range(1):
+    for j in [0, 2]:
+        ax.plot(mean_traj[j, i, :, j], mean_traj[j, i, :, 1], mean_traj[j, i, :, 2], color=colors[i])
+        ax.plot(mean_traj[j+1, i, :, 0], mean_traj[j+1, i, :, 1], mean_traj[j+1, i, :, 2], color=colors[i], ls='--')
+
+# Set plot labels
+ax.set_xlabel('PC 1')
+ax.set_ylabel('PC 2')
+ax.set_zlabel('PC 3')
+
+ax.view_init(elev=30, azim=30)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_19.png]]
+
+#+begin_src ipython
+import plotly.graph_objects as go
+# Create a scatter plot
+fig = go.Figure()
+
+fig.add_trace(go.Scatter3d(
+    x=meapn_traj[0, i, :, 0],
+    y=mean_traj[0, i, :, 1],
+    z=mean_traj[0, i, :, 2],
+    mode='markers+lines'
+))
+
+# Update layout for better visualization
+fig.update_layout(scene=dict(
+    xaxis_title='PC 1',
+    yaxis_title='PC 2',
+    zaxis_title='PC 3'),
+    title='3D PCA Trajectories'
+)
+
+fig.show()
+
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+NameError                                 Traceback (most recent call last)
+Cell In[99], line 6
+      2 # Create a scatter plot
+      3 fig = go.Figure()
+      5 fig.add_trace(go.Scatter3d(
+----> 6     x=meapn_traj[0, i, :, 0],
+      7     y=mean_traj[0, i, :, 1],
+      8     z=mean_traj[0, i, :, 2],
+      9     mode='markers+lines'
+     10 ))
+     12 # Update layout for better visualization
+     13 fig.update_layout(scene=dict(
+     14     xaxis_title='PC 1',
+     15     yaxis_title='PC 2',
+     16     zaxis_title='PC 3'),
+     17     title='3D PCA Trajectories'
+     18 )
+
+NameError: name 'meapn_traj' is not defined
+#+end_example
+:END:
+
+#+begin_src ipython
+options['bins_CHOICE']
+#+end_src
+
+#+RESULTS:
+: array([60, 61, 62, 63, 64, 65])
+
+
+#+begin_src ipython
+from contrastive import CPCA
+
+mdl = CPCA()
+projected_data = mdl.fit_transform(foreground_data, background_data)
+#+end_src
+
+#+RESULTS:
