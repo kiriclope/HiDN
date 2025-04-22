@@ -12,7 +12,7 @@ import numpy as np
 def set_options(**kwargs):
     opts = dict()
 
-    opts["NEW_DATA"] = 1
+    opts["NEW_DATA"] = 0
     opts["path"] = "/storage/leon/dual_task/"
     opts["fname"] =''
 

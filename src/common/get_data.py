@@ -267,6 +267,11 @@ def create_df(y_raw, day=None):
     y_df['performance'] = y_df['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
     y_df['pair'] = y_df['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
 
+    y_df.loc[(y_df.sample_odor == 0) & (y_df.test_odor == 0), "odor_pair"] = 0
+    y_df.loc[(y_df.sample_odor == 0) & (y_df.test_odor == 1), "odor_pair"] = 1
+    y_df.loc[(y_df.sample_odor == 1) & (y_df.test_odor == 1), "odor_pair"] = 2
+    y_df.loc[(y_df.sample_odor == 1) & (y_df.test_odor == 0), "odor_pair"] = 3
+
     return y_df
 
 
@@ -547,7 +552,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_tasks = True
             idx_S1 = y.odr_perf == 0
             idx_S2 = y.tasks == "DPA"
-
 
     elif kwargs["features"] == "reward":
         idx_S1 = ~y.response.str.contains("incorrect")

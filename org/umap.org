@@ -47,6 +47,12 @@
 
 #+RESULTS:
 
+#+begin_src ipython
+from src.dPCA import dPCA
+#+end_src
+
+#+RESULTS:
+
 * Helpers
 ** Other
 
@@ -119,6 +125,7 @@ def angle_AB(A, B):
 
 #+RESULTS:
 
+
 * Parameters
 
 #+begin_src ipython
@@ -160,6 +167,8 @@ def angle_AB(A, B):
 : ['first', 'last']
 
 #+begin_src ipython
+options['mice'] = ['JawsM15']
+options['reload'] = 0
 X_mouse, y_mouse = [], []
 
 for idx, mouse in enumerate(options['mice']):
@@ -186,7 +195,7 @@ for idx, mouse in enumerate(options['mice']):
             X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
 
             X_dum.append(X_data)
-            y_dum.append(y_data.sample_odor.to_numpy())
+            y_dum.append(y_data.odor_pair.to_numpy())
 
         X_list.append(X_dum)
         y_list.append(y_dum)
@@ -198,13 +207,184 @@ for idx, mouse in enumerate(options['mice']):
 #+RESULTS:
 
 #+begin_src ipython
-X = np.array(X_mouse[3][-1])
-y = np.array(y_mouse[3][-1])
+X = np.array(X_mouse[0][-1])
+y = np.array(y_mouse[0][-1])
 print(X.shape, y.shape)
 #+end_src
 
 #+RESULTS:
 : (3, 96, 693, 84) (3, 96)
+
+* dPCA
+
+#+begin_src ipython
+  def standard_scaler(data, axis=0, IF_RETURN=0):
+      mean = np.mean(data, axis=axis, keepdims=True)
+      std = np.std(data, axis=axis, keepdims=True)
+      if IF_RETURN:
+          return (data - mean) / std, mean, std
+      else:
+          return (data - mean) / (std + 1e-6)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+X0 = X[0]
+y0 = y[0]
+print(X0.shape, y0.shape, y0)
+#+end_src
+
+#+RESULTS:
+: (96, 693, 84) (96,) [0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
+:  1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.
+:  2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2. 2.
+:  3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3. 3.]
+
+#+begin_src ipython
+X0 = standard_scaler(X0, 0)
+
+X_stim = np.stack((X0[y0==0], X0[y0==1], X0[y0==2], X0[y0==3]))
+
+print(X_stim.shape)
+
+# X_stim = standard_scaler(X_stim, 1)
+
+X_stim = np.swapaxes(X_stim, 0, 1)
+X_stim = np.swapaxes(X_stim, 1, 2)
+
+X_avg = X_stim.mean(0)
+print(X_stim.shape, X_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (4, 24, 693, 84)
+: (24, 693, 4, 84) (693, 4, 84)
+
+#+begin_src ipython
+dpca = dPCA.dPCA(labels='st', n_components=2, regularizer=0.005)
+dpca.protect = ['t']
+Z = dpca.fit_transform(X_avg, X_stim)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(Z.keys(), Z['t'].shape, Z['s'].shape)
+#+end_src
+
+#+RESULTS:
+: dict_keys(['s', 't', 'st']) (2, 4, 84) (2, 4, 84)
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, 14, 84)
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+for i in range(Z['t'].shape[1]):
+    ax[0].plot(xtime, Z['t'][0, i], ls=ls[i], color=colors[i])
+    add_vlines(ax=ax[0])
+
+
+    ax[1].plot(xtime, Z['t'][1, i], ls=ls[i], color=colors[i])
+    add_vlines(ax=ax[1])
+
+
+    ax[2].plot(Z['t'][0, i], Z['t'][1, i], ls=ls[i], label=labels[i], color=colors[i])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_16.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, 14, 84)
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for i in range(Z['s'].shape[1]):
+    ax[0].plot(xtime, Z['s'][0, i], ls=ls[i], color=colors[i])
+    add_vlines(ax=ax[0])
+
+
+    ax[1].plot(xtime, Z['s'][1, i], ls=ls[i], color=colors[i])
+    add_vlines(ax=ax[1])
+
+
+    ax[2].plot(Z['s'][0, i], Z['s'][1, i], ls=ls[i], label=labels[i], color=colors[i])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Task dPC 1')
+ax[1].set_ylabel('Task dPC 2')
+
+ax[2].set_xlabel('Task dPC 1')
+ax[2].set_ylabel('Task dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_17.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, 14, 84)
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for i in range(Z['st'].shape[1]):
+    ax[0].plot(xtime, Z['st'][0, i], ls=ls[i], color=colors[i])
+    add_vlines(ax=ax[0])
+
+
+    ax[1].plot(xtime, Z['st'][1, i], ls=ls[i], color=colors[i])
+    add_vlines(ax=ax[1])
+
+    ax[2].plot(Z['st'][0, i], Z['st'][1, i], ls=ls[i], label=labels[i], color=colors[i])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Mixed dPC 1')
+ax[1].set_ylabel('Mixed dPC 2')
+
+ax[2].set_xlabel('Mixed dPC 1')
+ax[2].set_ylabel('Mixed dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_18.png]]
+
+* UMAP
 
 #+begin_src ipython
 import numpy as np
@@ -274,8 +454,19 @@ X_traj = np.array(X_traj)
 #+end_src
 
 #+RESULTS:
-: (288, 693, 84)
-: (288, 693)
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[336], line 21
+:      18 colors = ['r', 'b', 'g']
+:      19 X_traj = []
+: ---> 21 X_stack = np.vstack(X_mouse[idx][-1])
+:      22 print(X_stack.shape)
+:      24 X_t0 = X_stack[:, :, options['bins_BL']].mean(-1)
+:
+: IndexError: list index out of range
+:END:
 
 #+begin_src ipython
 print(X_t.shape)
@@ -283,8 +474,16 @@ print(X_pca_t.shape)
 #+end_src
 
 #+RESULTS:
-: (96, 693)
-: (96, 3)
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[337], line 1
+: ----> 1 print(X_t.shape)
+:       2 print(X_pca_t.shape)
+:
+: NameError: name 'X_t' is not defined
+:END:
 
 #+begin_src ipython
 mean_traj = np.array([np.mean(X_traj[..., :8], axis=-1), np.mean(X_traj[..., 8:16], axis=-1),
@@ -292,6 +491,16 @@ mean_traj = np.array([np.mean(X_traj[..., :8], axis=-1), np.mean(X_traj[..., 8:1
 #+end_src
 
 #+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: TypeError                                 Traceback (most recent call last)
+: Cell In[338], line 1
+: ----> 1 mean_traj = np.array([np.mean(X_traj[..., :8], axis=-1), np.mean(X_traj[..., 8:16], axis=-1),
+:       2                       np.mean(X_traj[..., 16:24], axis=-1), np.mean(X_traj[..., 24:32], axis=-1)])
+:
+: TypeError: list indices must be integers or slices, not tuple
+:END:
 
 
 #+begin_src ipython
@@ -317,7 +526,18 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_14.png]]
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[339], line 2
+:       1 for i in range(1):
+: ----> 2     plt.plot(mean_traj[0, i, :, 0], mean_traj[0, i, :, 2], color=colors[i], marker='^')
+:       3     plt.plot(mean_traj[1, i, :, 0], mean_traj[1, i, :, 2], color=colors[i], ls='--', marker='^')
+:       4     plt.plot(mean_traj[2, i, :, 0], mean_traj[2, i, :, 2], color=colors[i], ls='-', marker='o')
+:
+: NameError: name 'mean_traj' is not defined
+:END:
 
 #+begin_src ipython
 from sklearn.preprocessing import StandardScaler
@@ -363,7 +583,19 @@ X_traj2 = np.array(X_traj2)
 #+end_src
 
 #+RESULTS:
-: (288, 693, 84)
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[340], line 17
+:      14 colors = ['r', 'b', 'g']
+:      15 X_traj2 = []
+: ---> 17 X_stack = np.vstack(X_mouse[idx][-1])
+:      18 print(X_stack.shape)
+:      20 X_t = X_stack[:, :, options['bins_CHOICE']].mean(-1)
+:
+: IndexError: list index out of range
+:END:
 
 #+begin_src ipython
 mean_traj2 = np.array([np.mean(X_traj2[..., :8], axis=-1), np.mean(X_traj2[..., 8:16], axis=-1),
@@ -371,6 +603,16 @@ mean_traj2 = np.array([np.mean(X_traj2[..., :8], axis=-1), np.mean(X_traj2[..., 
 #+end_src
 
 #+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: TypeError                                 Traceback (most recent call last)
+: Cell In[341], line 1
+: ----> 1 mean_traj2 = np.array([np.mean(X_traj2[..., :8], axis=-1), np.mean(X_traj2[..., 8:16], axis=-1),
+:       2                       np.mean(X_traj2[..., 16:24], axis=-1), np.mean(X_traj2[..., 24:32], axis=-1)])
+:
+: TypeError: list indices must be integers or slices, not tuple
+:END:
 
 #+begin_src ipython
 for i in range(1):
@@ -395,7 +637,18 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_16.png]]
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[342], line 2
+:       1 for i in range(1):
+: ----> 2     plt.plot(mean_traj2[0, i, :, 0], mean_traj2[0, i, :, 1], color=colors[i], marker='^')
+:       3     plt.plot(mean_traj2[1, i, :, 0], mean_traj2[1, i, :, 1], color=colors[i], ls='--', marker='^')
+:       4     plt.plot(mean_traj2[2, i, :, 0], mean_traj2[2, i, :, 1], color=colors[i], ls='-', marker='o')
+:
+: NameError: name 'mean_traj2' is not defined
+:END:
 
 #+begin_src ipython
 options['bins_TEST']
@@ -425,7 +678,20 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_19.png]]
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[344], line 7
+:       5 for i in range(1):
+:       6     for j in [0, 2]:
+: ----> 7         ax.plot(mean_traj[j, i, :, j], mean_traj[j, i, :, 1], mean_traj[j, i, :, 2], color=colors[i])
+:       8         ax.plot(mean_traj[j+1, i, :, 0], mean_traj[j+1, i, :, 1], mean_traj[j+1, i, :, 2], color=colors[i], ls='--')
+:      10 # Set plot labels
+:
+: NameError: name 'mean_traj' is not defined
+[[./figures/landscape/figure_27.png]]
+:END:
 
 #+begin_src ipython
 import plotly.graph_objects as go
@@ -457,7 +723,7 @@ fig.show()
 #+begin_example
 ---------------------------------------------------------------------------
 NameError                                 Traceback (most recent call last)
-Cell In[99], line 6
+Cell In[345], line 6
       2 # Create a scatter plot
       3 fig = go.Figure()
       5 fig.add_trace(go.Scatter3d(
@@ -494,3 +760,14 @@ projected_data = mdl.fit_transform(foreground_data, background_data)
 #+end_src
 
 #+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[347], line 4
+:       1 from contrastive import CPCA
+:       3 mdl = CPCA()
+: ----> 4 projected_data = mdl.fit_transform(foreground_data, background_data)
+:
+: NameError: name 'foreground_data' is not defined
+:END:

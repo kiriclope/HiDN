@@ -440,8 +440,9 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
           self.DT = DT
           self.TAU = TAU
 
-          self.GAIN = nn.Parameter(torch.tensor(1.0).to(DEVICE))
-          # self.GAIN = nn.Parameter(torch.ones((1, 1, self.N_NEURON)).to(DEVICE))
+          self.GAIN = torch.tensor(1.0).to(DEVICE)
+          # self.GAIN = nn.Parameter(torch.tensor(1.0).to(DEVICE))
+          # self.GAIN = nn.Parameter(torch.ones((1, self.N_NEURON)).to(DEVICE))
 
           self.SIGMA = nn.Parameter(torch.tensor(SIGMA).to(torch.float).to(DEVICE))
           # self.SIGMA = SIGMA
@@ -473,8 +474,9 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
           # non_linear = self.Activation(net_input)
           # rates = rates * self.EXP_DT_TAU + non_linear * self.DT_TAU + noise
 
-          rates = self.GAIN * self.Activation(net_input)
-          # rates = net_input
+          # rates = self.GAIN * self.Activation(net_input)
+
+          rates = net_input
 
           return rates, rec_input
 
@@ -483,8 +485,8 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
           # initialize state
           rates = torch.zeros(ff_input.size(0), self.N_NEURON, device=self.DEVICE)
           rec_input = torch.zeros(ff_input.size(0), self.N_NEURON, device=self.DEVICE)
-          lr = self.Wab / self.N_NEURON
 
+          lr = self.Wab / self.N_NEURON
 
           rates_sequence = []
           for step in range(ff_input.size(1)):
@@ -543,26 +545,27 @@ options['DCVL'] = 0
 
 #+begin_src ipython
 X_days, y_days = get_X_y_days(**options)
-options['trials'] = 'correct'
+options['trials'] = ''
 options['day'] = 'last'
 options['task'] = 'all'
 X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
 
+X_data = X_data[..., :70]
 print(X_data.shape, y_data.shape)
 #+end_src
 
 #+RESULTS:
-: (249, 693, 84) (249, 13)
+: (288, 693, 70) (288, 13)
 
 #+begin_src ipython
 from  mne.decoding import Scaler
 std_scaler = Scaler(scalings='mean')
-X_data = std_scaler.fit_transform(X_data)
+# X_data = std_scaler.fit_transform(X_data)
 print(X_data.shape)
 #+end_src
 
 #+RESULTS:
-: (249, 693, 84)
+: (288, 693, 70)
 
 #+begin_src ipython
 from src.decode.bump import circcvl
@@ -576,12 +579,19 @@ smoothed_data = moving_average_multidim(X_data, window_size, axis=-1)
 #+end_src
 
 #+RESULTS:
-: (249, 693, 84)
+: (288, 693, 70)
 
 #+RESULTS:
 
 #+begin_src ipython
-  time = np.linspace(0, 14, 84)
+options['bins_RWD2']
+#+end_src
+
+#+RESULTS:
+: array([69, 70, 71])
+
+#+begin_src ipython
+  time = np.linspace(0, 14, X_data.shape[-1])
   for i in range(10):
       i = np.random.randint(100)
       plt.plot(time, smoothed_data[-1, i,:], alpha=.5)
@@ -592,7 +602,7 @@ smoothed_data = moving_average_multidim(X_data, window_size, axis=-1)
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/19b57f473e0fdaa9a1ff1e6365c650e0b033f2d7.png]]
+[[./.ob-jupyter/cad568617879879dd783803d442d90967d9959e1.png]]
 
 ** Training
 
@@ -613,16 +623,16 @@ smoothed_data = moving_average_multidim(X_data, window_size, axis=-1)
 #+end_src
 
 #+RESULTS:
-: (249, 83, 693) (249, 83, 693)
+: (288, 69, 693) (288, 69, 693)
 
 #+begin_src ipython
-X = torch.tensor(X, dtype=torch.float32, device=device)
-Y = torch.tensor(Y, dtype=torch.float32, device=device)
+X = torch.tensor(X, dtype=torch.float32, device=DEVICE)
+Y = torch.tensor(Y, dtype=torch.float32, device=DEVICE)
 print(X.shape, Y.shape)
 #+end_src
 
 #+RESULTS:
-: torch.Size([249, 83, 693]) torch.Size([249, 83, 693])
+: torch.Size([288, 69, 693]) torch.Size([288, 69, 693])
 
 #+RESULTS:
 
@@ -635,8 +645,8 @@ train_loader, val_loader = split_data(X, Y, train_perc=0.8, batch_size=batch_siz
 #+end_src
 
 #+RESULTS:
-: X_train shape: torch.Size([198, 83, 693]) Y_train shape: torch.Size([198, 83, 693])
-: X_test shape: torch.Size([50, 83, 693]) Y_test shape: torch.Size([50, 83, 693])
+: X_train shape: torch.Size([230, 69, 693]) Y_train shape: torch.Size([230, 69, 693])
+: X_test shape: torch.Size([58, 69, 693]) Y_test shape: torch.Size([58, 69, 693])
 
 #+begin_src ipython
 model = FullRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
@@ -656,26 +666,38 @@ run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs, thr
 
 #+RESULTS:
 #+begin_example
-Epoch 0/100, Training Loss: 0.2940, Validation Loss: 0.2146
-Epoch 10/100, Training Loss: 0.1363, Validation Loss: 0.1875
-Epoch 20/100, Training Loss: 0.1646, Validation Loss: 0.1883
-Epoch 30/100, Training Loss: 0.2930, Validation Loss: 0.1883
-Epoch 40/100, Training Loss: 0.1349, Validation Loss: 0.1886
-Epoch 50/100, Training Loss: 0.1485, Validation Loss: 0.1887
-Epoch 60/100, Training Loss: 0.1319, Validation Loss: 0.1892
-Epoch 70/100, Training Loss: 0.1537, Validation Loss: 0.1892
-Epoch 80/100, Training Loss: 0.1988, Validation Loss: 0.1892
-Epoch 90/100, Training Loss: 0.1602, Validation Loss: 0.1892
+Epoch 0/100, Training Loss: 0.0019, Validation Loss: 0.0018
+Epoch 10/100, Training Loss: 0.0018, Validation Loss: 0.0018
+Epoch 20/100, Training Loss: 0.0019, Validation Loss: 0.0018
+Epoch 30/100, Training Loss: 0.0018, Validation Loss: 0.0018
+Epoch 40/100, Training Loss: 0.0019, Validation Loss: 0.0018
+Epoch 50/100, Training Loss: 0.0016, Validation Loss: 0.0018
+Epoch 60/100, Training Loss: 0.0018, Validation Loss: 0.0018
+Epoch 70/100, Training Loss: 0.0018, Validation Loss: 0.0018
+Epoch 80/100, Training Loss: 0.0016, Validation Loss: 0.0018
+Epoch 90/100, Training Loss: 0.0017, Validation Loss: 0.0018
 #+end_example
 
 #+begin_src ipython
-print(model.GAIN, model.SIGMA)
+plt.hist(model.GAIN[0].cpu().detach(), bins='auto')
+plt.xlabel('Gain')
+plt.ylabel('Count')
+plt.show()
 #+end_src
 
 #+RESULTS:
-: Parameter containing:
-: tensor(1.9003, device='cuda:0', requires_grad=True) Parameter containing:
-: tensor(0.0126, device='cuda:0', requires_grad=True)
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[428], line 1
+: ----> 1 plt.hist(model.GAIN[0].cpu().detach(), bins='auto')
+:       2 plt.xlabel('Gain')
+:       3 plt.ylabel('Count')
+:
+: IndexError: invalid index of a 0-dim tensor. Use `tensor.item()` in Python or `tensor.item<T>()` in C++ to convert a 0-dim tensor to a number
+:END:
+
 
 ** Testing
 
@@ -703,12 +725,11 @@ print(model.GAIN, model.SIGMA)
 
   # Call the function using your data loader
   predictions, ground_truth = get_predictions(val_loader)
-
   print(ground_truth.numpy().shape, predictions.numpy().shape)
 #+end_src
 
 #+RESULTS:
-: (50, 83, 693) (50, 83, 693)
+: (58, 69, 693) (58, 69, 693)
 
 #+begin_src ipython
   import matplotlib.pyplot as plt
@@ -720,11 +741,11 @@ print(model.GAIN, model.SIGMA)
   # Plot the predictions on top of the ground truth
   plt.figure()
   pal = sns.color_palette("tab10")
-  time = np.linspace(0, 14, 84)[:-1]
+  time = np.linspace(0, 14, 70)[:-1]
   # Example for plotting the first feature dimension
   for i in range(3):
      j = np.random.randint(model.N_NEURON)
-     plt.plot(time, ground_truth_np[0, :, j], 'x', label='Ground Truth', color=pal[i], alpha=.2)
+     plt.plot(time, ground_truth_np[0, :, j], 'x', label='Ground Truth', color=pal[i], alpha=.5)
      plt.plot(time, predictions_np[0, :, j], '-', label='Model Prediction', color=pal[i], alpha=1)
 
   plt.title("Model Prediction vs Ground Truth")
@@ -735,7 +756,7 @@ print(model.GAIN, model.SIGMA)
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/94180b39f313aae7d4a6032270b1908c2f7df115.png]]
+[[./.ob-jupyter/31e5b1f7cf5a59fc223ab1eda856c676a2e26827.png]]
 
 #+begin_src ipython
   # weights = (model.U @ model.V.T).cpu().detach().numpy()
@@ -748,12 +769,12 @@ print(model.GAIN, model.SIGMA)
 #+begin_src ipython
 fig, ax = plt.subplots(1, 2, figsize= [2 * width, height])
 ax[0].scatter(U[0], U[1])
-ax[1].scatter(V[0], V[1])
+ax[1].scatter(Vt.T[0], Vt.T[1])
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/0889cf922a65e9d77da46b2b7a2a51e731833f4a.png]]
+[[./.ob-jupyter/0afe7be70f3a21886620ff3897968beb60bd998b.png]]
 
 #+begin_src ipython
   X_days, y_days = get_X_y_days(**options)
@@ -780,38 +801,61 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/ae3949c97fb6306271281453efcee0c9b0eee31f.png]]
+[[./.ob-jupyter/351e615e44b52f391e60854d02c111c552dbb329.png]]
 
 #+begin_src ipython
 lbd, U = np.linalg.eig(weights.T)
 idx = np.argsort(np.real(lbd))
 
-lbd = np.real(lbd[idx])
+Relbd = np.real(lbd[idx])
+Imlbd = np.imag(lbd[idx])
 U = np.real(U[idx])
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-plt.plot(lbd[-11:], 'o')
+plt.scatter(Relbd, Imlbd)
+plt.xlabel('Re')
+plt.ylabel('Im')
+plt.axvline(1, color='k', ls='--')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/0b8e6dc676c0110fe9de226595e73b3d759dd791.png]]
+
+#+begin_src ipython
+lbd[:10]
+#+end_src
+
+#+RESULTS:
+: array([-85.61268 +28.330336j  , -85.61268 -28.330336j  ,
+:        -50.2674   +1.9438434j , -50.2674   -1.9438434j ,
+:        -29.52582 +19.599636j  , -29.52582 -19.599636j  ,
+:        -23.456383+15.015668j  , -23.456383-15.015668j  ,
+:        -29.368193 +0.69631594j, -29.368193 -0.69631594j], dtype=complex64)
+
+#+begin_src ipython
+plt.plot(Relbd[-11:], 'o')
 plt.xlabel('#')
 plt.ylabel('Eigen Value')
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/6690ed63c1c2895e379577308aa5b747d12bcc8b.png]]
+[[./.ob-jupyter/c55406b7fb3a8087f0e3375d4ed61cd7572e59db.png]]
 
 #+begin_src ipython
 print(lbd[-11:])
 #+end_src
 
 #+RESULTS:
-: [43.842422 45.913536 45.913536 46.597084 46.597084 46.68539  48.66639
-:  48.66639  49.313313 49.313313 52.095642]
+: [4.9770627 4.9770627 5.410977  5.410977  5.4793367 5.4793367 5.770219
+:  5.770219  7.0945845 7.0945845 7.698562 ]
 
 #+begin_src ipython
-idx = 0
+idx = 4
 #+end_src
 
 #+RESULTS:
@@ -845,10 +889,10 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/ba215bf915c102c46896ee5ff0220f3b6b9fb705.png]]
+[[./.ob-jupyter/88ba527dea2614ffe17e4a99467361fa6553bf93.png]]
 
 #+begin_src ipython
-idx = 3
+idx = 1
 #+end_src
 
 #+RESULTS:
@@ -884,7 +928,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/27e1fa388864a4314b8da69eea386e5692760f9b.png]]
+[[./.ob-jupyter/80b93208891c3602eb9321016ed9cbe0444423c6.png]]
 
 #+begin_src ipython
 

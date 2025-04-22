@@ -1,0 +1,326 @@
+*** How do I use demixe PCA?
+
+To use Demix PCA, you generally need to follow these steps:
+
+1. *Understand the Concept*: Demix PCA is a variant of Principal Component Analysis designed for demixing signals, especially in neural data analysis. It separates signals into components that explain shared and individual variations.
+
+2. *Prepare Your Data*: Structure your data properly, typically as a matrix where rows represent different observations and columns represent different channels or features.
+
+3. *Choose Software or Library*: Use a library or software that supports demixed PCA. In Python, for instance, you can use packages like =dPCA= which implement demixed PCA algorithms.
+
+4. *Implement Demix PCA*:
+   - *Fit the Model*: Use the demix PCA function from the chosen library, inputting your data matrix.
+   - *Specify Parameters*: Based on the implementation, you'll need to specify parameters or hyperparameters, like the number of demixed components.
+   - *Extract Components*: Run the function to extract the demixed principal components from your data.
+
+5. *Analyze the Results*: Use the output components to interpret the different sources of variation within your data. Visualizations like component plots can be helpful for interpretation.
+
+For detailed procedures and code examples, consult the documentation of the library or software you are using.
+
+*** How do I actually use it in python?
+
+To use demixed PCA (dPCA) in Python, you can use the =dPCA= Python package, which is specifically designed for this purpose. Here's a basic example of how you might implement it:
+
+1. *Install the dPCA Package*: If it's not already installed, you might need to install the =dPCA= package or the =numpy= and =matplotlib= libraries for basic PCA functions and visualizations. However, note that =dPCA= might be included with some specialized neuroscience data packages if you are working within that context.
+
+    You can check online resources for downloading and installing specific scientific packages like =dPCA=.
+
+2. *Import Necessary Libraries*:
+
+    #+begin_src python
+    from dpca import dPCA
+    import numpy as np
+    #+end_src
+
+3. *Prepare Your Data*: Structure your data matrix. For example:
+
+    #+begin_src python
+    data = np.random.rand(100, 10)  # 100 samples with 10 features
+    #+end_src
+
+4. *Initialize and Fit dPCA*:
+
+    #+begin_src python
+    dpca = dPCA(labels='stc', join={'stimulus': ['s'], 'time': ['t'], 'condition':['s', 't']})
+    X_transform, explained_variance = dpca.fit_transform(data)
+    #+end_src
+
+  Here, ='stc'= indicates labels for the different categories in your data like stimulus, time, and condition.
+
+5. *Analyze Components*: After fitting, =X_transform= contains your demixed components. You can analyze and visualize them as needed.
+
+6. *Visualizations (Optional)*:
+
+    #+begin_src python
+    import matplotlib.pyplot as plt
+
+    plt.figure()
+    plt.plot(X_transform[:, 0])  # Plot the first component
+    plt.title('First dPCA Component')
+    plt.show()
+    #+end_src
+
+Remember, this is a simplified example. The actual dimensions and specifics depend on your data structure, and you may need to adapt the example to fit your exact use case.
+
+Refer to detailed package documentation for specific functions and options if you're using a different environment or dataset configuration.
+
+*** I don't understand how I should prepare my data
+
+Preparing your data for dPCA involves structuring it in a way that captures the different sources of variability you want to analyze. Here's a step-by-step guide:
+
+1. *Organize Your Data*: Arrange your data in a multi-dimensional array (tensor) reflecting the factors you want to examine. Common dimensions include:
+   - Trials or samples
+   - Time points (if analyzing time-series data)
+   - Conditions or other experimental variables
+
+2. *Label Your Factors*: You need to define what each dimension represents, both in terms of the data (e.g., trials, time) and what you're comparing (e.g., stimulus condition).
+
+3. *Example Structure*:
+   - Suppose you have data from an experiment with 3 conditions, each with 100 trials and recorded across 50 time points. You might structure your data as a 3D array:
+     \[
+     \text{data}[\text{num\_conditions}][\text{num\_trials}][\text{num\_timepoints}]
+     \]
+
+4. *Loading & Arranging Your Data*: If using numpy, your data might look like this:
+
+   #+begin_src python
+   import numpy as np
+
+   # Simulated data within a certain shape
+   num_conditions = 3
+   num_trials = 100
+   num_timepoints = 50
+
+   data = np.random.rand(num_conditions, num_trials, num_timepoints)
+   #+end_src
+
+5. *Defining Labels*: When initializing dPCA, specify which dimensions correspond to which labels:
+
+   #+begin_src python
+   from dpca import dPCA
+
+   dpca = dPCA(labels='ct', join={'condition': ['c'], 'time': ['t']})
+   #+end_src
+
+6. *Fit dPCA*:
+   #+begin_src python
+   X_transform, explained_variance = dpca.fit_transform(data)
+   #+end_src
+
+In summary, organize your data array based on the experimental design, ensuring that you can clearly delineate the different factors you wish to assess. The dimensions you choose will reflect the structure of your specific experimental setup and the analysis you want to perform.
+
+***  my data is (N_Trials, N_Neurons, N_Time). But for each trial I have different stimulus.
+
+Given your data structure =(N_Trials, N_Neurons, N_Time)= with different stimuli for each trial, you'll need to rearrange your data and potentially label it to indicate these stimuli differences. Here's how you can prepare your data for dPCA:
+
+1. *Add a Stimulus Dimension*:
+   - Transform your data to incorporate stimulus as a dimension or use an accompanying labels array to indicate the stimulus type for each trial.
+
+2. *Structure Your Data*:
+   - Suppose you have data from =N_Trials= where each trial belongs to one of several stimulus categories. You can slice your data based on stimulus type.
+
+3. *Example Data Preparation*:
+
+   *Assign Stimulus Labels*:
+   - Create an array that holds the stimulus label or category for each trial.
+
+   #+begin_src python
+   stimulus_labels = np.array([...])  # Length should be N_Trials
+   #+end_src
+
+   *Organize Data for dPCA*:
+   - Group trials according to each stimulus.
+   - You can use =numpy= to efficiently reorganize the data.
+
+   #+begin_src python
+   import numpy as np
+
+   # Assuming you have N_Trials, N_Neurons, N_Time
+   trials, neurons, timepoints = data.shape
+   unique_stimuli = np.unique(stimulus_labels)
+
+   # Dictionary to hold data per stimulus type
+   data_by_stimulus = {}
+   for stimulus in unique_stimuli:
+       stimulus_indices = np.where(stimulus_labels == stimulus)[0]
+       data_by_stimulus[stimulus] = data[stimulus_indices, :, :]
+   #+end_src
+
+4. *Prepare Input for dPCA*:
+   - Depending on how the dPCA library expects input, you may need to transform =data_by_stimulus= to match expected input formats.
+
+5. *Set Up and Fit dPCA*:
+   - You may need to concatenate data or adjust according to the implementation's needs.
+
+   #+begin_src python
+   from dpca import dPCA
+
+   # Create a 4D tensor where each slice across the first dimension corresponds to one stimulus type
+   dpca_data = np.array([data_by_stimulus[stimulus] for stimulus in unique_stimuli])
+
+   dpca = dPCA(labels='stn', join={'stimulus': ['s'], 'time': ['t'], 'neuron': ['n']})
+   X_transform, explained_variance = dpca.fit_transform(dpca_data)
+   #+end_src
+
+This preparation assumes that each trial in your original data is indexed by its stimulus type, allowing dPCA to parse stimulus information. Adjust the shapes and labels according to the library's requirements and your specific experimental setup.
+
+*** So what is the shape of the new data?
+
+In the example discussed, where you're reorganizing data based on stimulus types, the new data structure passed to dPCA could have the shape:
+
+\[
+\text{new\_data}[\text{num\_stimuli}][\text{max\_trials\_per\_stimulus}][\text{N\_Neurons}][\text{N\_Time}]
+\]
+
+Here's how this shape comes about:
+
+1. *num_stimuli*: Number of unique stimulus types in your dataset.
+
+2. *max_trials_per_stimulus*: The maximum number of trials for any single stimulus type. If different stimuli have different numbers of trials, you might need to pad or handle fewer trials (e.g., with masking).
+
+3. *N_Neurons*: The number of neurons you are recording from, as per your original dataset.
+
+4. *N_Time*: The number of time points in each trial, as per your original dataset.
+
+*** Example Construction
+
+If each stimulus can have a different number of trials, you might use padding to ensure consistent shapes across all stimuli:
+
+#+begin_src python
+import numpy as np
+
+# Suppose you had the following dimensions
+N_Trials, N_Neurons, N_Time = data.shape
+stimulus_labels = np.array([...])  # Length should be N_Trials
+unique_stimuli = np.unique(stimulus_labels)
+
+# Determine the max number of trials for any stimulus
+max_trials_per_stimulus = max(np.sum(stimulus_labels == s) for s in unique_stimuli)
+
+# Allocate an array filled with NaNs or a suitable default for padding
+dpca_data = np.full((len(unique_stimuli), max_trials_per_stimulus, N_Neurons, N_Time), np.nan)
+
+for i, stimulus in enumerate(unique_stimuli):
+    stimulus_indices = np.where(stimulus_labels == stimulus)[0]
+    num_trials = len(stimulus_indices)
+
+    # Insert the trials into the relevant part of dpca_data
+    dpca_data[i, :num_trials] = data[stimulus_indices]
+
+# Now dpca_data is ready with consistent shapes
+#+end_src
+
+#+RESULTS:
+
+This array =dpca_data= would then be the input to your dPCA method, maintaining consistent shapes aligned across stimulus types, while capturing variations due to stimuli, neurons, and time points. Adjust based on the specifications of the dPCA implementation you are using.
+
+*** Are you sure about the max_trials_per_stimulus ?
+
+I apologize for any confusion. Let's clarify the shape of the data structured for dPCA, especially considering trials and stimuli.
+
+If your original data is structured as follows:
+
+- *(N_Trials, N_Neurons, N_Time):* Where =N_Trials= is the total number of trials, =N_Neurons= is the number of recorded neurons, and =N_Time= is the number of time points per trial.
+
+To be organized by stimulus type for dPCA analysis, you would:
+
+1. *Identify unique stimuli*: Create a list or array of unique stimulus identifiers from your =stimulus_labels=.
+
+2. *Group trials by stimulus*: This involves separating trials into groups per stimulus type.
+
+3. *Shape after grouping by stimulus*:
+   - The shape can vary based on implementation (e.g., list of arrays), but using a consistent shape for computational ease, you could structure your data as:
+     - *(num_stimuli, N_Trials_Per_Stimulus, N_Neurons, N_Time)*
+   - Where:
+     - =num_stimuli= is the number of distinct stimuli.
+     - =N_Trials_Per_Stimulus= is often the maximum number of trials for any single stimulus. If trials differ per stimulus, you might use padding to equalize or create a list of arrays.
+
+To arrange your data while assuming consistent trial numbers across stimuli:
+
+#+begin_src python
+import numpy as np
+
+# Example dimensions
+N_Trials, N_Neurons, N_Time = data.shape
+stimulus_labels = np.array([...])  # Where each entry corresponds to a trial's stimulus
+unique_stimuli = np.unique(stimulus_labels)
+
+# Create lists to collect data per stimulus
+all_stimulus_data = []
+
+for stimulus in unique_stimuli:
+    stimulus_indices = np.where(stimulus_labels == stimulus)[0]
+    stimulus_data = data[stimulus_indices]
+    all_stimulus_data.append(stimulus_data)
+
+# Convert list of arrays to a structured form if needed for your application
+# For example, create an equal-padding strategy, depending on the library's needs
+#+end_src
+
+Ensure the data is structured according to how the dPCA library expects input:
+- Some libraries may handle lists of arrays directly, while others require uniform arrays that might need padding.
+
+Please adjust based on your specific data and library requirements.
+
+*** And how do I call dPCA
+
+To call dPCA in Python, you'll typically follow this general process using a dPCA library that suits your needs. I'll outline a basic example assuming you have properly structured your data and installed a library that facilitates dPCA, such as the =dPCA= package.
+
+Here's how you can set it up and call dPCA:
+
+1. *Ensure Necessary Libraries are Installed*: Make sure you have the necessary library. If =dPCA= isn't available directly, check for packages that offer similar functionality, typically within scientific computing and neuroscience toolkits.
+
+2. *Initialize and Configure dPCA*:
+
+   #+begin_src python
+   from dpca import dPCA
+
+   # Configure dPCA
+   # 'labels' can be adjusted based on your specific experimental design
+   dpca = dPCA(labels='stn', join={'stimulus': ['s'], 'time': ['t'], 'neuron': ['n']})
+   #+end_src
+
+   In this setup:
+   - ='s'=, ='t'=, and ='n'= stand for 'stimulus', 'time', and 'neuron', or similar factors relevant to your data.
+
+3. *Prepare Your Data*: As covered before, ensure your data is structured (perhaps as =dpca_data=) to reflect stimulus, trials, neurons, and time:
+
+   #+begin_src python
+   # dpca_data: shape (num_stimuli, max_trials_per_stimulus, N_Neurons, N_Time)
+   # Ensure dimensions match your experimental variables and library needs
+   #+end_src
+
+4. *Fit and Transform the Data*:
+
+   #+begin_src python
+   # dpca.fit_transform expects the data structured in a way depending on the specific implementation
+   X_transform, explained_variance = dpca.fit_transform(dpca_data)
+   #+end_src
+
+5. *Analyze the Results*: After fitting, =X_transform= will contain your demixed components. You can then analyze these components to understand the variations they explain.
+
+*Visualization and Analysis*:
+
+You can visualize and interpret the components using libraries like =matplotlib=:
+
+#+begin_src python
+import matplotlib.pyplot as plt
+
+# Example: plot explained variance
+plt.figure()
+plt.plot(explained_variance, 'o-')
+plt.title('Explained Variance')
+plt.xlabel('Component')
+plt.ylabel('Variance Explained')
+plt.show()
+
+# Example: plot the first component over time
+plt.figure()
+plt.plot(X_transform[0, 0, :, 0])  # Plot for first stimulus, first trial, first component
+plt.title('First Component Over Time')
+plt.xlabel('Time')
+plt.ylabel('Component Value')
+plt.show()
+#+end_src
+
+Make sure to adjust these calls if necessary, based on the actual implementation details of the dPCA library you are using. The exact function signatures and data requirements may vary across different implementations.
