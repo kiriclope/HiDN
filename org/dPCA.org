@@ -1,326 +1,1604 @@
-*** How do I use demixe PCA?
-
-To use Demix PCA, you generally need to follow these steps:
-
-1. *Understand the Concept*: Demix PCA is a variant of Principal Component Analysis designed for demixing signals, especially in neural data analysis. It separates signals into components that explain shared and individual variations.
-
-2. *Prepare Your Data*: Structure your data properly, typically as a matrix where rows represent different observations and columns represent different channels or features.
-
-3. *Choose Software or Library*: Use a library or software that supports demixed PCA. In Python, for instance, you can use packages like =dPCA= which implement demixed PCA algorithms.
-
-4. *Implement Demix PCA*:
-   - *Fit the Model*: Use the demix PCA function from the chosen library, inputting your data matrix.
-   - *Specify Parameters*: Based on the implementation, you'll need to specify parameters or hyperparameters, like the number of demixed components.
-   - *Extract Components*: Run the function to extract the demixed principal components from your data.
-
-5. *Analyze the Results*: Use the output components to interpret the different sources of variation within your data. Visualizations like component plots can be helpful for interpretation.
-
-For detailed procedures and code examples, consult the documentation of the library or software you are using.
-
-*** How do I actually use it in python?
-
-To use demixed PCA (dPCA) in Python, you can use the =dPCA= Python package, which is specifically designed for this purpose. Here's a basic example of how you might implement it:
-
-1. *Install the dPCA Package*: If it's not already installed, you might need to install the =dPCA= package or the =numpy= and =matplotlib= libraries for basic PCA functions and visualizations. However, note that =dPCA= might be included with some specialized neuroscience data packages if you are working within that context.
-
-    You can check online resources for downloading and installing specific scientific packages like =dPCA=.
-
-2. *Import Necessary Libraries*:
-
-    #+begin_src python
-    from dpca import dPCA
-    import numpy as np
-    #+end_src
-
-3. *Prepare Your Data*: Structure your data matrix. For example:
-
-    #+begin_src python
-    data = np.random.rand(100, 10)  # 100 samples with 10 features
-    #+end_src
-
-4. *Initialize and Fit dPCA*:
-
-    #+begin_src python
-    dpca = dPCA(labels='stc', join={'stimulus': ['s'], 'time': ['t'], 'condition':['s', 't']})
-    X_transform, explained_variance = dpca.fit_transform(data)
-    #+end_src
-
-  Here, ='stc'= indicates labels for the different categories in your data like stimulus, time, and condition.
-
-5. *Analyze Components*: After fitting, =X_transform= contains your demixed components. You can analyze and visualize them as needed.
-
-6. *Visualizations (Optional)*:
-
-    #+begin_src python
-    import matplotlib.pyplot as plt
-
-    plt.figure()
-    plt.plot(X_transform[:, 0])  # Plot the first component
-    plt.title('First dPCA Component')
-    plt.show()
-    #+end_src
-
-Remember, this is a simplified example. The actual dimensions and specifics depend on your data structure, and you may need to adapt the example to fit your exact use case.
-
-Refer to detailed package documentation for specific functions and options if you're using a different environment or dataset configuration.
-
-*** I don't understand how I should prepare my data
-
-Preparing your data for dPCA involves structuring it in a way that captures the different sources of variability you want to analyze. Here's a step-by-step guide:
-
-1. *Organize Your Data*: Arrange your data in a multi-dimensional array (tensor) reflecting the factors you want to examine. Common dimensions include:
-   - Trials or samples
-   - Time points (if analyzing time-series data)
-   - Conditions or other experimental variables
-
-2. *Label Your Factors*: You need to define what each dimension represents, both in terms of the data (e.g., trials, time) and what you're comparing (e.g., stimulus condition).
-
-3. *Example Structure*:
-   - Suppose you have data from an experiment with 3 conditions, each with 100 trials and recorded across 50 time points. You might structure your data as a 3D array:
-     \[
-     \text{data}[\text{num\_conditions}][\text{num\_trials}][\text{num\_timepoints}]
-     \]
-
-4. *Loading & Arranging Your Data*: If using numpy, your data might look like this:
-
-   #+begin_src python
-   import numpy as np
-
-   # Simulated data within a certain shape
-   num_conditions = 3
-   num_trials = 100
-   num_timepoints = 50
-
-   data = np.random.rand(num_conditions, num_trials, num_timepoints)
-   #+end_src
-
-5. *Defining Labels*: When initializing dPCA, specify which dimensions correspond to which labels:
-
-   #+begin_src python
-   from dpca import dPCA
-
-   dpca = dPCA(labels='ct', join={'condition': ['c'], 'time': ['t']})
-   #+end_src
-
-6. *Fit dPCA*:
-   #+begin_src python
-   X_transform, explained_variance = dpca.fit_transform(data)
-   #+end_src
-
-In summary, organize your data array based on the experimental design, ensuring that you can clearly delineate the different factors you wish to assess. The dimensions you choose will reflect the structure of your specific experimental setup and the analysis you want to perform.
-
-***  my data is (N_Trials, N_Neurons, N_Time). But for each trial I have different stimulus.
-
-Given your data structure =(N_Trials, N_Neurons, N_Time)= with different stimuli for each trial, you'll need to rearrange your data and potentially label it to indicate these stimuli differences. Here's how you can prepare your data for dPCA:
-
-1. *Add a Stimulus Dimension*:
-   - Transform your data to incorporate stimulus as a dimension or use an accompanying labels array to indicate the stimulus type for each trial.
-
-2. *Structure Your Data*:
-   - Suppose you have data from =N_Trials= where each trial belongs to one of several stimulus categories. You can slice your data based on stimulus type.
-
-3. *Example Data Preparation*:
-
-   *Assign Stimulus Labels*:
-   - Create an array that holds the stimulus label or category for each trial.
-
-   #+begin_src python
-   stimulus_labels = np.array([...])  # Length should be N_Trials
-   #+end_src
-
-   *Organize Data for dPCA*:
-   - Group trials according to each stimulus.
-   - You can use =numpy= to efficiently reorganize the data.
-
-   #+begin_src python
-   import numpy as np
-
-   # Assuming you have N_Trials, N_Neurons, N_Time
-   trials, neurons, timepoints = data.shape
-   unique_stimuli = np.unique(stimulus_labels)
-
-   # Dictionary to hold data per stimulus type
-   data_by_stimulus = {}
-   for stimulus in unique_stimuli:
-       stimulus_indices = np.where(stimulus_labels == stimulus)[0]
-       data_by_stimulus[stimulus] = data[stimulus_indices, :, :]
-   #+end_src
-
-4. *Prepare Input for dPCA*:
-   - Depending on how the dPCA library expects input, you may need to transform =data_by_stimulus= to match expected input formats.
-
-5. *Set Up and Fit dPCA*:
-   - You may need to concatenate data or adjust according to the implementation's needs.
-
-   #+begin_src python
-   from dpca import dPCA
-
-   # Create a 4D tensor where each slice across the first dimension corresponds to one stimulus type
-   dpca_data = np.array([data_by_stimulus[stimulus] for stimulus in unique_stimuli])
-
-   dpca = dPCA(labels='stn', join={'stimulus': ['s'], 'time': ['t'], 'neuron': ['n']})
-   X_transform, explained_variance = dpca.fit_transform(dpca_data)
-   #+end_src
-
-This preparation assumes that each trial in your original data is indexed by its stimulus type, allowing dPCA to parse stimulus information. Adjust the shapes and labels according to the library's requirements and your specific experimental setup.
-
-*** So what is the shape of the new data?
-
-In the example discussed, where you're reorganizing data based on stimulus types, the new data structure passed to dPCA could have the shape:
-
-\[
-\text{new\_data}[\text{num\_stimuli}][\text{max\_trials\_per\_stimulus}][\text{N\_Neurons}][\text{N\_Time}]
-\]
-
-Here's how this shape comes about:
-
-1. *num_stimuli*: Number of unique stimulus types in your dataset.
-
-2. *max_trials_per_stimulus*: The maximum number of trials for any single stimulus type. If different stimuli have different numbers of trials, you might need to pad or handle fewer trials (e.g., with masking).
-
-3. *N_Neurons*: The number of neurons you are recording from, as per your original dataset.
-
-4. *N_Time*: The number of time points in each trial, as per your original dataset.
-
-*** Example Construction
-
-If each stimulus can have a different number of trials, you might use padding to ensure consistent shapes across all stimuli:
-
-#+begin_src python
-import numpy as np
-
-# Suppose you had the following dimensions
-N_Trials, N_Neurons, N_Time = data.shape
-stimulus_labels = np.array([...])  # Length should be N_Trials
-unique_stimuli = np.unique(stimulus_labels)
-
-# Determine the max number of trials for any stimulus
-max_trials_per_stimulus = max(np.sum(stimulus_labels == s) for s in unique_stimuli)
-
-# Allocate an array filled with NaNs or a suitable default for padding
-dpca_data = np.full((len(unique_stimuli), max_trials_per_stimulus, N_Neurons, N_Time), np.nan)
-
-for i, stimulus in enumerate(unique_stimuli):
-    stimulus_indices = np.where(stimulus_labels == stimulus)[0]
-    num_trials = len(stimulus_indices)
-
-    # Insert the trials into the relevant part of dpca_data
-    dpca_data[i, :num_trials] = data[stimulus_indices]
-
-# Now dpca_data is ready with consistent shapes
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session umap :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from time import perf_counter
+
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
 #+end_src
 
 #+RESULTS:
 
-This array =dpca_data= would then be the input to your dPCA method, maintaining consistent shapes aligned across stimulus types, while capturing variations due to stimuli, neurons, and time points. Adjust based on the specifications of the dPCA implementation you are using.
-
-*** Are you sure about the max_trials_per_stimulus ?
-
-I apologize for any confusion. Let's clarify the shape of the data structured for dPCA, especially considering trials and stimuli.
-
-If your original data is structured as follows:
-
-- *(N_Trials, N_Neurons, N_Time):* Where =N_Trials= is the total number of trials, =N_Neurons= is the number of recorded neurons, and =N_Time= is the number of time points per trial.
-
-To be organized by stimulus type for dPCA analysis, you would:
-
-1. *Identify unique stimuli*: Create a list or array of unique stimulus identifiers from your =stimulus_labels=.
-
-2. *Group trials by stimulus*: This involves separating trials into groups per stimulus type.
-
-3. *Shape after grouping by stimulus*:
-   - The shape can vary based on implementation (e.g., list of arrays), but using a consistent shape for computational ease, you could structure your data as:
-     - *(num_stimuli, N_Trials_Per_Stimulus, N_Neurons, N_Time)*
-   - Where:
-     - =num_stimuli= is the number of distinct stimuli.
-     - =N_Trials_Per_Stimulus= is often the maximum number of trials for any single stimulus. If trials differ per stimulus, you might use padding to equalize or create a list of arrays.
-
-To arrange your data while assuming consistent trial numbers across stimuli:
-
-#+begin_src python
-import numpy as np
-
-# Example dimensions
-N_Trials, N_Neurons, N_Time = data.shape
-stimulus_labels = np.array([...])  # Where each entry corresponds to a trial's stimulus
-unique_stimuli = np.unique(stimulus_labels)
-
-# Create lists to collect data per stimulus
-all_stimulus_data = []
-
-for stimulus in unique_stimuli:
-    stimulus_indices = np.where(stimulus_labels == stimulus)[0]
-    stimulus_data = data[stimulus_indices]
-    all_stimulus_data.append(stimulus_data)
-
-# Convert list of arrays to a structured form if needed for your application
-# For example, create an equal-padding strategy, depending on the library's needs
+#+begin_src ipython
+from src.dPCA import dPCA
 #+end_src
 
-Ensure the data is structured according to how the dPCA library expects input:
-- Some libraries may handle lists of arrays directly, while others require uniform arrays that might need padding.
+#+RESULTS:
 
-Please adjust based on your specific data and library requirements.
+* Helpers
+** Other
 
-*** And how do I call dPCA
+#+begin_src ipython
+  def standard_scaler(data, axis=0, IF_RETURN=0):
+      mean = np.mean(data, axis=axis, keepdims=True)
+      std = np.std(data, axis=axis, keepdims=True)
+      if IF_RETURN:
+          return (data - mean) / std, mean, std
+      else:
+          return (data - mean) / (std + 1e-6)
+#+end_src
 
-To call dPCA in Python, you'll typically follow this general process using a dPCA library that suits your needs. I'll outline a basic example assuming you have properly structured your data and installed a library that facilitates dPCA, such as the =dPCA= package.
+#+RESULTS:
 
-Here's how you can set it up and call dPCA:
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
 
-1. *Ensure Necessary Libraries are Installed*: Make sure you have the necessary library. If =dPCA= isn't available directly, check for packages that offer similar functionality, typically within scientific computing and neuroscience toolkits.
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
 
-2. *Initialize and Configure dPCA*:
+#+RESULTS:
 
-   #+begin_src python
-   from dpca import dPCA
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
 
-   # Configure dPCA
-   # 'labels' can be adjusted based on your specific experimental design
-   dpca = dPCA(labels='stn', join={'stimulus': ['s'], 'time': ['t'], 'neuron': ['n']})
-   #+end_src
+#+RESULTS:
 
-   In this setup:
-   - ='s'=, ='t'=, and ='n'= stand for 'stimulus', 'time', and 'neuron', or similar factors relevant to your data.
+#+begin_src ipython
+def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
 
-3. *Prepare Your Data*: As covered before, ensure your data is structured (perhaps as =dpca_data=) to reflect stimulus, trials, neurons, and time:
+      cos_theta = A_norm @ B_norm.T
+      angle_radians = np.arccos(np.clip(cos_theta, -1.0, 1.0))
 
-   #+begin_src python
-   # dpca_data: shape (num_stimuli, max_trials_per_stimulus, N_Neurons, N_Time)
-   # Ensure dimensions match your experimental variables and library needs
-   #+end_src
+      return np.degrees(angle_radians)
+#+end_src
 
-4. *Fit and Transform the Data*:
+#+RESULTS:
 
-   #+begin_src python
-   # dpca.fit_transform expects the data structured in a way depending on the specific implementation
-   X_transform, explained_variance = dpca.fit_transform(dpca_data)
-   #+end_src
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
 
-5. *Analyze the Results*: After fitting, =X_transform= will contain your demixed components. You can then analyze these components to understand the variations they explain.
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
 
-*Visualization and Analysis*:
 
-You can visualize and interpret the components using libraries like =matplotlib=:
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
 
-#+begin_src python
+#+end_src
+
+#+RESULTS:
+
+** Plots
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          for i in range(b.shape[0]):
+              v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
+
+      if IF_NORM:
+          for i in range(b.shape[0]):
+              u[i] = u[i] / np.linalg.norm(u[i])
+              v[i] = v[i] / np.linalg.norm(v[i])
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  #  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12']
+  # mice = ['PP09', 'PP17']
+
+  kwargs = {
+      'mouse': mice[1], 'laser': 0,
+      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05, 'n_comp': 0,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise': True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 1000,
+      'n_splits': 3, 'n_repeats': 10,
+      'class_weight': 0,
+      'multilabel':0,
+      'mne_estimator': 'generalizing', # sliding or generalizing
+      'n_jobs': 128,
+      'bolasso_penalty': 'l2',
+      'bolasso_pval': 0.05,
+      'laser' : -1,
+  }
+
+  # kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'last']
+  # kwargs['days'] = 'all'
+  # kwargs['days'] = ['first']
+
+  options = set_options(**kwargs)
+  print(options['days'])
+  options['mice'] = mice
+#+end_src
+
+#+RESULTS:
+: ['first', 'last']
+
+#+begin_src ipython
+options['mice'] = ['JawsM15']
+options['reload'] = 0
+X_mouse, y_mouse = [], []
+y_laser = []
+y_choice = []
+
+for idx, mouse in enumerate(options['mice']):
+    options['mouse'] = mouse
+    options['features'] = 'sample'
+    options['verbose'] = 0
+
+    options['trials'] = ''
+    options['reload'] = 0
+
+    options = set_options(**options)
+
+    X_list = []
+    y_list = []
+    y_list2 = []
+    y_list3 = []
+
+    tasks = ["DPA", "DualGo", "DualNoGo"]
+
+    for i, day in enumerate(options['days']):
+        X_dum = []
+        y_dum = []
+        y_dum2 = []
+        y_dum3 = []
+
+        options['day'] = day
+        for task in tasks:
+            options['task'] = task
+            X_days, y_days = get_X_y_days(**options)
+            X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+            X_dum.append(X_data)
+            # y_dum.append(y_data)
+            y_dum.append(y_data.sample_odor)
+            # y_dum.append(y_data.odor_pair)
+            y_dum2.append(y_data.laser)
+            y_dum3.append(y_data.choice)
+
+        X_list.append(X_dum)
+        y_list.append(y_dum)
+        y_list2.append(y_dum2)
+        y_list3.append(y_dum3)
+
+    X_mouse.append(X_list)
+    y_mouse.append(y_list)
+    y_laser.append(y_list2)
+    y_choice.append(y_list3)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* dPCA
+** Stimuli choice time
+*** reshape
+
+#+begin_src ipython
+DURATION = 14
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, LeaveOneOut
+
+def crossval_dpca(X_stim, Z, dpca, folds):
+
+    Dp_cv = []
+    Ds_cv = []
+
+    Zp_cv =  []
+    Zs_cv =  []
+    Zps_cv =  []
+
+    # Iterate over each fold
+    for train_index, test_index in folds.split(X_stim):
+        try:
+            X_train, X_test = X_stim[train_index], X_stim[test_index]
+
+            X_avg = np.nanmean(X_train, 0)
+            dpca.fit(X_avg, X_train)
+
+            Dp_cv.append(dpca.D['p'])
+            Ds_cv.append(dpca.D['s'])
+
+            X_avg = np.nanmean(X_test, 0)
+            X_test_pca = dpca.transform(X_avg)
+
+            # Store the projected test samples
+            Zp_cv.append(X_test_pca['p'])
+            Zs_cv.append(X_test_pca['s'])
+            Zps_cv.append(X_test_pca['ps'])
+        except:
+            pass
+
+    dpca.D['p'] = np.nanmean(Dp_cv, axis=0)
+    dpca.D['s'] = np.nanmean(Ds_cv, axis=0)
+
+    Z['p'] = np.nanmean(Zp_cv, axis=0)
+    Z['s'] = np.nanmean(Zs_cv, axis=0)
+    Z['ps'] = np.nanmean(Zps_cv, axis=0)
+
+    return Z, dpca
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def reshape_X(X, y, y_las, y_ch):
+
+    X_stim = np.zeros((3, 2, 2, X.shape[1] // 4, X.shape[-2], 84)) * np.nan
+    # X_stim = np.ones((3, 2, 2, X.shape[1] // 4, X.shape[-2], 84)) * -999
+
+    for i in range(3):
+        X0 = X[i]
+        y0 = y[i]
+
+        y_opto = y_las[i]
+        y1 = y_ch[i]
+
+        X0 = X0[y_opto==0]
+        y0 = y0[y_opto==0]
+        y1 = y1[y_opto==0]
+
+        for j in range(2):
+            for k in range(2):
+                dum = X0[(y0==j) & (y1==k)]
+                X_stim[i, j, k, :dum.shape[0]] = dum
+
+
+    X_mean = np.nanmean(X_stim, (0, 1, 2, 3))
+
+    for i in range(3):
+        X0 = X[i]
+        y0 = y[i]
+
+        y_opto = y_las[i]
+        y1 = y_ch[i]
+
+        X0 = X0[y_opto==0]
+        y0 = y0[y_opto==0]
+        y1 = y1[y_opto==0]
+        for j in range(2):
+            for k in range(2):
+                dum = X0[(y0==j) & (y1==k)]
+                # print(dum.shape)
+                X_stim[i, j, k, dum.shape[0]:] = X_mean
+
+    # print(X_stim.shape)
+
+    X_stim = np.swapaxes(X_stim, 1, 2)
+    X_stim = np.swapaxes(X_stim, 1, 3)
+    X_stim = np.vstack(X_stim)
+    # print(X_stim.shape)
+
+    X_stim = np.swapaxes(X_stim, 1, 3)
+    # print(X_stim.shape)
+    return X_stim
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+X = np.array(X_mouse[0][-1])
+y = np.array(y_mouse[0][-1])
+y_las = np.array(y_laser[0][-1])
+y_ch = np.array(y_choice[0][-1])
+print(X.shape)
+
+X_stim = reshape_X(X, y, y_las, y_ch)
+X_avg = np.nanmean(X_stim, 0)
+print(X_stim.shape)
+print(np.isnan(X_stim).mean())
+
+# dpca = dPCA.dPCA(labels='pst', n_components=2, regularizer='auto', n_trials=3)
+# dpca.protect = ['t']
+
+# Z = dpca.fit_transform(X_avg, X_stim)
+#+end_src
+
+#+RESULTS:
+: (3, 192, 693, 84)
+: (144, 693, 2, 2, 84)
+: 0.0
+
+#+begin_src ipython
+Z_days = []
+dpca_days = []
+
+for i in range(len(options['days'])):
+    X = np.array(X_mouse[0][i])
+    y = np.array(y_mouse[0][i])
+
+    y_las = np.array(y_laser[0][i])
+    y_ch = np.array(y_choice[0][i])
+
+    X_stim = reshape_X(X, y, y_las, y_ch)
+
+    X_avg = np.nanmean(X_stim, 0)
+    print('X_stim', X_stim.shape, 'X_avg', X_avg.shape)
+
+    dpca = dPCA.dPCA(labels='pst', n_components=2, regularizer='auto', n_trials=3)
+    dpca.protect = ['t']
+    Z = dpca.fit_transform(X_avg, X_stim)
+
+    folds = LeaveOneOut()
+    Z, dpca = crossval_dpca(X_stim, Z, dpca, folds)
+
+    Z_days.append(Z)
+    dpca_days.append(dpca)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+X_stim (144, 693, 2, 2, 84) X_avg (693, 2, 2, 84)
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.003388200529767837
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+X_stim (144, 693, 2, 2, 84) X_avg (693, 2, 2, 84)
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.002420143235548455
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+#+end_example
+
+#+begin_src ipython
+A = dpca.D['s'].T[0]
+B = dpca.D['p'].T[0]
+print(angle_AB(A, B))
+#+end_src
+
+#+RESULTS:
+: 88.21502146549476
+
+*** plots
+
+#+begin_src ipython
+Z = Z_days[-1]
+dpca = dpca_days[-1]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+for idx in range(2):
+    for i in range(Z['t'].shape[2]):
+        ax[0].plot(xtime, Z['t'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['t'][0, idx, i], Z['t'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_19.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['s'].shape[2]):
+        ax[0].plot(xtime, Z['s'][0, i, idx], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['s'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['s'][0, i, idx], Z['s'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample dPC 1')
+ax[1].set_ylabel('Sample dPC 2')
+
+ax[2].set_xlabel('Sample dPC 1')
+ax[2].set_ylabel('Sample dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_20.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['p'].shape[2]):
+        ax[0].plot(xtime, Z['p'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+        ax[1].plot(xtime, Z['p'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['p'][0, i, idx], Z['p'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_21.png]]
+
+#+begin_src ipython
+for i in range(2):
+    for idx in range(2):
+        plt.plot(Z['s'][0, i, idx], Z['p'][0, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+plt.xlabel('Sample dPC 1')
+plt.ylabel('Pair dPC 1')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_22.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['st'].shape[2]):
+        ax[0].plot(xtime, Z['ps'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['ps'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['ps'][0, i, idx], Z['ps'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample/Pair dPC 1')
+ax[1].set_ylabel('Sample/Pair dPC 2')
+
+ax[2].set_xlabel('Sample/Pair dPC 1')
+ax[2].set_ylabel('Sample/Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_23.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** Energy
+
+#+begin_src ipython
+def remove_close_entries_with_indices(nums, threshold, modulus):
+    # Create a list of tuples (value, index)
+    indexed_nums = list(enumerate(nums))
+
+    # Sort based on the values but keep the original indices
+    indexed_nums.sort(key=lambda x: x[1])
+
+    # Function to calculate circular distance
+    def circular_distance(x, y, mod):
+        return min((x - y) % mod, (y - x) % mod)
+
+    filtered_indices = []
+    filtered_nums = []
+
+    for idx, num in indexed_nums:
+        if not filtered_nums:
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
+        elif all(circular_distance(num, existing_num, modulus) >= threshold for existing_num in filtered_nums):
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
+
+    return filtered_indices
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+from scipy.optimize import differential_evolution
+from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 
-# Example: plot explained variance
-plt.figure()
-plt.plot(explained_variance, 'o-')
-plt.title('Explained Variance')
-plt.xlabel('Component')
-plt.ylabel('Variance Explained')
-plt.show()
+def find_multiple_minima_from_values(x_vals, y_vals, num_runs=100, tol=0.05, popsize=2, maxiter=1000, min_distance=35):
 
-# Example: plot the first component over time
-plt.figure()
-plt.plot(X_transform[0, 0, :, 0])  # Plot for first stimulus, first trial, first component
-plt.title('First Component Over Time')
-plt.xlabel('Time')
-plt.ylabel('Component Value')
+    energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
+    bounds = [(x_vals.min(), x_vals.max())]
+    results = []
+
+    result_old = 999
+    for _ in range(num_runs):
+        result = differential_evolution(energy_function, bounds, strategy='rand1bin',
+                                        maxiter=maxiter, popsize=popsize, tol=tol,
+                                        seed=np.random.randint(0, 10000))
+
+        results.append((result.x[0], result.fun))
+
+    results = np.array(results)
+    indices = remove_close_entries_with_indices(results[:, 0], min_distance, 360)
+    results = results[indices]
+
+    return results
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.attractor.landscape import EnergyLandscape
+energy = EnergyLandscape(IF_HMM=0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+num_bins = 64
+window = 10
+bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
+if len(options['days'])>3:
+     days = np.arange(1, 7)
+else:
+     days = options['days']
+
+print(days)
+#+end_src
+
+#+RESULTS:
+: ['first', 'last']
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          for i in range(b.shape[0]):
+              v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
+
+      if IF_NORM:
+          for i in range(b.shape[0]):
+              u[i] = u[i] / np.linalg.norm(u[i])
+              v[i] = v[i] / np.linalg.norm(v[i])
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+index = []
+for dpca in dpca_days:
+    print(dpca.D['s'].shape)
+    theta = get_theta(dpca.D['s'].T[0], dpca.D['p'].T[0], IF_NORM=1, GM=0)
+    index.append(np.argsort(theta, -1))
+index = np.array(index)
+print(index.shape)
+#+end_src
+
+#+RESULTS:
+: (693, 2)
+: (693, 2)
+: (2, 693)
+
+#+begin_src ipython
+epoch = np.concatenate((options['bins_BL'], options['bins_DELAY']))
+energy_mouse, ci_mouse = [], []
+
+for idx, mouse in enumerate(options['mice']):
+    X_list = X_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    energy_day = []
+    ci_day = []
+
+    for i, day in enumerate(options['days']):
+
+        X = np.vstack(X_list[i])
+        X = X [:, index[i]]
+        X = X[..., options['bins_ED']]
+        # X = X[..., epoch]
+
+        # X = X_list[i][0]
+        # X = X [:, index[i]]
+        # X = X[..., options['bins_DELAY']]
+        # X = X[..., epoch]
+
+        # print(X.shape)
+        _, phi = decode_bump(X, axis=1)
+
+        landscape = energy.fit(phi, bins, window=window)
+        energy_day.append(landscape)
+
+        ci = None
+        ci_day.append(ci)
+
+    energy_mouse.append(energy_day)
+    ci_mouse.append(ci_day)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+cmap = plt.get_cmap('Blues')
+colors = [cmap((i+1)/6) for i in range(7)]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from scipy.signal import find_peaks, find_peaks_cwt
+
+minima_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])[:, 0]
+        # print(minimas)
+
+        if len(minimas)<2:
+            minimas = [minimas[0], minimas[0]]
+
+        minima_mouse[idx][i] = minimas[:2]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+y_loc = []
+for idx, mouse in enumerate(options['mice']):
+     id = ~np.isnan(minima_mouse[idx].T)
+     minima = minima_mouse[idx].T
+
+     # y1 = locations[minima[0][id[0]].astype('int')] * np.pi / 180.0
+     # y2 = locations[minima[1][id[1]].astype('int')] * np.pi / 180.0
+
+     y1 = minima[0][id[0]].astype('int') * np.pi / 180.0
+     y2 = minima[1][id[1]].astype('int') * np.pi / 180.0
+
+     y_mean = (np.sin(y1)+np.sin(y2)) / 2
+
+     while len(y_mean)<len(days):
+          y_mean = np.append(y_mean, np.nan)
+
+     y_loc.append(y_mean)
+
+y_loc = np.array(y_loc)
+
+plt.plot(np.arange(1, len(days)+1), np.nanmean(y_loc, 0), '-o')
+plt.plot(np.arange(1, len(days)+1), y_loc.T, '-', alpha=.2)
+
+# plt.xticks(np.arange(1, 7))
+plt.axhline(0, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('Y-loc (a.u.)')
 plt.show()
 #+end_src
 
-Make sure to adjust these calls if necessary, based on the actual implementation details of the dPCA library you are using. The exact function signatures and data requirements may vary across different implementations.
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+#+begin_src ipython
+from scipy.signal import find_peaks
+fig, ax = plt.subplots(1, 2, figsize= [2*width, 1*width * golden_ratio])
+ax_flat = ax.flatten()
+
+minima_mouse = np.zeros((9, 6, 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    peaks_list, minimas_list = [], []
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    ax = ax_flat[idx]
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+        ax.plot(locations, energy_day[i] * 100 , color=colors[i])
+        ax.set_title(mouse)
+
+        # peaks = find_peaks_cwt(energy_day[i], widths=np.arange(1, 10))[:2]
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))[:2]
+
+        # peaks,  _ = find_peaks(energy_day[i], width=8)[:2]
+        # minimas, _ = find_peaks(-energy_day[i], width=8)[:2]
+
+        # ax.plot(locations[peaks], energy_day[i][peaks] * 100, '^', color=colors[i])
+        # ax.plot(locations[minimas], energy_day[i][minimas] * 100, 'o', color=colors[i])
+
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])
+        ax.plot(minimas[:, 0], minimas[:, 1] * 100, 'o', color=colors[i])
+
+        minima_mouse[idx][i] = minimas[:2, 0]
+
+        # if len(peaks)<2:
+        #     peaks =[peaks[0], peaks[0]]
+        # if len(minimas)<2:
+        #     minimas = [minimas[0], minimas[0]]
+
+        # peaks_list.append(peaks[:1])
+        # minimas_list.append(minimas[:1])
+
+        # print(peaks, minimas)
+
+        ax.set_xlabel('Pref Loc (°)')
+        ax.set_ylabel('Energy')
+        # ax.set_ylim([0, 3])
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_35.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Stimuli pair time
+*** reshape
+
+#+begin_src ipython
+DURATION = 14
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, LeaveOneOut
+
+def crossval_dpca(X_stim, Z, dpca, folds):
+
+    Dp_cv = []
+    Ds_cv = []
+
+    Zp_cv =  []
+    Zs_cv =  []
+    Zps_cv =  []
+
+    # Iterate over each fold
+    for train_index, test_index in folds.split(X_stim):
+        X_train, X_test = X_stim[train_index], X_stim[test_index]
+
+        try:
+            X_avg = np.nanmean(X_train, 0)
+            dpca.fit(X_avg, X_train)
+
+            Dp_cv.append(dpca.D['p'])
+            Ds_cv.append(dpca.D['s'])
+
+            X_avg = np.nanmean(X_test, 0)
+            X_test_pca = dpca.transform(X_avg)
+
+            # Store the projected test samples
+            Zp_cv.append(X_test_pca['p'])
+            Zs_cv.append(X_test_pca['s'])
+            Zps_cv.append(X_test_pca['ps'])
+
+        except:
+            pass
+
+    dpca.D['p'] = np.nanmean(Dp_cv, axis=0)
+    dpca.D['s'] = np.nanmean(Ds_cv, axis=0)
+
+    Z['p'] = np.nanmean(Zp_cv, axis=0)
+    Z['s'] = np.nanmean(Zs_cv, axis=0)
+    Z['ps'] = np.nanmean(Zps_cv, axis=0)
+
+    return Z, dpca
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def reshape_X(X, y, y_las):
+    X_stim = []
+    for i in range(3):
+        X0 = X[i]
+        y0 = y[i]
+        y_opto = y_las[i]
+
+        # X0 = standard_scaler(X0, 0)
+        X0 = X0[y_opto==0]
+        y0 = y0[y_opto==0]
+
+        X_stim.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
+
+    X_stim = np.array(X_stim)
+
+    X_stim = np.swapaxes(X_stim, 1, 2)
+    X_stim = np.vstack(X_stim)
+    X_stim = np.swapaxes(X_stim, 1, 2)
+
+    # print(X_stim.shape)
+    X_stim = X_stim.reshape(-1, X_stim.shape[1], 2, 2 ,84)
+
+    return X_stim
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+Z_days = []
+dpca_days = []
+
+for i in range(len(options['days'])):
+    X = np.array(X_mouse[0][i])
+    y = np.array(y_mouse[0][i])
+    y_las = np.array(y_laser[0][i])
+
+    X_stim = reshape_X(X, y, y_las)
+    X_avg = X_stim.mean(0)
+    print('X_stim', X_stim.shape, 'X_avg', X_avg.shape)
+
+    dpca = dPCA.dPCA(labels='pst', n_components=2, regularizer='auto', n_trials=3)
+    dpca.protect = ['t']
+    Z = dpca.fit_transform(X_avg, X_stim)
+
+    folds = LeaveOneOut()
+    Z, dpca = crossval_dpca(X_stim, Z, dpca, folds)
+
+    Z_days.append(Z)
+    dpca_days.append(dpca)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[15], line 9
+      6 y = np.array(y_mouse[0][i])
+      7 y_las = np.array(y_laser[0][i])
+----> 9 X_stim = reshape_X(X, y, y_las)
+     10 X_avg = X_stim.mean(0)
+     11 print('X_stim', X_stim.shape, 'X_avg', X_avg.shape)
+
+Cell In[14], line 12, in reshape_X(X, y, y_las)
+      9     X0 = X0[y_opto==0]
+     10     y0 = y0[y_opto==0]
+---> 12     X_stim.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
+     14 X_stim = np.array(X_stim)
+     16 X_stim = np.swapaxes(X_stim, 1, 2)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/numpy/core/shape_base.py:449, in stack(arrays, axis, out, dtype, casting)
+    447 shapes = {arr.shape for arr in arrays}
+    448 if len(shapes) != 1:
+--> 449     raise ValueError('all input arrays must have the same shape')
+    451 result_ndim = arrays[0].ndim + 1
+    452 axis = normalize_axis_index(axis, result_ndim)
+
+ValueError: all input arrays must have the same shape
+#+end_example
+:END:
+
+#+begin_src ipython
+A = dpca.D['s'].T[0]
+B = dpca.D['p'].T[0]
+print(angle_AB(A, B))
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[16], line 1
+: ----> 1 A = dpca.D['s'].T[0]
+:       2 B = dpca.D['p'].T[0]
+:       3 print(angle_AB(A, B))
+:
+: NameError: name 'dpca' is not defined
+:END:
+
+*** plots
+
+#+begin_src ipython
+Z = Z_days[0]
+dpca = dpca_days[0]
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[17], line 1
+: ----> 1 Z = Z_days[0]
+:       2 dpca = dpca_days[0]
+:
+: IndexError: list index out of range
+:END:
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+for idx in range(2):
+    for i in range(Z['t'].shape[2]):
+        ax[0].plot(xtime, Z['t'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['t'][0, idx, i], Z['t'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[18], line 2
+:       1 from src.common.plot_utils import add_vlines
+: ----> 2 xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+:       4 fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+:       6 labels = ['AC', 'AD', 'BD', 'BC']
+:
+: NameError: name 'X_stim' is not defined
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['s'].shape[2]):
+        ax[0].plot(xtime, Z['s'][0, i, idx], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['s'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['s'][0, i, idx], Z['s'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample dPC 1')
+ax[1].set_ylabel('Sample dPC 2')
+
+ax[2].set_xlabel('Sample dPC 1')
+ax[2].set_ylabel('Sample dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[19], line 2
+:       1 from src.common.plot_utils import add_vlines
+: ----> 2 xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+:       4 fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+:       6 colors=['b', 'b', 'r', 'r']
+:
+: NameError: name 'X_stim' is not defined
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['p'].shape[2]):
+        ax[0].plot(xtime, Z['p'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+        ax[1].plot(xtime, Z['p'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['p'][0, i, idx], Z['p'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[20], line 2
+:       1 from src.common.plot_utils import add_vlines
+: ----> 2 xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+:       4 fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+:       6 labels = ['AC', 'AD', 'BD', 'BC']
+:
+: NameError: name 'X_stim' is not defined
+:END:
+
+#+begin_src ipython
+for i in range(2):
+    for idx in range(2):
+        plt.plot(Z['s'][0, i, idx], Z['p'][0, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+plt.xlabel('Sample dPC 1')
+plt.ylabel('Pair dPC 1')
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[21], line 3
+:       1 for i in range(2):
+:       2     for idx in range(2):
+: ----> 3         plt.plot(Z['s'][0, i, idx], Z['p'][0, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+:       5 plt.xlabel('Sample dPC 1')
+:       6 plt.ylabel('Pair dPC 1')
+:
+: NameError: name 'Z' is not defined
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['st'].shape[2]):
+        ax[0].plot(xtime, Z['ps'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['ps'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['ps'][0, i, idx], Z['ps'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample/Pair dPC 1')
+ax[1].set_ylabel('Sample/Pair dPC 2')
+
+ax[2].set_xlabel('Sample/Pair dPC 1')
+ax[2].set_ylabel('Sample/Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[22], line 2
+:       1 from src.common.plot_utils import add_vlines
+: ----> 2 xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+:       4 fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+:       6 labels = ['AC', 'AD', 'BD', 'BC']
+:
+: NameError: name 'X_stim' is not defined
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** Energy
+
+#+begin_src ipython
+def remove_close_entries_with_indices(nums, threshold, modulus):
+    # Create a list of tuples (value, index)
+    indexed_nums = list(enumerate(nums))
+
+    # Sort based on the values but keep the original indices
+    indexed_nums.sort(key=lambda x: x[1])
+
+    # Function to calculate circular distance
+    def circular_distance(x, y, mod):
+        return min((x - y) % mod, (y - x) % mod)
+
+    filtered_indices = []
+    filtered_nums = []
+
+    for idx, num in indexed_nums:
+        if not filtered_nums:
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
+        elif all(circular_distance(num, existing_num, modulus) >= threshold for existing_num in filtered_nums):
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
+
+    return filtered_indices
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+from scipy.optimize import differential_evolution
+from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt
+
+def find_multiple_minima_from_values(x_vals, y_vals, num_runs=100, tol=0.05, popsize=2, maxiter=1000, min_distance=35):
+
+    energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
+    bounds = [(x_vals.min(), x_vals.max())]
+    results = []
+
+    result_old = 999
+    for _ in range(num_runs):
+        result = differential_evolution(energy_function, bounds, strategy='rand1bin',
+                                        maxiter=maxiter, popsize=popsize, tol=tol,
+                                        seed=np.random.randint(0, 10000))
+
+        results.append((result.x[0], result.fun))
+
+    results = np.array(results)
+    indices = remove_close_entries_with_indices(results[:, 0], min_distance, 360)
+    results = results[indices]
+
+    return results
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.attractor.landscape import EnergyLandscape
+energy = EnergyLandscape(IF_HMM=0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+num_bins = 64
+window = 10
+bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
+if len(options['days'])>3:
+     days = np.arange(1, 7)
+else:
+     days = options['days']
+
+print(days)
+#+end_src
+
+#+RESULTS:
+: ['first', 'middle', 'last']
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          for i in range(b.shape[0]):
+              v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
+
+      if IF_NORM:
+          for i in range(b.shape[0]):
+              u[i] = u[i] / np.linalg.norm(u[i])
+              v[i] = v[i] / np.linalg.norm(v[i])
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+index = []
+for dpca in dpca_days:
+    print(dpca.D['s'].shape)
+    theta = get_theta(dpca.D['s'].T[0], dpca.D['p'].T[0], IF_NORM=0, GM=0)
+    index.append(np.argsort(theta, -1))
+index = np.array(index)
+print(index.shape)
+#+end_src
+
+#+RESULTS:
+: (0,)
+
+#+begin_src ipython
+epoch = np.concatenate((options['bins_BL'], options['bins_DELAY']))
+energy_mouse, ci_mouse = [], []
+
+for idx, mouse in enumerate(options['mice']):
+    X_list = X_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    energy_day = []
+    ci_day = []
+
+    for i, day in enumerate(options['days']):
+
+        X = np.vstack(X_list[i])
+        X = X [:, index[i]]
+        X = X[..., options['bins_ED']]
+        # X = X[..., epoch]
+
+        X = X_list[i][0]
+        X = X [:, index[i]]
+        X = X[..., options['bins_DELAY']]
+        # X = X[..., epoch]
+
+        # print(X.shape)
+        _, phi = decode_bump(X, axis=1)
+
+        landscape = energy.fit(phi, bins, window=window)
+        energy_day.append(landscape)
+
+        ci = None
+        ci_day.append(ci)
+
+    energy_mouse.append(energy_day)
+    ci_mouse.append(ci_day)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[29], line 16
+:      13 for i, day in enumerate(options['days']):
+:      15     X = np.vstack(X_list[i])
+: ---> 16     X = X [:, index[i]]
+:      17     X = X[..., options['bins_ED']]
+:      18     # X = X[..., epoch]
+:
+: IndexError: index 0 is out of bounds for axis 0 with size 0
+:END:
+
+#+begin_src ipython
+cmap = plt.get_cmap('Blues')
+colors = [cmap((i+1)/6) for i in range(7)]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from scipy.signal import find_peaks, find_peaks_cwt
+
+minima_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])[:, 0]
+        # print(minimas)
+
+        if len(minimas)<2:
+            minimas = [minimas[0], minimas[0]]
+
+        minima_mouse[idx][i] = minimas[:2]
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[31], line 6
+:       3 minima_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
+:       5 for idx, mouse in enumerate(options['mice']):
+: ----> 6     energy_day = energy_mouse[idx]
+:       8     options['mouse'] = mouse
+:       9     options = set_options(**options)
+:
+: IndexError: list index out of range
+:END:
+
+#+begin_src ipython
+y_loc = []
+for idx, mouse in enumerate(options['mice']):
+     id = ~np.isnan(minima_mouse[idx].T)
+     minima = minima_mouse[idx].T
+
+     # y1 = locations[minima[0][id[0]].astype('int')] * np.pi / 180.0
+     # y2 = locations[minima[1][id[1]].astype('int')] * np.pi / 180.0
+
+     y1 = minima[0][id[0]].astype('int') * np.pi / 180.0
+     y2 = minima[1][id[1]].astype('int') * np.pi / 180.0
+
+     y_mean = (np.sin(y1)+np.sin(y2)) / 2
+
+     while len(y_mean)<len(days):
+          y_mean = np.append(y_mean, np.nan)
+
+     y_loc.append(y_mean)
+
+y_loc = np.array(y_loc)
+
+plt.plot(np.arange(1, len(days)+1), np.nanmean(y_loc, 0), '-o')
+plt.plot(np.arange(1, len(days)+1), y_loc.T, '-', alpha=.2)
+
+# plt.xticks(np.arange(1, 7))
+plt.axhline(0, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('Y-loc (a.u.)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_33.png]]
+
+#+begin_src ipython
+from scipy.signal import find_peaks
+fig, ax = plt.subplots(1, 2, figsize= [2*width, 1*width * golden_ratio])
+ax_flat = ax.flatten()
+
+minima_mouse = np.zeros((9, 6, 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    peaks_list, minimas_list = [], []
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    ax = ax_flat[idx]
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+        ax.plot(locations, energy_day[i] * 100 , color=colors[i])
+        ax.set_title(mouse)
+
+        # peaks = find_peaks_cwt(energy_day[i], widths=np.arange(1, 10))[:2]
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))[:2]
+
+        # peaks,  _ = find_peaks(energy_day[i], width=8)[:2]
+        # minimas, _ = find_peaks(-energy_day[i], width=8)[:2]
+
+        # ax.plot(locations[peaks], energy_day[i][peaks] * 100, '^', color=colors[i])
+        # ax.plot(locations[minimas], energy_day[i][minimas] * 100, 'o', color=colors[i])
+
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])
+        ax.plot(minimas[:, 0], minimas[:, 1] * 100, 'o', color=colors[i])
+
+        minima_mouse[idx][i] = minimas[:2, 0]
+
+        # if len(peaks)<2:
+        #     peaks =[peaks[0], peaks[0]]
+        # if len(minimas)<2:
+        #     minimas = [minimas[0], minimas[0]]
+
+        # peaks_list.append(peaks[:1])
+        # minimas_list.append(minimas[:1])
+
+        # print(peaks, minimas)
+
+        ax.set_xlabel('Pref Loc (°)')
+        ax.set_ylabel('Energy')
+        # ax.set_ylim([0, 3])
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[33], line 9
+:       7 for idx, mouse in enumerate(options['mice']):
+:       8     peaks_list, minimas_list = [], []
+: ----> 9     energy_day = energy_mouse[idx]
+:      11     options['mouse'] = mouse
+:      12     options = set_options(**options)
+:
+: IndexError: list index out of range
+[[./figures/landscape/figure_34.png]]
+:END:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

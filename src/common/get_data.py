@@ -497,6 +497,11 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_tasks = y.tasks == "DualNoGo"
 
     if kwargs["features"] == "sample":
+        # idx_S1 = (y.sample_odor == 0) & (y.choice == 0)
+        # idx_S2 = (y.sample_odor == 0) & (y.choice == 1)
+        # idx_S3 = (y.sample_odor == 1) & (y.choice == 0)
+        # idx_S4 = (y.sample_odor == 1) & (y.choice == 1)
+
         idx_S1 = (y.sample_odor == 0) & (y.test_odor == 0)
         idx_S2 = (y.sample_odor == 0) & (y.test_odor == 1)
         idx_S3 = (y.sample_odor == 1) & (y.test_odor == 1)

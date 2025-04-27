@@ -27,6 +27,8 @@
   import torch
   import torch.nn as nn
   import torch.optim as optim
+  import torch.nn.functional as F
+  import torch.nn.init as init
   from torch.utils.data import Dataset, TensorDataset, DataLoader
 #+end_src
 
@@ -156,9 +158,6 @@ def rescale_to_minus_one_to_one(data):
 
 ** Data Split
 
-
-#+RESULTS:
-
 #+begin_src ipython
     def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
 
@@ -167,6 +166,7 @@ def rescale_to_minus_one_to_one(data):
 
        train_indices = []
        test_indices = []
+
        for i in range(n_labels):
           all_indices = np.arange(i * X.shape[0] // n_labels, (i+1) * X.shape[0] // n_labels)
           idx = np.random.choice(all_indices, size=sample_size, replace=False)
@@ -198,6 +198,38 @@ def rescale_to_minus_one_to_one(data):
        # val_loader = torch.utils.data.DataLoader(sliding_window_dataset, batch_size=5, shuffle=True)
 
        return train_loader, val_loader
+#+end_src
+
+#+RESULTS:
+
+ #+begin_src ipython :tangle ../../../src/train/split.py
+
+from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
+
+def strat_split_data(X, Y, train_perc=0.8, batch_size=32):
+
+    if Y.ndim==3:
+      X_train, X_test, Y_train, Y_test = train_test_split(X, Y,
+                                                          train_size=train_perc,
+                                                          stratify=Y[:, 0, 0].cpu().numpy(),
+                                                          shuffle=True)
+    else:
+      X_train, X_test, Y_train, Y_test = train_test_split(X, Y,
+                                                          train_size=train_perc,
+                                                          stratify=Y[:, 0].cpu().numpy(),
+                                                          shuffle=True)
+
+    print(X_train.shape, X_test.shape)
+    print(Y_train.shape, Y_test.shape)
+
+    train_dataset = TensorDataset(X_train, Y_train)
+    val_dataset = TensorDataset(X_test, Y_test)
+
+    # Create data loaders
+    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
+
+    return train_loader, val_loader
 #+end_src
 
 #+RESULTS:
@@ -241,6 +273,10 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
 
 #+RESULTS:
 
+#+RESULTS:
+
+** Optimization
+
 #+begin_src ipython
   def training_step(dataloader, model, loss_fn, optimizer, penalty=None, lbd=1, clip_grad=0, l1_ratio=0.95):
       device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
@@ -249,28 +285,16 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
       for batch, (X, y) in enumerate(dataloader):
           X, y = X.to(device), y.to(device)
 
-          y_pred = model(X)
-          loss = loss_fn(y_pred, y)
+          Y_pred = model(X)
+          loss = loss_fn(Y_pred, X)
 
-          if penalty is not None:
-              reg_loss = 0
-              for param in model.parameters():
-                  if penalty=='l1':
-                      reg_loss += torch.sum(torch.abs(param))
-                  elif penalty=='l2':
-                      reg_loss += torch.sum(torch.square(param))
-                  else:
-                      reg_loss += l1_ratio * torch.sum(torch.abs(param)) + (1.0-l1_ratio) * torch.sum(torch.square(param))
+          # add readout term to fit behavior
+          readout = model.linear(Y_pred)[:, 54:]
+          sign_readout = torch.sign(2 * y - 1.0) * readout.mean(dim=1)
+          loss += F.relu(1.0 - sign_readout).mean()
 
-                  loss = loss + lbd * reg_loss
 
-          # Backpropagation
           loss.backward()
-
-          # Clip gradients
-          if clip_grad:
-              torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
-              #torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=1.0)
 
           optimizer.step()
           optimizer.zero_grad()
@@ -283,8 +307,6 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
 #+begin_src ipython
   def validation_step(dataloader, model, loss_fn):
       size = len(dataloader.dataset)
-      num_batches = len(dataloader)
-
       device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
 
       # Validation loop.
@@ -295,28 +317,29 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
           for X, y in dataloader:
               X, y = X.to(device), y.to(device)
 
-              y_pred = model(X)
-              loss = loss_fn(y_pred, y)
+              # fit next point in time series
+              Y_pred = model(X)
+              loss = loss_fn(Y_pred, X)
+
+              # # add readout term to fit behavior
+              readout = model.linear(Y_pred)[:, 54:]
+              sign_readout = torch.sign(2 * y - 1.0) * readout.mean(dim=1)
+              loss += F.relu(1.0 - sign_readout).mean()
 
               val_loss += loss.item() * X.size(0)
 
           val_loss /= size
-          # acc = metric.compute()
-          # print(f"Accuracy: {acc}")
-          # metric.reset()
+
       return val_loss
 #+end_src
 
 #+RESULTS:
 
-** Optimization
-
 #+begin_src ipython
-    def run_optim(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, penalty=None, lbd=0, thresh=0.005, l1_ratio=0.95):
+def optimization(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=100, penalty=None, lbd=0, thresh=0.005, l1_ratio=0.95):
 
       scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.95)
       # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
-      # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10, factor=0.1, verbose=True)
       # scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 
       device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -324,25 +347,25 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
 
       # Training loop.
       for epoch in range(num_epochs):
-          loss = training_step(train_loader, model, loss_fn, optimizer, penalty, lbd, l1_ratio=l1_ratio)
-          val_loss = validation_step(val_loader, model, loss_fn)
+            loss = training_step(train_loader, model, loss_fn, optimizer, penalty, lbd, l1_ratio=l1_ratio)
+            val_loss = validation_step(val_loader, model, loss_fn)
 
-          scheduler.step()
+            scheduler.step()
 
-          if epoch % int(num_epochs  / 10) == 0:
-              print(f'Epoch {epoch}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
+            if epoch % int(num_epochs  / 10) == 0:
+                  print(f'Epoch {epoch}/{num_epochs}, Training Loss: {loss.item():.4f}, Validation Loss: {val_loss:.4f}')
 
-          if val_loss < thresh and loss < thresh:
-              print(f'Stopping training as loss has fallen below the threshold: {loss}, {val_loss}')
-              break
+            if val_loss < thresh and loss < thresh:
+                  print(f'Stopping training as loss has fallen below the threshold: {loss}, {val_loss}')
+                  break
 
-          if val_loss > 300:
-              print(f'Stopping training as loss is too high: {val_loss}')
-              break
+            if val_loss > 300:
+                  print(f'Stopping training as loss is too high: {val_loss}')
+                  break
 
-          if torch.isnan(loss):
-              print(f'Stopping training as loss is NaN.')
-              break
+            if torch.isnan(loss):
+                  print(f'Stopping training as loss is NaN.')
+                  break
 #+end_src
 
 #+RESULTS:
@@ -459,6 +482,10 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
 
           self.Wab = nn.Parameter(torch.randn((self.N_NEURON, self.N_NEURON), device=DEVICE) * 0.0)
 
+          self.linear = nn.Linear(self.N_NEURON, 1, device=DEVICE)
+          init.normal_(self.linear.weight, mean=0.0, std=1.0)
+          init.normal_(self.linear.bias, mean=0.0, std=1.0)
+
       def update_dynamics(self, rates, ff_input, rec_input, lr):
           noise = torch.randn_like(rates)
 
@@ -496,6 +523,79 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
           rates_sequence = torch.cat(rates_sequence, dim=1)
 
           return rates_sequence
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+  class LRRNN(nn.Module):
+      def __init__(self, N_NEURON, N_BATCH, RANK=2, DT=0.05, TAU=1, SIGMA=0.001, NONLINEAR='sig', DEVICE='cuda', DROP=0.5):
+          super(LRRNN, self).__init__()
+
+          self.N_BATCH = N_BATCH
+          self.DEVICE = DEVICE
+
+          self.N_NEURON = N_NEURON
+          self.RANK = RANK
+
+          self.DT = DT
+          self.TAU = TAU
+          self.GAIN = nn.Parameter(torch.tensor(1.0).to(DEVICE))
+
+          self.SIGMA = nn.Parameter(torch.tensor(SIGMA).to(DEVICE))
+          self.EXP_DT_TAU = torch.exp(-torch.tensor(self.DT / self.TAU).to(DEVICE))
+          self.DT_TAU = torch.tensor(self.DT / self.TAU).to(DEVICE)
+
+          self.dropout = nn.Dropout(DROP)
+
+          if NONLINEAR == 'relu':
+              self.Activation = nn.ReLU()
+          else:
+              self.Activation = nn.Tanh()
+
+          self.U = nn.Parameter(
+              torch.randn((self.N_NEURON, int(self.RANK)), device=self.DEVICE)
+          )
+
+          self.V = nn.Parameter(
+              torch.randn((self.N_NEURON, int(self.RANK)), device=self.DEVICE)
+          )
+
+      def linear(self, rates):
+          return rates @ self.V / self.N_NEURON
+
+      def update_dynamics(self, rates, ff_input, rec_input, lr):
+          noise = torch.randn_like(rates)
+
+          # update hidden state
+          hidden = rates @ lr
+
+          rec_input = rec_input * self.EXP_DT_TAU + hidden * self.DT_TAU # + noise * torch.sqrt(self.SIGMA * self.DT_TAU)
+
+          # compute net input
+          net_input = ff_input + rec_input + noise * self.SIGMA
+
+          # rates = self.GAIN * self.Activation(net_input)
+          rates = net_input
+
+          return rates, rec_input
+
+      def forward(self, ff_input):
+
+          # initialize state
+          rates = torch.zeros(ff_input.size(0), self.N_NEURON, device=self.DEVICE)
+          rec_input = torch.zeros(ff_input.size(0), self.N_NEURON, device=self.DEVICE)
+          lr = self.U @ self.V.T / self.N_NEURON
+
+          rates_sequence = []
+          for step in range(ff_input.size(1)):
+              rates, rec_input = self.update_dynamics(rates, ff_input[:, step], rec_input, lr)
+              rates_sequence.append(rates.unsqueeze(1))
+
+          rates_sequence = torch.cat(rates_sequence, dim=1)
+
+          return rates_sequence
+
 #+end_src
 
 #+RESULTS:
@@ -548,14 +648,18 @@ X_days, y_days = get_X_y_days(**options)
 options['trials'] = ''
 options['day'] = 'last'
 options['task'] = 'all'
+
 X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
 
-X_data = X_data[..., :70]
-print(X_data.shape, y_data.shape)
+X_data = X_data[..., :]
+print(X_data.shape, y_data.shape, y_data.keys())
 #+end_src
 
 #+RESULTS:
-: (288, 693, 70) (288, 13)
+: (288, 693, 84) (288, 14) Index(['sample_odor', 'test_odor', 'response', 'tasks', 'laser', 'day',
+:        'dist_odor', 'choice', 'performance', 'pair', 'odor_pair',
+:        'odr_response', 'odr_choice', 'odr_perf'],
+:       dtype='object')
 
 #+begin_src ipython
 from  mne.decoding import Scaler
@@ -565,7 +669,7 @@ print(X_data.shape)
 #+end_src
 
 #+RESULTS:
-: (288, 693, 70)
+: (288, 693, 84)
 
 #+begin_src ipython
 from src.decode.bump import circcvl
@@ -579,16 +683,9 @@ smoothed_data = moving_average_multidim(X_data, window_size, axis=-1)
 #+end_src
 
 #+RESULTS:
-: (288, 693, 70)
+: (288, 693, 84)
 
 #+RESULTS:
-
-#+begin_src ipython
-options['bins_RWD2']
-#+end_src
-
-#+RESULTS:
-: array([69, 70, 71])
 
 #+begin_src ipython
   time = np.linspace(0, 14, X_data.shape[-1])
@@ -602,37 +699,43 @@ options['bins_RWD2']
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/cad568617879879dd783803d442d90967d9959e1.png]]
+[[./.ob-jupyter/f387b711ca1d94e6c161e57c9f84c0977933423b.png]]
 
 ** Training
 
 #+begin_src ipython
-  # y = np.roll(X_data, -1)
-  # y = y[..., :-1]
-
-  X = smoothed_data[..., :-1]
-  Y = smoothed_data[..., 1:]
+  X = smoothed_data
+  y = y_data.choice.to_numpy()
+  print(X.shape, y.shape, y)
 
   # X = rescale_to_minus_one_to_one(X)
-  # Y = rescale_to_minus_one_to_one(Y)
-
   X = np.swapaxes(X, 1, -1)
-  Y = np.swapaxes(Y, 1, -1)
-
-  print(X.shape, Y.shape)
 #+end_src
 
 #+RESULTS:
-: (288, 69, 693) (288, 69, 693)
+#+begin_example
+(288, 693, 84) (288,) [1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.
+ 1. 1. 1. 1. 0. 1. 0. 1. 1. 1. 0. 0. 1. 0. 1. 0. 1. 0. 0. 0. 1. 0. 0. 0.
+ 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 0. 1. 1. 0. 0.
+ 1. 0. 0. 0. 0. 0. 0. 0. 1. 0. 1. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
+ 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
+ 0. 0. 1. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 1. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
+ 0. 1. 1. 1. 1. 1. 1. 1. 1. 1. 0. 1. 0. 1. 1. 1. 1. 0. 1. 1. 1. 1. 1. 1.
+ 1. 1. 1. 1. 1. 1. 0. 1. 1. 0. 0. 1. 1. 0. 0. 0. 0. 0. 0. 0. 0. 1. 0. 0.
+ 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 0. 1. 1.
+ 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
+ 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 1. 0. 0. 0. 0. 0. 0.
+ 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.]
+#+end_example
 
 #+begin_src ipython
 X = torch.tensor(X, dtype=torch.float32, device=DEVICE)
-Y = torch.tensor(Y, dtype=torch.float32, device=DEVICE)
-print(X.shape, Y.shape)
+y = torch.tensor(y, dtype=torch.float32, device=DEVICE).unsqueeze(-1)
+print(X.shape, y.shape)
 #+end_src
 
 #+RESULTS:
-: torch.Size([288, 69, 693]) torch.Size([288, 69, 693])
+: torch.Size([288, 84, 693]) torch.Size([288, 1])
 
 #+RESULTS:
 
@@ -641,15 +744,16 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 num_features = X.shape[-1]
 batch_size = 16
-train_loader, val_loader = split_data(X, Y, train_perc=0.8, batch_size=batch_size)
+train_loader, val_loader = strat_split_data(X, y, train_perc=0.8, batch_size=batch_size)
 #+end_src
 
 #+RESULTS:
-: X_train shape: torch.Size([230, 69, 693]) Y_train shape: torch.Size([230, 69, 693])
-: X_test shape: torch.Size([58, 69, 693]) Y_test shape: torch.Size([58, 69, 693])
+: torch.Size([230, 84, 693]) torch.Size([58, 84, 693])
+: torch.Size([230, 1]) torch.Size([58, 1])
 
 #+begin_src ipython
-model = FullRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
+# model = FullRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
+model = LRRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
 #+end_src
 
 #+RESULTS:
@@ -661,43 +765,22 @@ num_epochs = 100
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-run_optim(model, train_loader, val_loader, criterion, optimizer, num_epochs, thresh=.001, penalty=None, lbd=1)
+optimization(model, train_loader, val_loader, criterion, optimizer, num_epochs, thresh=.001, penalty=None, lbd=1)
 #+end_src
 
 #+RESULTS:
 #+begin_example
-Epoch 0/100, Training Loss: 0.0019, Validation Loss: 0.0018
-Epoch 10/100, Training Loss: 0.0018, Validation Loss: 0.0018
-Epoch 20/100, Training Loss: 0.0019, Validation Loss: 0.0018
-Epoch 30/100, Training Loss: 0.0018, Validation Loss: 0.0018
-Epoch 40/100, Training Loss: 0.0019, Validation Loss: 0.0018
-Epoch 50/100, Training Loss: 0.0016, Validation Loss: 0.0018
-Epoch 60/100, Training Loss: 0.0018, Validation Loss: 0.0018
-Epoch 70/100, Training Loss: 0.0018, Validation Loss: 0.0018
-Epoch 80/100, Training Loss: 0.0016, Validation Loss: 0.0018
-Epoch 90/100, Training Loss: 0.0017, Validation Loss: 0.0018
+Epoch 0/100, Training Loss: 0.9472, Validation Loss: 0.9502
+Epoch 10/100, Training Loss: 0.1119, Validation Loss: 0.7316
+Epoch 20/100, Training Loss: 0.0564, Validation Loss: 0.6981
+Epoch 30/100, Training Loss: 0.0480, Validation Loss: 0.6868
+Epoch 40/100, Training Loss: 0.0365, Validation Loss: 0.6485
+Epoch 50/100, Training Loss: 0.0287, Validation Loss: 0.6475
+Epoch 60/100, Training Loss: 0.0384, Validation Loss: 0.6386
+Epoch 70/100, Training Loss: 0.0240, Validation Loss: 0.6379
+Epoch 80/100, Training Loss: 0.0236, Validation Loss: 0.6405
+Epoch 90/100, Training Loss: 0.0185, Validation Loss: 0.6393
 #+end_example
-
-#+begin_src ipython
-plt.hist(model.GAIN[0].cpu().detach(), bins='auto')
-plt.xlabel('Gain')
-plt.ylabel('Count')
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[428], line 1
-: ----> 1 plt.hist(model.GAIN[0].cpu().detach(), bins='auto')
-:       2 plt.xlabel('Gain')
-:       3 plt.ylabel('Count')
-:
-: IndexError: invalid index of a 0-dim tensor. Use `tensor.item()` in Python or `tensor.item<T>()` in C++ to convert a 0-dim tensor to a number
-:END:
-
 
 ** Testing
 
@@ -712,7 +795,10 @@ plt.show()
       ground_truth = []
       with torch.no_grad():  # Disable gradient computation for evaluation
           for inputs, targets in data_loader:
+
               inputs, targets = inputs.to(device), targets.to(device)
+              targets = inputs
+
               outputs = model(inputs)
               predictions.append(outputs.cpu())  # If using cuda, need to move data to cpu
               ground_truth.append(targets.cpu())
@@ -729,7 +815,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: (58, 69, 693) (58, 69, 693)
+: (58, 84, 693) (58, 84, 693)
 
 #+begin_src ipython
   import matplotlib.pyplot as plt
@@ -741,7 +827,7 @@ plt.show()
   # Plot the predictions on top of the ground truth
   plt.figure()
   pal = sns.color_palette("tab10")
-  time = np.linspace(0, 14, 70)[:-1]
+  time = np.linspace(0, 14, 84)
   # Example for plotting the first feature dimension
   for i in range(3):
      j = np.random.randint(model.N_NEURON)
@@ -756,12 +842,15 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/31e5b1f7cf5a59fc223ab1eda856c676a2e26827.png]]
+[[./.ob-jupyter/31d7b89bb577d35dce7c85ab37e1524feb9fc224.png]]
 
 #+begin_src ipython
-  # weights = (model.U @ model.V.T).cpu().detach().numpy()
-  weights = model.Wab.cpu().detach().numpy()
-  U, S, Vt = np.linalg.svd(weights, full_matrices=False)
+try:
+    weights = model.Wab.cpu().detach().numpy()
+except:
+    weights = (model.U @ model.V.T).cpu().detach().numpy()
+
+U, S, Vt = np.linalg.svd(weights, full_matrices=False)
 #+end_src
 
 #+RESULTS:
@@ -774,24 +863,24 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/0afe7be70f3a21886620ff3897968beb60bd998b.png]]
+[[./.ob-jupyter/fcf861a125f2ebff6b44186d84e6137428526318.png]]
 
 #+begin_src ipython
   X_days, y_days = get_X_y_days(**options)
   options['day'] = 6
   options['task'] = 'DPA'
-  X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+  X_test, y_test = get_X_y_S1_S2(X_days, y_days, **options)
 
-  print(X_data.shape)
-  # X_data = std_scaler.transform(X_data)
-  X_data = np.swapaxes(X_data, 1, -1)
-  # y_data = y_data[:, np.newaxis]
-  print(X_data.shape, y_data.shape)
+  print(X_test.shape)
+  # X_test = std_scaler.transform(X_test)
+  X_test = np.swapaxes(X_test, 1, -1)
+
+  print(X_test.shape, y_test.shape)
 #+end_src
 
 #+RESULTS:
 : (32, 693, 84)
-: (32, 84, 693) (32, 13)
+: (32, 84, 693) (32, 14)
 
 #+begin_src ipython
 plt.plot(S, 'o')
@@ -801,15 +890,15 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/351e615e44b52f391e60854d02c111c552dbb329.png]]
+[[./.ob-jupyter/c78f391234c138578f1df17612cc63155070e8f4.png]]
 
 #+begin_src ipython
-lbd, U = np.linalg.eig(weights.T)
+lbd, U2 = np.linalg.eig(weights.T)
 idx = np.argsort(np.real(lbd))
 
 Relbd = np.real(lbd[idx])
 Imlbd = np.imag(lbd[idx])
-U = np.real(U[idx])
+U2 = np.real(U2[idx])
 #+end_src
 
 #+RESULTS:
@@ -823,18 +912,19 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/0b8e6dc676c0110fe9de226595e73b3d759dd791.png]]
+[[./.ob-jupyter/e8838d5e21a317bdeebe09b0bc841710cff97601.png]]
 
 #+begin_src ipython
 lbd[:10]
 #+end_src
 
 #+RESULTS:
-: array([-85.61268 +28.330336j  , -85.61268 -28.330336j  ,
-:        -50.2674   +1.9438434j , -50.2674   -1.9438434j ,
-:        -29.52582 +19.599636j  , -29.52582 -19.599636j  ,
-:        -23.456383+15.015668j  , -23.456383-15.015668j  ,
-:        -29.368193 +0.69631594j, -29.368193 -0.69631594j], dtype=complex64)
+: array([ 2.5136525e+02+0.0000000e+00j, -1.2122800e+02+0.0000000e+00j,
+:         8.3399327e-06+4.6413838e-06j,  8.3399327e-06-4.6413838e-06j,
+:         7.3618685e-06+5.7432226e-06j,  7.3618685e-06-5.7432226e-06j,
+:        -5.9164117e-06+7.1160989e-06j, -5.9164117e-06-7.1160989e-06j,
+:         3.3103825e-06+8.3024152e-06j,  3.3103825e-06-8.3024152e-06j],
+:       dtype=complex64)
 
 #+begin_src ipython
 plt.plot(Relbd[-11:], 'o')
@@ -844,24 +934,110 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/c55406b7fb3a8087f0e3375d4ed61cd7572e59db.png]]
+[[./.ob-jupyter/582ce17d289a5849f7708f31f0cf975692d86210.png]]
 
 #+begin_src ipython
 print(lbd[-11:])
 #+end_src
 
 #+RESULTS:
-: [4.9770627 4.9770627 5.410977  5.410977  5.4793367 5.4793367 5.770219
-:  5.770219  7.0945845 7.0945845 7.698562 ]
+: [ 3.3954148e-08+0.0000000e+00j -3.4787934e-08+6.2529118e-08j
+:  -3.4787934e-08-6.2529118e-08j  2.4910776e-08+1.0690769e-07j
+:   2.4910776e-08-1.0690769e-07j  1.1567952e-07+5.7147538e-08j
+:   1.1567952e-07-5.7147538e-08j  1.7485307e-08+7.0275696e-08j
+:   1.7485307e-08-7.0275696e-08j -8.8214609e-09+1.1144971e-08j
+:  -8.8214609e-09-1.1144971e-08j]
 
 #+begin_src ipython
-idx = 4
+idx = 0
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-overlap = torch.tensor(X_data).to(torch.float).to(device) @ torch.tensor(U).to(torch.float).to(device)
+overlap = torch.tensor(X_test).to(torch.float).to(device) @ torch.tensor(U).to(torch.float).to(device)
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+ax[0].plot(np.linspace(0, 14, 84), overlap[:8, :, idx].cpu().detach().mean(0) , 'r')
+ax[0].plot(np.linspace(0, 14, 84), overlap[8:16, :, idx].cpu().detach().mean(0), 'r--')
+
+ax[0].plot(np.linspace(0, 14, 84), overlap[16:24, :, idx].cpu().detach().mean(0), 'b')
+ax[0].plot(np.linspace(0, 14, 84), overlap[24:32, :, idx].cpu().detach().mean(0), 'b--')
+ax[0].axhline(0, ls='--', color='k')
+ax[0].set_xlabel('Time (s)')
+ax[0].set_ylabel('$U_0$')
+
+ax[1].plot(np.linspace(0, 14, 84), overlap[:8, :, 1].cpu().detach().mean(0), 'r')
+ax[1].plot(np.linspace(0, 14, 84), overlap[8:16, :, 1].cpu().detach().mean(0), 'r--')
+
+ax[1].plot(np.linspace(0, 14, 84), overlap[16:24, :, 1].cpu().detach().mean(0), 'b')
+ax[1].plot(np.linspace(0, 14, 84), overlap[24:32, :, 1].cpu().detach().mean(0), 'b--')
+ax[1].axhline(0, ls='--', color='k')
+ax[1].set_xlabel('Time (s)')
+ax[1].set_ylabel('$U_1$')
+
+ax[2].plot(np.linspace(0, 14, 84), overlap[:8, :, 2].cpu().detach().mean(0), 'r')
+ax[2].plot(np.linspace(0, 14, 84), overlap[8:16, :, 2].cpu().detach().mean(0), 'r--')
+
+ax[2].plot(np.linspace(0, 14, 84), overlap[16:24, :, 2].cpu().detach().mean(0), 'b')
+ax[2].plot(np.linspace(0, 14, 84), overlap[24:32, :, 2].cpu().detach().mean(0), 'b--')
+ax[2].axhline(0, ls='--', color='k')
+ax[2].set_xlabel('Time (s)')
+ax[2].set_ylabel('$U_2$')
+
+add_vlines(ax[0])
+add_vlines(ax[1])
+add_vlines(ax[2])
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/7e60814be0604377248467f0c498068aab646926.png]]
+
+#+begin_src ipython
+overlap = torch.tensor(X_test).to(torch.float).to(device) @ torch.tensor(Vt.T).to(torch.float).to(device)
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+ax[0].plot(np.linspace(0, 14, 84), overlap[:8, :, idx].cpu().detach().mean(0) , 'r')
+ax[0].plot(np.linspace(0, 14, 84), overlap[8:16, :, idx].cpu().detach().mean(0), 'r--')
+
+ax[0].plot(np.linspace(0, 14, 84), overlap[16:24, :, idx].cpu().detach().mean(0), 'b')
+ax[0].plot(np.linspace(0, 14, 84), overlap[24:32, :, idx].cpu().detach().mean(0), 'b--')
+ax[0].axhline(0, ls='--', color='k')
+ax[0].set_xlabel('Time (s)')
+ax[0].set_ylabel('$V_0$')
+
+ax[1].plot(np.linspace(0, 14, 84), overlap[:8, :, 1].cpu().detach().mean(0), 'r')
+ax[1].plot(np.linspace(0, 14, 84), overlap[8:16, :, 1].cpu().detach().mean(0), 'r--')
+
+ax[1].plot(np.linspace(0, 14, 84), overlap[16:24, :, 1].cpu().detach().mean(0), 'b')
+ax[1].plot(np.linspace(0, 14, 84), overlap[24:32, :, 1].cpu().detach().mean(0), 'b--')
+ax[1].axhline(0, ls='--', color='k')
+ax[1].set_xlabel('Time (s)')
+ax[1].set_ylabel('$V_1$')
+
+ax[2].plot(np.linspace(0, 14, 84), overlap[:8, :, 2].cpu().detach().mean(0), 'r')
+ax[2].plot(np.linspace(0, 14, 84), overlap[8:16, :, 2].cpu().detach().mean(0), 'r--')
+
+ax[2].plot(np.linspace(0, 14, 84), overlap[16:24, :, 2].cpu().detach().mean(0), 'b')
+ax[2].plot(np.linspace(0, 14, 84), overlap[24:32, :, 2].cpu().detach().mean(0), 'b--')
+ax[2].axhline(0, ls='--', color='k')
+ax[2].set_xlabel('Time (s)')
+ax[2].set_ylabel('$V_2$')
+
+add_vlines(ax[0])
+add_vlines(ax[1])
+add_vlines(ax[2])
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/1e7f05cc1807157a035e4f845c39087353bfb14e.png]]
+
+#+begin_src ipython
+overlap = torch.tensor(X_test).to(torch.float).to(device) @ model.U / model.N_NEURON
 
 fig, ax = plt.subplots(1, 2, figsize= [2 * width, height])
 
@@ -883,22 +1059,18 @@ ax[1].axhline(0, ls='--', color='k')
 ax[1].set_xlabel('Time (s)')
 ax[1].set_ylabel('$U_1$')
 
+
 add_vlines(ax[0])
 add_vlines(ax[1])
+
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/88ba527dea2614ffe17e4a99467361fa6553bf93.png]]
+[[./.ob-jupyter/44cce634db45fef564da8363e7c5cefae7dcf967.png]]
 
 #+begin_src ipython
-idx = 1
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-overlap = torch.tensor(X_data).to(torch.float).to(device) @ torch.tensor(Vt.T).to(torch.float).to(device)
+overlap = torch.tensor(X_test).to(torch.float).to(device) @ model.V / model.N_NEURON
 
 fig, ax = plt.subplots(1, 2, figsize= [2 * width, height])
 
@@ -908,6 +1080,8 @@ ax[0].plot(np.linspace(0, 14, 84), overlap[8:16, :, idx].cpu().detach().mean(0),
 ax[0].plot(np.linspace(0, 14, 84), overlap[16:24, :, idx].cpu().detach().mean(0), 'b')
 ax[0].plot(np.linspace(0, 14, 84), overlap[24:32, :, idx].cpu().detach().mean(0), 'b--')
 ax[0].axhline(0, ls='--', color='k')
+ax[0].set_xlabel('Time (s)')
+ax[0].set_ylabel('$U_0$')
 
 ax[1].plot(np.linspace(0, 14, 84), overlap[:8, :, 1].cpu().detach().mean(0), 'r')
 ax[1].plot(np.linspace(0, 14, 84), overlap[8:16, :, 1].cpu().detach().mean(0), 'r--')
@@ -915,20 +1089,18 @@ ax[1].plot(np.linspace(0, 14, 84), overlap[8:16, :, 1].cpu().detach().mean(0), '
 ax[1].plot(np.linspace(0, 14, 84), overlap[16:24, :, 1].cpu().detach().mean(0), 'b')
 ax[1].plot(np.linspace(0, 14, 84), overlap[24:32, :, 1].cpu().detach().mean(0), 'b--')
 ax[1].axhline(0, ls='--', color='k')
-
-ax[0].set_xlabel('Time (s)')
-ax[0].set_ylabel('$V_0$')
-
 ax[1].set_xlabel('Time (s)')
-ax[1].set_ylabel('$V_1$')
+ax[1].set_ylabel('$U_1$')
+
 
 add_vlines(ax[0])
 add_vlines(ax[1])
+
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/80b93208891c3602eb9321016ed9cbe0444423c6.png]]
+[[./.ob-jupyter/a39f59536b61f23c91a40da990f5ea6cd8327c69.png]]
 
 #+begin_src ipython
 

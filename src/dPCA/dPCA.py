@@ -91,7 +91,7 @@ class dPCA(BaseEstimator):
     >>> print(pca.explained_variance_ratio_)
     [ 0.99244...  0.00755...]
     """
-    def __init__(self, labels=None, join=None, n_components=10, regularizer=None, copy=True, n_iter=0):
+    def __init__(self, labels=None, join=None, n_components=10, regularizer=None, copy=True, n_iter=0, n_trials=3):
         # create labels from alphabet if not provided
         if isinstance(labels,str):
             self.labels = labels
@@ -108,20 +108,21 @@ class dPCA(BaseEstimator):
         self.copy = copy
         self.marginalizations = self._get_parameter_combinations()
         self.n_iter = n_iter
-
+        self.n_trials = n_trials
         # set debug mode, 0 = no reports, 1 = warnings, 2 = warnings & progress, >2 = everything
         self.debug = 2
 
         if regularizer == 'auto':
-            print("""You chose to determine the regularization parameter automatically. This can
-                    take substantial time and grows linearly with the number of crossvalidation
-                    folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
-                    use self.protect to set the list of axes that are not supposed to get to get shuffled
-                    (e.g. upon splitting the data into test- and training, time-points should always
-                    be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
-                    speed up the code.""")
 
-            self.n_trials = 3
+            # print("""You chose to determine the regularization parameter automatically. This can
+            #         take substantial time and grows linearly with the number of crossvalidation
+            #         folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
+            #         use self.protect to set the list of axes that are not supposed to get to get shuffled
+            #         (e.g. upon splitting the data into test- and training, time-points should always
+            #         be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
+            #         speed up the code.""")
+
+            # self.n_trials = 5
             self.protect = None
 
     def fit(self, X, trialX=None):
