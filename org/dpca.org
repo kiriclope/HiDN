@@ -1,0 +1,2243 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session umap :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  from time import perf_counter
+
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.decode.bump import decode_bump, circcvl
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.dPCA import dPCA
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** Other
+
+#+begin_src ipython
+  def standard_scaler(data, axis=0, IF_RETURN=0):
+      mean = np.mean(data, axis=axis, keepdims=True)
+      std = np.std(data, axis=axis, keepdims=True)
+      if IF_RETURN:
+          return (data - mean) / std, mean, std
+      else:
+          return (data - mean) / (std + 1e-6)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def angle_AB(A, B):
+      A_norm = A / (np.linalg.norm(A) + 1e-5)
+      B_norm = B / (np.linalg.norm(B) + 1e-5)
+
+      cos_theta = A_norm @ B_norm.T
+      angle_radians = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+
+      return np.degrees(angle_radians)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+** Plots
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          for i in range(b.shape[0]):
+              v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
+
+      if IF_NORM:
+          for i in range(b.shape[0]):
+              u[i] = u[i] / np.linalg.norm(u[i])
+              v[i] = v[i] / np.linalg.norm(v[i])
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  #  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  # mice = ['AP02', 'AP12']
+  # mice = ['PP09', 'PP17']
+
+  kwargs = {
+      'mouse': mice[1], 'laser': 0,
+      'trials': '', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05, 'n_comp': 0,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise': True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': None, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 1000,
+      'n_splits': 3, 'n_repeats': 10,
+      'class_weight': 0,
+      'multilabel':0,
+      'mne_estimator': 'generalizing', # sliding or generalizing
+      'n_jobs': 128,
+      'bolasso_penalty': 'l2',
+      'bolasso_pval': 0.05,
+      'laser' : -1,
+  }
+
+  kwargs['days'] = ['first', 'middle', 'last']
+  # kwargs['days'] = ['first', 'last']
+  # kwargs['days'] = 'all'
+  options = set_options(**kwargs)
+  print(options['days'])
+  options['mice'] = mice
+#+end_src
+
+#+RESULTS:
+: ['first', 'middle', 'last']
+
+#+begin_src ipython
+options['mice'] = ['JawsM15']
+options['reload'] = 0
+X_mouse, y_mouse = [], []
+y_laser = []
+for idx, mouse in enumerate(options['mice']):
+    options['mouse'] = mouse
+    options['features'] = 'sample'
+    options['verbose'] = 0
+
+    options['trials'] = ''
+    options['reload'] = 0
+
+    options = set_options(**options)
+
+    X_list = []
+    y_list = []
+    y_list2 = []
+    tasks = ["DPA", "DualGo", "DualNoGo"]
+
+    for i, day in enumerate(options['days']):
+        X_dum = []
+        y_dum = []
+        y_dum2 = []
+        options['day'] = day
+        for task in tasks:
+            options['task'] = task
+            X_days, y_days = get_X_y_days(**options)
+            X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+
+            X_dum.append(X_data)
+            y_dum.append(y_data.odor_pair)
+            y_dum2.append(y_data.laser)
+
+        X_list.append(X_dum)
+        y_list.append(y_dum)
+        y_list2.append(y_dum2)
+
+    X_mouse.append(X_list)
+    y_mouse.append(y_list)
+    y_laser.append(y_list2)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* dPCA
+** Stimuli pair time
+*** reshape
+
+#+begin_src ipython
+DURATION = 14
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, LeaveOneOut
+
+def crossval_dpca(X_stim, Z, dpca, folds):
+
+    Dp_cv = []
+    Ds_cv = []
+
+    Zp_cv =  []
+    Zs_cv =  []
+    Zps_cv =  []
+
+    # Iterate over each fold
+    for train_index, test_index in folds.split(X_stim):
+        X_train, X_test = X_stim[train_index], X_stim[test_index]
+
+        X_avg = X_train.mean(0)
+        dpca.fit(X_avg, X_train)
+
+        Dp_cv.append(dpca.D['p'])
+        Ds_cv.append(dpca.D['s'])
+
+        X_avg = X_test.mean(0)
+        X_test_pca = dpca.transform(X_avg)
+
+        # Store the projected test samples
+        Zp_cv.append(X_test_pca['p'])
+        Zs_cv.append(X_test_pca['s'])
+        Zps_cv.append(X_test_pca['ps'])
+
+
+    dpca.D['p'] = np.mean(Dp_cv, axis=0)
+    dpca.D['s'] = np.mean(Ds_cv, axis=0)
+
+    Z['p'] = np.mean(Zp_cv, axis=0)
+    Z['s'] = np.mean(Zs_cv, axis=0)
+    Z['ps'] = np.mean(Zps_cv, axis=0)
+
+    return Z, dpca
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def reshape_X(X, y, y_las):
+    X_stim = []
+    for i in range(3):
+        X0 = X[i]
+        y0 = y[i]
+        y_opto = y_las[i]
+
+        # X0 = standard_scaler(X0, 0)
+        X0 = X0[y_opto==0]
+        y0 = y0[y_opto==0]
+
+        X_stim.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
+
+    X_stim = np.array(X_stim)
+    # print(X_stim.shape)
+
+    X_stim = np.swapaxes(X_stim, 1, 2)
+    X_stim = np.vstack(X_stim)
+    X_stim = np.swapaxes(X_stim, 1, 2)
+
+    # print(X_stim.shape)
+    X_stim = X_stim.reshape(-1, X_stim.shape[1], 2, 2 ,84)
+
+    return X_stim
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+Z_days = []
+dpca_days = []
+
+for i in range(len(options['days'])):
+    X = np.array(X_mouse[0][i])
+    y = np.array(y_mouse[0][i])
+    y_las = np.array(y_laser[0][i])
+
+    X_stim = reshape_X(X, y, y_las)
+    X_avg = X_stim.mean(0)
+    print('X_stim', X_stim.shape, 'X_avg', X_avg.shape)
+
+    dpca = dPCA.dPCA(labels='pst', n_components=2, regularizer='auto', n_trials=3)
+    dpca.protect = ['t']
+    Z = dpca.fit_transform(X_avg, X_stim)
+
+    folds = LeaveOneOut()
+    Z, dpca = crossval_dpca(X_stim, Z, dpca, folds)
+
+    Z_days.append(Z)
+    dpca_days.append(dpca)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+X_stim (48, 693, 2, 2, 84) X_avg (693, 2, 2, 84)
+You chose to determine the regularization parameter automatically. This can
+                    take substantial time and grows linearly with the number of crossvalidation
+                    folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
+                    use self.protect to set the list of axes that are not supposed to get to get shuffled
+                    (e.g. upon splitting the data into test- and training, time-points should always
+                    be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
+                    speed up the code.
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.004743480741674971
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+X_stim (48, 693, 2, 2, 84) X_avg (693, 2, 2, 84)
+You chose to determine the regularization parameter automatically. This can
+                    take substantial time and grows linearly with the number of crossvalidation
+                    folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
+                    use self.protect to set the list of axes that are not supposed to get to get shuffled
+                    (e.g. upon splitting the data into test- and training, time-points should always
+                    be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
+                    speed up the code.
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.003388200529767837
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+#+end_example
+
+#+begin_src ipython
+A = dpca.D['s'].T[0]
+B = dpca.D['p'].T[0]
+print(angle_AB(A, B))
+#+end_src
+
+#+RESULTS:
+: 489fca28-4c6d-4886-932a-ab3343510918
+
+*** plots
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+for idx in range(2):
+    for i in range(Z['t'].shape[2]):
+        ax[0].plot(xtime, Z['t'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['t'][0, idx, i], Z['t'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+: 9752b17c-d206-426a-84e1-fb78cd460930
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['s'].shape[2]):
+        ax[0].plot(xtime, Z['s'][0, i, idx], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['s'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['s'][0, i, idx], Z['s'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample dPC 1')
+ax[1].set_ylabel('Sample dPC 2')
+
+ax[2].set_xlabel('Sample dPC 1')
+ax[2].set_ylabel('Sample dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+: bb2bb42b-54c9-4098-a8a4-3061bb7e31dd
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['p'].shape[2]):
+        ax[0].plot(xtime, Z['p'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+        ax[1].plot(xtime, Z['p'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['p'][0, i, idx], Z['p'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+: a040a920-ca50-42f1-a958-fe0c1c379cfb
+
+#+begin_src ipython
+for i in range(2):
+    for idx in range(2):
+        plt.plot(Z['s'][0, i, idx], Z['p'][0, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+plt.xlabel('Sample dPC 1')
+plt.ylabel('Pair dPC 1')
+plt.show()
+#+end_src
+
+#+RESULTS:
+: 3013f6e6-34d2-4cb0-ba38-c52c0df7c474
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['st'].shape[2]):
+        ax[0].plot(xtime, Z['ps'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['ps'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['ps'][0, i, idx], Z['ps'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample/Pair dPC 1')
+ax[1].set_ylabel('Sample/Pair dPC 2')
+
+ax[2].set_xlabel('Sample/Pair dPC 1')
+ax[2].set_ylabel('Sample/Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+: 3bd04cb3-1e30-420e-9178-e913b80d1fec
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+: 00c91f47-cb22-4451-bcb8-b45f86c8bbb2
+
+*** Energy
+
+#+begin_src ipython
+def remove_close_entries_with_indices(nums, threshold, modulus):
+    # Create a list of tuples (value, index)
+    indexed_nums = list(enumerate(nums))
+
+    # Sort based on the values but keep the original indices
+    indexed_nums.sort(key=lambda x: x[1])
+
+    # Function to calculate circular distance
+    def circular_distance(x, y, mod):
+        return min((x - y) % mod, (y - x) % mod)
+
+    filtered_indices = []
+    filtered_nums = []
+
+    for idx, num in indexed_nums:
+        if not filtered_nums:
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
+        elif all(circular_distance(num, existing_num, modulus) >= threshold for existing_num in filtered_nums):
+            filtered_nums.append(num)
+            filtered_indices.append(idx)
+
+    return filtered_indices
+
+# Example usage:
+nums = [10, 22, 10, 5, 30, 22]
+threshold = 10
+modulus = 360
+result_indices = remove_close_entries_with_indices(nums, threshold, modulus)
+print(result_indices)
+elements = [nums[i] for i in result_indices]
+print(elements)
+#+end_src
+
+#+RESULTS:
+: 8468dd1a-4ee6-43f9-a688-f0dbec3034d4
+
+#+begin_src ipython
+import numpy as np
+from scipy.optimize import differential_evolution
+from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt
+
+def find_multiple_minima_from_values(x_vals, y_vals, num_runs=100, tol=0.05, popsize=2, maxiter=1000, min_distance=35):
+
+    energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
+    bounds = [(x_vals.min(), x_vals.max())]
+    results = []
+
+    result_old = 999
+    for _ in range(num_runs):
+        result = differential_evolution(energy_function, bounds, strategy='rand1bin',
+                                        maxiter=maxiter, popsize=popsize, tol=tol,
+                                        seed=np.random.randint(0, 10000))
+
+        results.append((result.x[0], result.fun))
+
+    results = np.array(results)
+    indices = remove_close_entries_with_indices(results[:, 0], min_distance, 360)
+    results = results[indices]
+
+    return results
+#+end_src
+
+#+RESULTS:
+: a522a9b3-bfa2-4311-9a09-3d71671ce9f6
+
+#+begin_src ipython
+from src.attractor.landscape import EnergyLandscape
+energy = EnergyLandscape(IF_HMM=0)
+#+end_src
+
+#+RESULTS:
+: 158c2388-4ef1-44ca-ae94-6b4c9e5604e8
+
+#+begin_src ipython
+num_bins = 64
+window = 10
+bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
+if len(options['days'])>3:
+     days = np.arange(1, 7)
+else:
+     days = options['days']
+
+print(days)
+#+end_src
+
+#+RESULTS:
+: 9502098b-7e79-42e6-a496-6ac97488b440
+
+#+begin_src ipython
+print(np.array(X_mouse[0]).shape)
+#+end_src
+
+#+RESULTS:
+: 496361c7-2dfb-46c9-b39a-3b04fd5c619e
+
+#+begin_src ipython
+  def get_theta(a, b, GM=0, IF_NORM=0):
+
+      u, v = a, b
+
+      if GM:
+          for i in range(b.shape[0]):
+              v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
+
+      if IF_NORM:
+          for i in range(b.shape[0]):
+              u[i] = u[i] / np.linalg.norm(u[i])
+              v[i] = v[i] / np.linalg.norm(v[i])
+
+      return np.arctan2(v, u) % (2.0 * np.pi)
+#+end_src
+
+#+RESULTS:
+: a5225235-e9a1-4084-994f-5fa12d37f7e4
+
+#+begin_src ipython
+index = []
+for dpca in dpca_days:
+    print(dpca.D['s'].shape)
+    theta = get_theta(dpca.D['s'].T[0], dpca.D['p'].T[0], IF_NORM=0, GM=0)
+    index.append(np.argsort(theta, -1))
+index = np.array(index)
+print(index.shape)
+#+end_src
+
+#+RESULTS:
+: 80cc5fd2-27b6-4172-9f9f-d4910ac04a1f
+
+#+begin_src ipython
+epoch = np.concatenate((options['bins_BL'], options['bins_DELAY']))
+energy_mouse, ci_mouse = [], []
+
+for idx, mouse in enumerate(options['mice']):
+    X_list = np.array(X_mouse[idx])
+    print(X_list.shape)
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    energy_day = []
+    ci_day = []
+
+    for i, day in enumerate(options['days']):
+
+        X = np.vstack(X_list[i])
+        X = X [:, index[i]]
+        X = X[..., options['bins_ED']]
+        # X = X[..., epoch]
+
+        # X = X_list[i][0]
+        # X = X [:, index]
+        # X = X[..., options['bins_DELAY']]
+        # X = X[..., epoch]
+
+        # print(X.shape)
+        _, phi = decode_bump(X, axis=1)
+
+        landscape = energy.fit(phi, bins, window=window)
+        energy_day.append(landscape)
+
+        ci = None
+        ci_day.append(ci)
+
+    energy_mouse.append(energy_day)
+    ci_mouse.append(ci_day)
+#+end_src
+
+#+RESULTS:
+: fe0b3188-8c31-40a5-94e1-44d7968a64d3
+
+#+begin_src ipython
+cmap = plt.get_cmap('Blues')
+colors = [cmap((i+1)/6) for i in range(7)]
+#+end_src
+
+#+RESULTS:
+: a372fc3d-f3b8-49c4-88cf-9160da35994c
+
+#+begin_src ipython
+from scipy.signal import find_peaks, find_peaks_cwt
+
+minima_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])[:, 0]
+        # print(minimas)
+
+        if len(minimas)<2:
+            minimas = [minimas[0], minimas[0]]
+
+        minima_mouse[idx][i] = minimas[:2]
+#+end_src
+
+#+RESULTS:
+: bb76f563-1f43-4f6f-92c1-74ef5917d829
+
+#+begin_src ipython
+y_loc = []
+for idx, mouse in enumerate(options['mice']):
+     id = ~np.isnan(minima_mouse[idx].T)
+     minima = minima_mouse[idx].T
+
+     # y1 = locations[minima[0][id[0]].astype('int')] * np.pi / 180.0
+     # y2 = locations[minima[1][id[1]].astype('int')] * np.pi / 180.0
+
+     y1 = minima[0][id[0]].astype('int') * np.pi / 180.0
+     y2 = minima[1][id[1]].astype('int') * np.pi / 180.0
+
+     y_mean = (np.sin(y1)+np.sin(y2)) / 2
+
+     while len(y_mean)<len(days):
+          y_mean = np.append(y_mean, np.nan)
+
+     y_loc.append(y_mean)
+
+y_loc = np.array(y_loc)
+
+plt.plot(np.arange(1, len(days)+1), np.nanmean(y_loc, 0), '-o')
+plt.plot(np.arange(1, len(days)+1), y_loc.T, '-', alpha=.2)
+
+# plt.xticks(np.arange(1, 7))
+plt.axhline(0, ls='--', color='k')
+plt.xlabel('Day')
+plt.ylabel('Y-loc (a.u.)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+: 5b9b7482-bf5c-4465-8197-9d8e10c58078
+
+#+begin_src ipython
+from scipy.signal import find_peaks
+fig, ax = plt.subplots(1, 2, figsize= [2*width, 1*width * golden_ratio])
+ax_flat = ax.flatten()
+
+minima_mouse = np.zeros((9, 6, 2), dtype='int') * np.nan
+
+for idx, mouse in enumerate(options['mice']):
+    peaks_list, minimas_list = [], []
+    energy_day = energy_mouse[idx]
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    ax = ax_flat[idx]
+
+    for i, day in enumerate(options['days']):
+        locations = np.linspace(0, 360, energy_day[i].shape[0])
+        ax.plot(locations, energy_day[i] * 100 , color=colors[i])
+        ax.set_title(mouse)
+
+        # peaks = find_peaks_cwt(energy_day[i], widths=np.arange(1, 10))[:2]
+        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))[:2]
+
+        # peaks,  _ = find_peaks(energy_day[i], width=8)[:2]
+        # minimas, _ = find_peaks(-energy_day[i], width=8)[:2]
+
+        # ax.plot(locations[peaks], energy_day[i][peaks] * 100, '^', color=colors[i])
+        # ax.plot(locations[minimas], energy_day[i][minimas] * 100, 'o', color=colors[i])
+
+        minimas = find_multiple_minima_from_values(locations, energy_day[i])
+        ax.plot(minimas[:, 0], minimas[:, 1] * 100, 'o', color=colors[i])
+
+        minima_mouse[idx][i] = minimas[:2, 0]
+
+        # if len(peaks)<2:
+        #     peaks =[peaks[0], peaks[0]]
+        # if len(minimas)<2:
+        #     minimas = [minimas[0], minimas[0]]
+
+        # peaks_list.append(peaks[:1])
+        # minimas_list.append(minimas[:1])
+
+        # print(peaks, minimas)
+
+        ax.set_xlabel('Pref Loc (°)')
+        ax.set_ylabel('Energy')
+        # ax.set_ylim([0, 3])
+#+end_src
+
+#+RESULTS:
+: adda1c53-0985-44c7-b5b8-2c065a9f94b8
+
+** Pair time
+*** reshape
+
+#+begin_src ipython
+X = np.array(X_mouse[0][1])
+y = np.array(y_mouse[0][1])
+y_las = np.array(y_laser[0][1])
+print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 128, 693, 84) (3, 128)
+
+#+begin_src ipython
+DURATION = 14
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+X_stim = []
+for i in range(3):
+    X0 = X[i]
+    y0 = y[i]
+
+    y_opto = y_las[i]
+
+    X0 = X0[y_opto==0]
+    y0 = y0[y_opto==0]
+    # X0 = standard_scaler(X0, 0)
+
+    X_stim.append(np.stack((X0[y0==0], X0[y0==1], X0[y0==2], X0[y0==3])))
+
+X_stim = np.array(X_stim)
+print(X_stim.shape)
+
+X_stim = np.swapaxes(X_stim, 1, 2)
+X_stim = np.vstack(X_stim)
+X_stim = np.swapaxes(X_stim, 1, 2)
+
+print(X_stim.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 4, 16, 693, 84)
+: (48, 693, 4, 84)
+
+#+begin_src ipython
+X_avg = X_stim.mean(0)
+print(X_stim.shape, X_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (48, 693, 4, 84) (693, 4, 84)
+
+*** train
+
+#+begin_src ipython
+dpca = dPCA.dPCA(labels='pt', n_components=2, regularizer='auto', n_trials=3)
+dpca.protect = ['t']
+Z = dpca.fit_transform(X_avg, X_stim)
+#+end_src
+
+#+RESULTS:
+: You chose to determine the regularization parameter automatically. This can
+:                     take substantial time and grows linearly with the number of crossvalidation
+:                     folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
+:                     use self.protect to set the list of axes that are not supposed to get to get shuffled
+:                     (e.g. upon splitting the data into test- and training, time-points should always
+:                     be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
+:                     speed up the code.
+: Start optimizing regularization.
+: Starting trial  1 / 3
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, LeaveOneOut
+
+# Set up cross-validation
+kf = KFold(n_splits=3, shuffle=True, random_state=42)
+kf = LeaveOneOut()
+
+Zp_cv =  []
+# Iterate over each fold
+for train_index, test_index in kf.split(X_stim):
+    X_train, X_test = X_stim[train_index], X_stim[test_index]
+
+    # X_avg = X_train.mean(0)
+    # X_train_pca = dpca.fit(X_avg, X_train)
+
+    X_avg = X_test.mean(0)
+    X_test_pca = dpca.transform(X_avg)
+
+    # Store the projected test samples
+    Zp_cv.append(X_test_pca['p'])
+
+Z['p'] = np.mean(Zp_cv, axis=0)
+#+end_src
+
+#+RESULTS:
+: 70a07d62-5bb9-42d4-9126-f26d6abdb773
+
+#+begin_src ipython
+print(Z.keys(), Z['p'].shape)
+#+end_src
+
+#+RESULTS:
+: 9f3ed81a-58dc-4b2e-ae2c-10b54b5f2004
+
+*** plots
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+for i in range(Z['t'].shape[1]):
+        ax[0].plot(xtime, Z['t'][0, i], ls=ls[i], color=colors[i])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i], ls=ls[i], color=colors[i])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['t'][0, i], Z['t'][1, i], ls=ls[i], label=labels[i], color=colors[i])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_19.png]]
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+for i in range(Z['p'].shape[1]):
+        ax[0].plot(xtime, Z['p'][0, i], ls=ls[i], color=colors[i])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['p'][1, i], ls=ls[i], color=colors[i])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['p'][0, i], Z['p'][1, i], ls=ls[i], label=labels[i], color=colors[i])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_20.png]]
+
+#+begin_src ipython
+for i in range(4):
+        plt.plot(Z['p'][0, i], Z['p'][1, i], ls=ls[i], label=labels[i], color=colors[i])
+
+plt.xlabel('Time dPC 1')
+plt.ylabel('Pair dPC 1')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_21.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Pair GnG time
+*** reshape
+
+#+begin_src ipython
+X = np.array(X_mouse[0][1])
+y = np.array(y_mouse[0][1])
+y_las = np.array(y_laser[0][1])
+print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 192, 693, 84) (3, 192)
+
+#+begin_src ipython
+X_stim = []
+for i in range(3):
+    X0 = X[i]
+    y0 = y[i]
+
+    y_opto = y_las[i]
+
+    # X0 = standard_scaler(X0, 0)
+    X0 = X0[y_opto==0]
+    y0 = y0[y_opto==0]
+
+    # X0 = standard_scaler(X0, 0)
+    X_stim.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
+
+X_stim = np.array(X_stim)
+print(X_stim.shape)
+
+X_stim = np.swapaxes(X_stim, 1, 2)
+# X_stim = np.vstack(X_stim)
+print(X_stim.shape)
+X_stim = np.swapaxes(X_stim, 0, 1)
+print(X_stim.shape)
+X_stim = np.swapaxes(X_stim, 1, 3)
+print(X_stim.shape)
+# X_stim = X_stim.reshape(-1, 693, 2, 2, 3 ,84)
+# print(X_stim.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 4, 24, 693, 84)
+: (3, 24, 4, 693, 84)
+: (24, 3, 4, 693, 84)
+: (24, 693, 4, 3, 84)
+
+#+begin_src ipython
+X_avg = X_stim.mean(0)
+print(X_stim.shape, X_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (24, 693, 4, 3, 84) (693, 4, 3, 84)
+
+*** train
+
+#+begin_src ipython
+dpca = dPCA.dPCA(labels='pdt', n_components=2, regularizer='auto', n_trials=3)
+dpca.protect = ['t']
+Z = dpca.fit_transform(X_avg, X_stim)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+You chose to determine the regularization parameter automatically. This can
+                    take substantial time and grows linearly with the number of crossvalidation
+                    folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
+                    use self.protect to set the list of axes that are not supposed to get to get shuffled
+                    (e.g. upon splitting the data into test- and training, time-points should always
+                    be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
+                    speed up the code.
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.001234766956912477
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+#+end_example
+
+#+begin_src ipython
+print(Z.keys())
+#+end_src
+
+#+RESULTS:
+: dict_keys(['p', 'd', 't', 'pd', 'pt', 'dt', 'pdt'])
+
+*** plots
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r', 'g', 'g', 'g','g']
+
+for idx in range(3):
+    for i in range(Z['t'].shape[2]):
+        ax[0].plot(xtime, Z['t'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['t'][0, idx, i], Z['t'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_39.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(3):
+    for i in range(Z['d'].shape[2]):
+        ax[0].plot(xtime, Z['d'][0, i, idx], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['d'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['d'][0, i, idx], Z['d'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample dPC 1')
+ax[1].set_ylabel('Sample dPC 2')
+
+ax[2].set_xlabel('Sample dPC 1')
+ax[2].set_ylabel('Sample dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_40.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(3):
+    for i in range(Z['p'].shape[2]):
+        ax[0].plot(xtime, Z['p'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+        ax[1].plot(xtime, Z['p'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['p'][0, i, idx], Z['p'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_41.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Sample Pair GnG time
+*** reshape
+
+#+begin_src ipython
+X = np.array(X_mouse[0][1])
+y = np.array(y_mouse[0][1])
+y_las = np.array(y_laser[0][1])
+print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 192, 693, 84) (3, 192)
+
+#+begin_src ipython
+X_stim = []
+for i in range(3):
+    X0 = X[i]
+    y0 = y[i]
+
+    y_opto = y_las[i]
+
+    # X0 = standard_scaler(X0, 0)
+    X0 = X0[y_opto==0]
+    y0 = y0[y_opto==0]
+
+    # X0 = standard_scaler(X0, 0)
+    X_stim.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
+
+X_stim = np.array(X_stim)
+print(X_stim.shape)
+
+X_stim = np.swapaxes(X_stim, 1, 2)
+# X_stim = np.vstack(X_stim)
+print(X_stim.shape)
+X_stim = np.swapaxes(X_stim, 0, 1)
+print(X_stim.shape)
+X_stim = np.swapaxes(X_stim, 1, 3)
+print(X_stim.shape)
+X_stim = X_stim.reshape(-1, X_stim.shape[1], 2, 2, 3 ,84)
+print(X_stim.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 4, 24, 693, 84)
+: (3, 24, 4, 693, 84)
+: (24, 3, 4, 693, 84)
+: (24, 693, 4, 3, 84)
+: (24, 693, 2, 2, 3, 84)
+
+#+begin_src ipython
+X_avg = X_stim.mean(0)
+print(X_stim.shape, X_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (24, 693, 2, 2, 3, 84) (693, 2, 2, 3, 84)
+
+*** train
+
+#+begin_src ipython
+dpca = dPCA.dPCA(labels='psdt', n_components=2, regularizer='auto', n_trials=3)
+dpca.protect = ['t']
+Z = dpca.fit_transform(X_avg, X_stim)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+You chose to determine the regularization parameter automatically. This can
+                    take substantial time and grows linearly with the number of crossvalidation
+                    folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
+                    use self.protect to set the list of axes that are not supposed to get to get shuffled
+                    (e.g. upon splitting the data into test- and training, time-points should always
+                    be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
+                    speed up the code.
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.001234766956912477
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+#+end_example
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, LeaveOneOut
+
+# Set up cross-validation
+# kf = KFold(n_splits=3, shuffle=True, random_state=42)
+kf = LeaveOneOut()
+
+Zp_cv =  []
+Zs_cv =  []
+Zd_cv = []
+Zps_cv =  []
+
+# Iterate over each fold
+for train_index, test_index in kf.split(X_stim):
+    X_train, X_test = X_stim[train_index], X_stim[test_index]
+
+    X_avg = X_train.mean(0)
+    X_train_pca = dpca.fit(X_avg, X_train)
+
+    X_avg = X_test.mean(0)
+    X_test_pca = dpca.transform(X_avg)
+
+    Zp_cv.append(X_test_pca['p'])
+    Zs_cv.append(X_test_pca['s'])
+    Zd_cv.append(X_test_pca['d'])
+    Zps_cv.append(X_test_pca['ps'])
+
+Z['p'] = np.mean(Zp_cv, axis=0)
+Z['s'] = np.mean(Zs_cv, axis=0)
+Z['d'] = np.mean(Zd_cv, axis=0)
+Z['ps'] = np.mean(Zps_cv, axis=0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(Z.keys(), Z['t'].shape, Z['d'].shape)
+#+end_src
+
+#+RESULTS:
+: dict_keys(['p', 's', 'd', 't', 'ps', 'pd', 'pt', 'sd', 'st', 'dt', 'psd', 'pst', 'pdt', 'sdt', 'psdt']) (2, 2, 2, 3, 84) (2, 2, 2, 3, 84)
+
+*** plots
+
+#+begin_src ipython
+task = 2
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+colors2 = ['k', 'k', 'g', 'g']
+
+for idx in range(2):
+    for i in range(Z['t'].shape[2]):
+        ax[0].plot(xtime, Z['t'][0, i, idx, task], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i, idx, task], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['t'][0, idx, i, task], Z['t'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_52.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['s'].shape[2]):
+        ax[0].plot(xtime, Z['s'][0, i, idx, task], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['s'][1, i, idx, task], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['s'][0, i, idx, task], Z['s'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Sample dPC 1')
+ax[1].set_ylabel('Sample dPC 2')
+
+ax[2].set_xlabel('Sample dPC 1')
+ax[2].set_ylabel('Sample dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_53.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['p'].shape[2]):
+        ax[0].plot(xtime, Z['p'][0, i, idx, task], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+        ax[1].plot(xtime, Z['p'][1, i, idx, task], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['p'][0, i, idx, task], Z['p'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_54.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['d'].shape[2]):
+        ax[0].plot(xtime, Z['d'][0, i, idx, task], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['d'][1, i, idx, task], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['d'][0, i, idx, task], Z['d'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Trial dPC 1')
+ax[1].set_ylabel('Trial dPC 2')
+
+ax[2].set_xlabel('Trial dPC 1')
+ax[2].set_ylabel('Trial dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_55.png]]
+
+
+#+begin_src ipython
+for i in range(2):
+    for idx in range(2):
+        plt.plot(Z['s'][0, i, idx, task], Z['p'][0, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+plt.xlabel('Sample dPC 1')
+plt.ylabel('Pair dPC 1')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_56.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** opto
+
+#+begin_src ipython
+X_stim = []
+for i in range(3):
+    X0 = X[i]
+    y0 = y[i]
+
+    y_opto = y_las[i]
+
+    # X0 = standard_scaler(X0, 0)
+    X0 = X0[y_opto==0]
+    y0 = y0[y_opto==0]
+
+    # X0 = standard_scaler(X0, 0)
+    X_stim.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
+
+X_stim = np.array(X_stim)
+print(X_stim.shape)
+
+X_stim = np.swapaxes(X_stim, 1, 2)
+# X_stim = np.vstack(X_stim)
+print(X_stim.shape)
+X_stim = np.swapaxes(X_stim, 0, 1)
+print(X_stim.shape)
+X_stim = np.swapaxes(X_stim, 1, 3)
+print(X_stim.shape)
+X_stim = X_stim.reshape(-1, 693, 2, 2, 3 ,84)
+print(X_stim.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 4, 24, 693, 84)
+: (3, 24, 4, 693, 84)
+: (24, 3, 4, 693, 84)
+: (24, 693, 4, 3, 84)
+: (24, 693, 2, 2, 3, 84)
+
+#+begin_src ipython
+X_stim2 = []
+for i in range(3):
+    X0 = X[i]
+    y0 = y[i]
+
+    y_opto = y_las[i]
+
+    # X0 = standard_scaler(X0, 0)
+    X0 = X0[y_opto==1]
+    y0 = y0[y_opto==1]
+
+    # X0 = standard_scaler(X0, 0)
+    X_stim2.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
+
+X_stim2 = np.array(X_stim2)
+print(X_stim2.shape)
+
+X_stim2 = np.swapaxes(X_stim2, 1, 2)
+# X_stim2 = np.vstack(X_stim2)
+print(X_stim2.shape)
+X_stim2 = np.swapaxes(X_stim2, 0, 1)
+print(X_stim2.shape)
+X_stim2 = np.swapaxes(X_stim2, 1, 3)
+print(X_stim2.shape)
+X_stim2 = X_stim2.reshape(-1, 693, 2, 2, 3 ,84)
+print(X_stim2.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 4, 24, 693, 84)
+: (3, 24, 4, 693, 84)
+: (24, 3, 4, 693, 84)
+: (24, 693, 4, 3, 84)
+: (24, 693, 2, 2, 3, 84)
+
+#+begin_src ipython
+X_stim = np.stack((X_stim, X_stim2), axis=-2)
+print(X_stim.shape)
+#+end_src
+
+#+RESULTS:
+: (24, 693, 2, 2, 3, 2, 84)
+
+#+begin_src ipython
+X_avg = X_stim.mean(0)
+print(X_stim.shape, X_avg.shape)
+#+end_src
+
+#+RESULTS:
+: (24, 693, 2, 2, 3, 2, 84) (693, 2, 2, 3, 2, 84)
+
+#+begin_src ipython
+dpca = dPCA.dPCA(labels='psdt', n_components=2, regularizer='auto', n_trials=3)
+dpca.protect = ['t']
+Z = dpca.fit_transform(X_avg, X_stim)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+You chose to determine the regularization parameter automatically. This can
+                    take substantial time and grows linearly with the number of crossvalidation
+                    folds. The latter can be set by changing self.n_trials (default = 3). Similarly,
+                    use self.protect to set the list of axes that are not supposed to get to get shuffled
+                    (e.g. upon splitting the data into test- and training, time-points should always
+                    be drawn from the same trial, i.e. self.protect = ['t']). This can significantly
+                    speed up the code.
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.00016398978063355795
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+#+end_example
+
+ #+begin_src ipython
+print(Z.keys(), Z['t'].shape, Z['s'].shape)
+#+end_src
+
+#+RESULTS:
+: dict_keys(['p', 's', 'd', 't', 'ps', 'pd', 'pt', 'sd', 'st', 'dt', 'psd', 'pst', 'pdt', 'sdt', 'psdt']) (2, 2, 2, 3, 84) (2, 2, 2, 3, 84)
+
+
+** all tasks
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+for idx in range(2):
+    for i in range(Z['t'].shape[2]):
+        ax[0].plot(xtime, Z['t'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['t'][0, idx, i], Z['t'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[68], line 16
+     12 ax[0].plot(xtime, Z['t'][0, i, idx].T, ls=ls[i], color=colors[i+2*idx])
+     13 add_vlines(ax=ax[0])
+---> 16 ax[1].plot(xtime, Z['t'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+     17 add_vlines(ax=ax[1])
+     20 ax[2].plot(Z['t'][0, idx, i], Z['t'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_axes.py:1721, in Axes.plot(self, scalex, scaley, data, *args, **kwargs)
+   1478 """
+   1479 Plot y versus x as lines and/or markers.
+   1480
+   (...)
+   1718 (``'green'``) or hex strings (``'#008000'``).
+   1719 """
+   1720 kwargs = cbook.normalize_kwargs(kwargs, mlines.Line2D)
+-> 1721 lines = [*self._get_lines(self, *args, data=data, **kwargs)]
+   1722 for line in lines:
+   1723     self.add_line(line)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:303, in _process_plot_var_args.__call__(self, axes, data, *args, **kwargs)
+    301     this += args[0],
+    302     args = args[1:]
+--> 303 yield from self._plot_args(
+    304     axes, this, kwargs, ambiguous_fmt_datakey=ambiguous_fmt_datakey)
+
+File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:499, in _process_plot_var_args._plot_args(self, axes, tup, kwargs, return_kwargs, ambiguous_fmt_datakey)
+    496     axes.yaxis.update_units(y)
+    498 if x.shape[0] != y.shape[0]:
+--> 499     raise ValueError(f"x and y must have same first dimension, but "
+    500                      f"have shapes {x.shape} and {y.shape}")
+    501 if x.ndim > 2 or y.ndim > 2:
+    502     raise ValueError(f"x and y can be no greater than 2D, but have "
+    503                      f"shapes {x.shape} and {y.shape}")
+
+ValueError: x and y must have same first dimension, but have shapes (84,) and (3, 84)
+#+end_example
+[[./figures/landscape/figure_22.png]]
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['s'].shape[2]):
+        ax[0].plot(xtime, Z['s'][0, i, idx], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['s'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['s'][0, i, idx], Z['s'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Stim dPC 1')
+ax[1].set_ylabel('Stim dPC 2')
+
+ax[2].set_xlabel('Stim dPC 1')
+ax[2].set_ylabel('Stim dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_22.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['p'].shape[2]):
+        ax[0].plot(xtime, Z['p'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+        ax[1].plot(xtime, Z['p'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['p'][0, i, idx], Z['p'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_23.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['d'].shape[2]):
+        ax[0].plot(xtime, Z['d'][0, i, idx], ls=ls[i], color=colors[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['d'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['d'][0, i, idx], Z['d'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Cond. dPC 1')
+ax[1].set_ylabel('Cond. dPC 2')
+
+ax[2].set_xlabel('Cond. dPC 1')
+ax[2].set_ylabel('Cond. dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+begin_src ipython
+for i in range(2):
+    for idx in range(2):
+        plt.plot(Z['s'][0, i, idx], Z['p'][0, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+plt.xlabel('Stim dPC 1')
+plt.ylabel('Pair dPC 1')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_24.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['st'].shape[2]):
+        ax[0].plot(xtime, Z['ps'][0, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['ps'][1, i, idx], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+        ax[2].plot(Z['ps'][0, i, idx], Z['ps'][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Mixed dPC 1')
+ax[1].set_ylabel('Mixed dPC 2')
+
+ax[2].set_xlabel('Mixed dPC 1')
+ax[2].set_ylabel('Mixed dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_25.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+** task by task
+
+#+begin_src ipython
+task = 1
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+colors = ['b', 'b', 'r', 'r']
+
+colors2 = ['k', 'k', 'g', 'g']
+
+for idx in range(2):
+    for i in range(Z['t'].shape[2]):
+        ax[0].plot(xtime, Z['t'][0, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[0].plot(xtime, Z['t'][0, i, idx, task, 1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['t'][1, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[1].plot(xtime, Z['t'][1, i, idx, task, 1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['t'][0, idx, i, task, 0], Z['t'][1, i, idx, task, 0], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Time dPC 1')
+ax[1].set_ylabel('Time dPC 2')
+
+ax[2].set_xlabel('Time dPC 1')
+ax[2].set_ylabel('Time dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['s'].shape[2]):
+        ax[0].plot(xtime, Z['s'][0, i, idx, task, 0], ls=ls[i], color=colors[i+ 2*idx])
+        ax[0].plot(xtime, Z['s'][0, i, idx, task, 1], ls=ls[i], color=colors2[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['s'][1, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[1].plot(xtime, Z['s'][1, i, idx, task, 1], ls=ls[i], color=colors[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        ax[2].plot(Z['s'][0, i, idx, task , 0], Z['s'][1, i, idx, task, 0], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Stim dPC 1')
+ax[1].set_ylabel('Stim dPC 2')
+
+ax[2].set_xlabel('Stim dPC 1')
+ax[2].set_ylabel('Stim dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_35.png]]
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['p'].shape[2]):
+        ax[0].plot(xtime, Z['p'][0, i, idx, task,0], ls=ls[i], color=colors[i+2*idx])
+        ax[0].plot(xtime, Z['p'][0, i, idx, task,1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[0])
+
+        ax[1].plot(xtime, Z['p'][1, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[1].plot(xtime, Z['p'][1, i, idx, task, 1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        # ax[2].plot(Z['p'][0, i, idx, task], Z['p'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair dPC 1')
+ax[1].set_ylabel('Pair dPC 2')
+
+ax[2].set_xlabel('Pair dPC 1')
+ax[2].set_ylabel('Pair dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+[[./figures/landscape/figure_36.png]]
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['d'].shape[2]):
+        ax[0].plot(xtime, Z['d'][0, i, idx, task, 0], ls=ls[i], color=colors[i+ 2*idx])
+        ax[0].plot(xtime, Z['d'][0, i, idx, task, 1], ls=ls[i], color=colors2[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['d'][1, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[1].plot(xtime, Z['d'][1, i, idx, task, 1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        # ax[2].plot(Z['d'][0, i, idx, task], Z['d'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Cond. dPC 1')
+ax[1].set_ylabel('Cond. dPC 2')
+
+ax[2].set_xlabel('Cond. dPC 1')
+ax[2].set_ylabel('Cond. dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+[[./figures/landscape/figure_37.png]]
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['o'].shape[2]):
+        ax[0].plot(xtime, Z['o'][0, i, idx, task, 0], ls=ls[i], color=colors[i+ 2*idx])
+        ax[0].plot(xtime, Z['o'][0, i, idx, task, 1], ls=ls[i], color=colors2[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['o'][1, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[1].plot(xtime, Z['o'][1, i, idx, task, 1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        # ax[2].plot(Z['o'][0, i, idx, task], Z['o'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Opto dPC 1')
+ax[1].set_ylabel('Opto dPC 2')
+
+# ax[2].set_xlabel('Cond. dPC 1')
+# ax[2].set_ylabel('Cond. dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+[[./figures/landscape/figure_38.png]]
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['do'].shape[2]):
+        ax[0].plot(xtime, Z['do'][0, i, idx, task, 0], ls=ls[i], color=colors[i+ 2*idx])
+        ax[0].plot(xtime, Z['do'][0, i, idx, task, 1], ls=ls[i], color=colors2[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['do'][1, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[1].plot(xtime, Z['do'][1, i, idx, task, 1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        # ax[2].plot(Z['do'][0, i, idx, task], Z['do'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('GnG/Opto dPC 1')
+ax[1].set_ylabel('GnG/Opto dPC 2')
+
+# ax[2].set_xlabel('Cond. dPC 1')
+# ax[2].set_ylabel('Cond. dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+[[./figures/landscape/figure_39.png]]
+:END:
+
+ #+begin_src ipython
+from src.common.plot_utils import add_vlines
+xtime = np.linspace(0, DURATION, X_stim.shape[-1])
+
+fig, ax = plt.subplots(1, 3, figsize= [3 * width, height])
+
+colors=['b', 'b', 'r', 'r']
+labels = ['AC', 'AD', 'BD', 'BC']
+ls = ['-', '--', '-', '--']
+
+for idx in range(2):
+    for i in range(Z['po'].shape[2]):
+        ax[0].plot(xtime, Z['po'][0, i, idx, task, 0], ls=ls[i], color=colors[i+ 2*idx])
+        ax[0].plot(xtime, Z['po'][0, i, idx, task, 1], ls=ls[i], color=colors2[i+ 2*idx])
+        add_vlines(ax=ax[0])
+
+
+        ax[1].plot(xtime, Z['po'][1, i, idx, task, 0], ls=ls[i], color=colors[i+2*idx])
+        ax[1].plot(xtime, Z['po'][1, i, idx, task, 1], ls=ls[i], color=colors2[i+2*idx])
+        add_vlines(ax=ax[1])
+
+
+        # ax[2].plot(Z['po'][0, i, idx, task], Z['po'][1, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+ax[0].set_xlabel('Time (s)')
+ax[1].set_xlabel('Time (s)')
+
+ax[0].set_ylabel('Pair/Opto dPC 1')
+ax[1].set_ylabel('Pair/Opto dPC 2')
+
+# ax[2].set_xlabel('Cond. dPC 1')
+# ax[2].set_ylabel('Cond. dPC 2')
+
+plt.legend(fontsize=10)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
+[[./figures/landscape/figure_40.png]]
+:END:
+
+#+begin_src ipython
+for i in range(2):
+    for idx in range(2):
+        plt.plot(Z['s'][0, i, idx, task], Z['p'][0, i, idx, task], ls=ls[i], label=labels[i], color=colors[i+2*idx])
+
+plt.xlabel('Stim dPC 1')
+plt.ylabel('Pair dPC 1')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/landscape/figure_34.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
