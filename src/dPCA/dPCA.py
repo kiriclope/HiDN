@@ -15,6 +15,7 @@ from scipy.linalg import pinv
 
 from sklearn.base import BaseEstimator
 from sklearn.utils.extmath import randomized_svd
+
 import numexpr as ne
 from .utils import shuffle2D, classification, denoise_mask
 

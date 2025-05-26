@@ -155,21 +155,23 @@ def pad_with_nans(array, target_shape):
 def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
     try:
         coef = estimator.named_steps["model"].coef_.flatten()
-        clf = estimator.named_steps["model"]
+        clf = estimator #.named_steps["model"]
     except:
         coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
-        clf = estimator.best_estimator_named_steps["model"]
+        clf = estimator.best_estimator_.named_steps["model"]
 
-    norm_w = np.linalg.norm(coef)
+    norm_w = np.linalg.norm(coef) + 1e-6
 
     if IF_SIGN:
-        # dot_product = (2*y_test -1) * np.dot(X_test, coef) / (np.linalg.norm(coef) + .00001)
+        # dot_product = (2*y_test -1) * np.dot(X_test, coef)
+        # dot_product = (2*y_test -1) * clf.named_steps["model"].decision_function(X_test)
         dot_product = (2*y_test -1) * clf.decision_function(X_test)
     else:
         dot_product = clf.decision_function(X_test)
-        # dot_product = -np.dot(X_test, coef) / (np.linalg.norm(coef) + .00001)
+        # dot_product = clf.named_steps["model"].decision_function(X_test)
+        # dot_product = np.dot(X_test, coef)
 
-    return np.nanmean(dot_product) / coef.shape[0] / norm_w
+    return np.nanmean(dot_product) / norm_w
 #+end_src
 
 #+RESULTS:
@@ -218,7 +220,7 @@ R[write to console]: package ‘tools’ was built under R version 4.4.2
 #+end_example
 
 #+begin_src ipython
-def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None):
+def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
     if day=='all':
         df_ = df.copy()
     else:
@@ -245,10 +247,10 @@ def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls=
 
     for i, task in enumerate(mean_overlaps.index):
         if label is None:
-            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls)
+            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls, **kwargs)
             # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
         else:
-            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls)
+            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls, **kwargs)
 
         if cis is not None:
             ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
@@ -383,7 +385,9 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
   DEVICE = 'cuda:0'
   old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
   Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+
   mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+  mice = Jaws_mice
 
   tasks = ['DPA', 'DualGo', 'DualNoGo']
   # mice = ['AP02', 'AP12']
@@ -400,7 +404,7 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
       'l1_ratio': 0.95,
       'n_comp': None, 'scaler': None,
       'bootstrap': 1, 'n_boots': 128,
-      'n_splits': 5, 'n_repeats': 16,
+      'n_splits': 3, 'n_repeats': 16,
       'class_weight': 0,
       'multilabel': 0,
       'mne_estimator':'generalizing', # sliding or generalizing
@@ -419,7 +423,7 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
   # options['hp_scoring'] = 'accuracy'
   options['scoring'] = overlaps_scorer
 
-  dum = 'overlaps_all_loocv'
+  dum = 'overlaps_all_loocv_laser_on'
   # dum = 'overlaps_loocv'
 #+end_src
 
@@ -441,7 +445,7 @@ from sklearn.linear_model import LogisticRegression
 net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
 # net = LogisticRegression(penalty='elasticnet', solver='saga', n_jobs=None, l1_ratio=0.95,  tol=0.001, class_weight='balanced')
 
-params = {'model__C': np.logspace(-2, 2, 10)} # , 'net__l1_ratio': np.linspace(0, 1, 10)}
+params = {'model__C': np.logspace(-3, 3, 10)} # , 'net__l1_ratio': np.linspace(0, 1, 10)}
 
 options['hp_scoring'] = lambda estimator, X_test, y_test: np.abs(overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1))
 options['scoring'] = overlaps_scorer
@@ -455,6 +459,7 @@ options['cv'] = LeaveOneOut()
 #+end_src
 
 #+RESULTS:
+: PCA False None
 
 #+begin_src ipython
 options['verbose'] = 1
@@ -468,7 +473,7 @@ tasks = ['DPA', 'DualGo', 'DualNoGo']
 
 dfs = []
 
-mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
 # mice = ['ACCM04']
 
 tasks = ['DPA', 'DualGo', 'DualNoGo']
@@ -523,285 +528,91 @@ print(df_sample.shape)
 #+RESULTS:
 #+begin_example
 ['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (43, 184, 84) X_S2 (29, 184, 84)
-X_B (72, 184, 84) y_B (72,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 13)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (101, 184, 84) X_S2 (115, 184, 84)
-y_labels (216, 13) ['DualNoGo' 'DualGo' 'DPA']
+y_labels (216, 14) ['DualNoGo' 'DualGo' 'DPA']
 X (216, 184, 84) nans 0.0 y (216,) [0. 1.]
-df_A (216, 14) scores (216, 7056) labels (216, 13)
-scores_B (72, 84, 84)
-df_B (72, 14) scores (72, 7056) labels (72, 13)
-df (288, 14)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM01
-X_days (768, 184, 84) y_days (768, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (2, 184, 84) X_S2 (3, 184, 84)
-X_B (5, 184, 84) y_B (5,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+scores (216, 84, 84) 0.009806400632271468
+df_A (216, 15) scores (216, 7056) labels (216, 14)
+df (216, 15)
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 13)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (46, 184, 84) X_S2 (45, 184, 84)
-y_labels (91, 13) ['DualNoGo' 'DualGo' 'DPA']
+y_labels (91, 14) ['DPA' 'DualGo' 'DualNoGo']
 X (91, 184, 84) nans 0.0 y (91,) [0. 1.]
-df_A (91, 14) scores (91, 7056) labels (91, 13)
-scores_B (5, 84, 84)
-df_B (5, 14) scores (5, 7056) labels (5, 13)
-df (96, 14)
+scores (91, 84, 84) -0.011901851473847994
+df_A (91, 15) scores (91, 7056) labels (91, 14)
+df (91, 15)
 ['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (59, 201, 84) X_S2 (46, 201, 84)
-X_B (105, 201, 84) y_B (105,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 13)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (85, 201, 84) X_S2 (98, 201, 84)
-y_labels (183, 13) ['DualNoGo' 'DualGo' 'DPA']
+y_labels (183, 14) ['DualNoGo' 'DualGo' 'DPA']
 X (183, 201, 84) nans 0.0 y (183,) [0. 1.]
-df_A (183, 14) scores (183, 7056) labels (183, 13)
-scores_B (105, 84, 84)
-df_B (105, 14) scores (105, 7056) labels (105, 13)
-df (288, 14)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (27, 201, 84) X_S2 (13, 201, 84)
-X_B (40, 201, 84) y_B (40,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+scores (183, 84, 84) 0.022756132646877775
+df_A (183, 15) scores (183, 7056) labels (183, 14)
+df (183, 15)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 13)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (117, 201, 84) X_S2 (131, 201, 84)
-y_labels (248, 13) ['DPA' 'DualGo' 'DualNoGo']
+y_labels (248, 14) ['DualGo' 'DualNoGo' 'DPA']
 X (248, 201, 84) nans 0.0 y (248,) [0. 1.]
-df_A (248, 14) scores (248, 7056) labels (248, 13)
-scores_B (40, 84, 84)
-df_B (40, 14) scores (40, 7056) labels (40, 13)
-df (288, 14)
+scores (248, 84, 84) 0.011344295224675902
+df_A (248, 15) scores (248, 7056) labels (248, 14)
+df (248, 15)
 ['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (55, 423, 84) X_S2 (51, 423, 84)
-X_B (106, 423, 84) y_B (106,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 13)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (89, 423, 84) X_S2 (93, 423, 84)
-y_labels (182, 13) ['DPA' 'DualGo' 'DualNoGo']
+y_labels (182, 14) ['DPA' 'DualGo' 'DualNoGo']
 X (182, 423, 84) nans 0.0 y (182,) [0. 1.]
-df_A (182, 14) scores (182, 7056) labels (182, 13)
-scores_B (106, 84, 84)
-df_B (106, 14) scores (106, 7056) labels (106, 13)
-df (288, 14)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM12
-X_days (960, 423, 84) y_days (960, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (27, 423, 84) X_S2 (24, 423, 84)
-X_B (51, 423, 84) y_B (51,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+scores (182, 84, 84) 0.003044829680169619
+df_A (182, 15) scores (182, 7056) labels (182, 14)
+df (182, 15)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 13)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (69, 423, 84) X_S2 (72, 423, 84)
-y_labels (141, 13) ['DPA' 'DualGo' 'DualNoGo']
+y_labels (141, 14) ['DPA' 'DualGo' 'DualNoGo']
 X (141, 423, 84) nans 0.0 y (141,) [0. 1.]
-df_A (141, 14) scores (141, 7056) labels (141, 13)
-scores_B (51, 84, 84)
-df_B (51, 14) scores (51, 7056) labels (51, 13)
-df (192, 14)
+scores (141, 84, 84) -0.018991863324651664
+df_A (141, 15) scores (141, 7056) labels (141, 14)
+df (141, 15)
 ['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (49, 693, 84) X_S2 (44, 693, 84)
-X_B (93, 693, 84) y_B (93,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (95, 693, 84) X_S2 (100, 693, 84)
-y_labels (195, 15) ['DualNoGo' 'DualGo' 'DPA']
+y_labels (195, 16) ['DualGo' 'DualNoGo' 'DPA']
 X (195, 693, 84) nans 0.0 y (195,) [0. 1.]
-df_A (195, 16) scores (195, 7056) labels (195, 15)
-scores_B (93, 84, 84)
-df_B (93, 16) scores (93, 7056) labels (93, 15)
-df (288, 16)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (20, 693, 84) X_S2 (19, 693, 84)
-X_B (39, 693, 84) y_B (39,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+scores (195, 84, 84) 0.017342370954290066
+df_A (195, 17) scores (195, 7056) labels (195, 16)
+df (195, 17)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (124, 693, 84) X_S2 (125, 693, 84)
-y_labels (249, 15) ['DualGo' 'DualNoGo' 'DPA']
+y_labels (249, 16) ['DualGo' 'DualNoGo' 'DPA']
 X (249, 693, 84) nans 0.0 y (249,) [0. 1.]
-df_A (249, 16) scores (249, 7056) labels (249, 15)
-scores_B (39, 84, 84)
-df_B (39, 16) scores (39, 7056) labels (39, 15)
-df (288, 16)
+scores (249, 84, 84) -0.006231142787683797
+df_A (249, 17) scores (249, 7056) labels (249, 16)
+df (249, 17)
 ['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (27, 444, 84) X_S2 (26, 444, 84)
-X_B (53, 444, 84) y_B (53,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (117, 444, 84) X_S2 (118, 444, 84)
-y_labels (235, 15) ['DualNoGo' 'DualGo' 'DPA']
+y_labels (235, 16) ['DualNoGo' 'DualGo' 'DPA']
 X (235, 444, 84) nans 0.0 y (235,) [0. 1.]
-df_A (235, 16) scores (235, 7056) labels (235, 15)
-scores_B (53, 84, 84)
-df_B (53, 16) scores (53, 7056) labels (53, 15)
-df (288, 16)
-Loading files from /home/leon/dual_task/dual_data/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (3, 444, 84) X_S2 (2, 444, 84)
-X_B (5, 444, 84) y_B (5,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+scores (235, 84, 84) -0.018919600627296723
+df_A (235, 17) scores (235, 7056) labels (235, 16)
+df (235, 17)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (141, 444, 84) X_S2 (142, 444, 84)
-y_labels (283, 15) ['DualGo' 'DualNoGo' 'DPA']
+y_labels (283, 16) ['DPA' 'DualNoGo' 'DualGo']
 X (283, 444, 84) nans 0.0 y (283,) [0. 1.]
-df_A (283, 16) scores (283, 7056) labels (283, 15)
-scores_B (5, 84, 84)
-df_B (5, 16) scores (5, 7056) labels (5, 15)
-df (288, 16)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (25, 668, 84) X_S2 (29, 668, 84)
-X_B (54, 668, 84) y_B (54,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (119, 668, 84) X_S2 (115, 668, 84)
-y_labels (234, 15) ['DualNoGo' 'DPA' 'DualGo']
-X (234, 668, 84) nans 0.0 y (234,) [0. 1.]
-df_A (234, 16) scores (234, 7056) labels (234, 15)
-scores_B (54, 84, 84)
-df_B (54, 16) scores (54, 7056) labels (54, 15)
-df (288, 16)
-Loading files from /home/leon/dual_task/dual_data/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (12, 668, 84) X_S2 (12, 668, 84)
-X_B (24, 668, 84) y_B (24,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (132, 668, 84) X_S2 (132, 668, 84)
-y_labels (264, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (264, 668, 84) nans 0.0 y (264,) [0. 1.]
-df_A (264, 16) scores (264, 7056) labels (264, 15)
-scores_B (24, 84, 84)
-df_B (24, 16) scores (24, 7056) labels (24, 15)
-df (288, 16)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/ChRM23
-X_days (960, 232, 84) y_days (960, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (51, 232, 84) X_S2 (39, 232, 84)
-X_B (90, 232, 84) y_B (90,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (93, 232, 84) X_S2 (105, 232, 84)
-y_labels (198, 13) ['DualGo' 'DPA' 'DualNoGo']
-X (198, 232, 84) nans 0.0 y (198,) [0. 1.]
-df_A (198, 14) scores (198, 7056) labels (198, 13)
-scores_B (90, 84, 84)
-df_B (90, 14) scores (90, 7056) labels (90, 13)
-df (288, 14)
-Loading files from /home/leon/dual_task/dual_data/data/ChRM23
-X_days (960, 232, 84) y_days (960, 12)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (26, 232, 84) X_S2 (21, 232, 84)
-X_B (47, 232, 84) y_B (47,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (70, 232, 84) X_S2 (75, 232, 84)
-y_labels (145, 13) ['DualNoGo' 'DualGo' 'DPA']
-X (145, 232, 84) nans 0.0 y (145,) [0. 1.]
-df_A (145, 14) scores (145, 7056) labels (145, 13)
-scores_B (47, 84, 84)
-df_B (47, 14) scores (47, 7056) labels (47, 13)
-df (192, 14)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-X_days (960, 361, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (100, 361, 84) X_S2 (104, 361, 84)
-X_B (204, 361, 84) y_B (204,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (188, 361, 84) X_S2 (184, 361, 84)
-y_labels (372, 15) ['DPA' 'DualGo' 'DualNoGo']
-X (372, 361, 84) nans 0.0 y (372,) [0. 1.]
-df_A (372, 16) scores (372, 7056) labels (372, 15)
-scores_B (204, 84, 84)
-df_B (204, 16) scores (204, 7056) labels (204, 15)
-df (576, 16)
-Loading files from /home/leon/dual_task/dual_data/data/ACCM03
-X_days (960, 361, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (16, 361, 84) X_S2 (19, 361, 84)
-X_B (35, 361, 84) y_B (35,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (176, 361, 84) X_S2 (173, 361, 84)
-y_labels (349, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (349, 361, 84) nans 0.0 y (349,) [0. 1.]
-df_A (349, 16) scores (349, 7056) labels (349, 15)
-scores_B (35, 84, 84)
-df_B (35, 16) scores (35, 7056) labels (35, 15)
-df (384, 16)
-['first', 'last']
-Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-X_days (960, 113, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (120, 113, 84) X_S2 (124, 113, 84)
-X_B (244, 113, 84) y_B (244,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (168, 113, 84) X_S2 (164, 113, 84)
-y_labels (332, 15) ['DualNoGo' 'DPA' 'DualGo']
-X (332, 113, 84) nans 0.0 y (332,) [0. 1.]
-df_A (332, 16) scores (332, 7056) labels (332, 15)
-scores_B (244, 84, 84)
-df_B (244, 16) scores (244, 7056) labels (244, 15)
-df (576, 16)
-Loading files from /home/leon/dual_task/dual_data/data/ACCM04
-X_days (960, 113, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (49, 113, 84) X_S2 (52, 113, 84)
-X_B (101, 113, 84) y_B (101,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-multiple days, discard 0 first 3 middle 0
-X_S1 (143, 113, 84) X_S2 (140, 113, 84)
-y_labels (283, 15) ['DualGo' 'DPA' 'DualNoGo']
-X (283, 113, 84) nans 0.0 y (283,) [0. 1.]
-df_A (283, 16) scores (283, 7056) labels (283, 15)
-scores_B (101, 84, 84)
-df_B (101, 16) scores (101, 7056) labels (101, 15)
-df (384, 16)
-(5568, 17)
+scores (283, 84, 84) -0.054164297654174486
+df_A (283, 17) scores (283, 7056) labels (283, 16)
+df (283, 17)
+(2023, 18)
 #+end_example
 
 #+begin_src ipython
@@ -809,9 +620,12 @@ print(df_sample.keys())
 #+end_src
 
 #+RESULTS:
+:        'laser', 'day', 'choice', 'pair', 'odr_perf', 'odr_choice',
+:        'odr_response', 'idx', 'overlaps', 'mouse', 'performance', 'odor_pair'],
+:       dtype='object')
 : Index(['index', 'sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response',
-:        'laser', 'day', 'choice', 'odr_perf', 'odr_choice', 'odr_response',
-:        'idx', 'overlaps', 'mouse', 'performance', 'pair'],
+:        'laser', 'day', 'choice', 'pair', 'odr_perf', 'odr_choice',
+:        'odr_response', 'idx', 'overlaps', 'mouse', 'performance', 'odor_pair'],
 :       dtype='object')
 
 #+begin_src ipython
@@ -819,8 +633,10 @@ print(df_sample.mouse.unique())
 #+end_src
 
 #+RESULTS:
-: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23'
-:  'ACCM03' 'ACCM04']
+:RESULTS:
+:
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18']
+:END:
 
 #+begin_src ipython
 df_sample['performance'] = df_sample['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
@@ -845,22 +661,23 @@ else:
     name = 'df_sample_%s' % dum
 
 if len(mice)==1:
-    pkl_save(df_sample, '%s' % name, path="../data/%s/overlaps" % options['mouse'])
+    pkl_save(df_sample, '%s' % name, path="/storage/leon/dual_task/data/%s/overlaps" % options['mouse'])
 elif len(mice)==2:
-    pkl_save(df_sample, '%s' % name, path="../data/mice/overlaps_ACC")
+    pkl_save(df_sample, '%s' % name, path="/storage/leon/dual_task/data/mice/overlaps_ACC")
 else:
-    pkl_save(df_sample, '%s' % name, path="../data/mice/overlaps")
+    pkl_save(df_sample, '%s' % name, path="/storage/leon/dual_task/data/mice/overlaps")
 
 #+end_src
 
 #+RESULTS:
-: saving to ../data/mice/overlaps/df_sample_overlaps_all_loocv_early_late.pkl
+: saving to /storage/leon/dual_task/data/mice/overlaps/df_sample_overlaps_all_loocv_laser_on_early_late.pkl
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
+: 92a06121-371d-4144-9f21-aaa9d4ad2d0c
 
 * Data
 
@@ -873,15 +690,15 @@ else:
     name = 'df_sample_%s' % dum
 
 if len(mice)==1:
-    df_sample = pkl_load('%s' % name, path="../data/%s/overlaps" % options['mouse'])
+    df_sample = pkl_load('%s' % name, path="/storage/leon/dual_task/data/%s/overlaps" % options['mouse'])
 elif len(mice)==2:
-    df_sample = pkl_load('%s' % name, path="../data/mice/overlaps_ACC")
+    df_sample = pkl_load('%s' % name, path="/storage/leon/dual_task/data/mice/overlaps_ACC")
 else:
-    df_sample = pkl_load('%s' % name, path="../data/mice/overlaps")#.reset_index()
+    df_sample = pkl_load('%s' % name, path="/storage/leon/dual_task/data/mice/overlaps")#.reset_index()
 #+end_src
 
 #+RESULTS:
-: loading from ../data/mice/overlaps/df_sample_overlaps_all_loocv_early_late.pkl
+: loading from /storage/leon/dual_task/data/mice/overlaps/df_sample_overlaps_all_loocv_early_late.pkl
 
 #+begin_src ipython
 print(df_sample.mouse.unique(), df_sample.shape)
@@ -950,7 +767,7 @@ for epoch in ['ED', 'MD', 'LD', 'TEST', 'CHOICE']:
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharex=True)
 
 df = df_sample.copy()
-df = df[df.laser==0]
+# df = df[df.laser==0]
 # df = df[df.odr_perf==1]
 # df = df[df.mouse!='ACCM04']
 
@@ -965,7 +782,7 @@ ax[0].legend(fontsize=10)
 ax[0].set_ylim([.475, 1])
 
 df = df_sample.copy()
-df = df[df.laser==0].dropna()
+df = df[df.laser==1].dropna()
 # df = df[df.mouse!='ACCM04']
 
 # Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
@@ -979,8 +796,8 @@ ax[1].set_ylabel('GNG Performance')
 ax[1].legend(fontsize=10)
 
 df = df_sample.copy()
-df = df[df.laser==0]
-df = df[df.performance==1]
+# df = df[df.laser==0]
+# df = df[df.performance==1]
 
 # Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
 # df = df[df.mouse.isin(Jaws_mice)]
@@ -998,7 +815,48 @@ plt.show()
 #+end_src
 
 #+RESULTS:
+:RESULTS:
+: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
 [[./figures/sample_overlaps/figure_34.png]]
+:END:
+
+ #+begin_src ipython
+n_ = len(options['days'])+1
+fig, ax = plt.subplots(nrows=1, ncols=n_, figsize=(n_*width, height), sharex=True)
+
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
+# print(df.mouse.unique(), df.shape)
+
+epoch= 'ED'
+
+df = df_sample.copy()
+df = df[df.mouse=='JawsM15']
+
+ls = ['-', '--', '-', '--']
+colors = ['r', 'b', 'g']
+labels = ['AC', 'AD', 'BD', 'BC']
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+for k in range(3):
+    df_ = df[df.tasks==tasks[k]]
+    for i in range(2):
+        for j in range(2):
+            df__ = df_[(df_.sample_odor==i) & (df_.test_odor==j)]
+            plot_overlaps(df__, 'last', epoch, ax[k], y0=0., if_proba=0, label=labels[2*i+j], cis=None, ls=ls[2*i+j], colors=[colors[k]], alpha=(i+1)/2)
+
+    ax[k].set_xlabel('Time (s)')
+    ax[k].set_ylabel('Sample Overlap')
+    # ax[k].set_ylim([-0.25, 1.25])
+
+ax[-1].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_overlaps_corr_incorr_%s.svg' % epoch, dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/sample_overlaps/figure_35.png]]
 
 #+begin_src ipython
 df = df_sample.copy()
@@ -1235,53 +1093,29 @@ fig, ax = plt.subplots(nrows=1, ncols=n_, figsize=(n_*width, height), sharex=Tru
 
 # Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
 # df = df[df.mouse.isin(Jaws_mice)]
-
 # print(df.mouse.unique(), df.shape)
 
-epoch= 'ED'
+epoch= 'LD'
 
 df = df_sample.copy()
-df = df[df.laser==0]
-df = df[df.tasks=='DPA']
-# df = df[df.mouse=='JawsM15']
+df = df[df.mouse=='JawsM15']
 
-df_ = df[df.performance==1]
-plot_overlaps(df_, 'all', epoch, ax[0], title='Sample', y0=0., if_proba=1, label='correct', cis=True)
+ls = ['-', '--', '-', '--']
+colors = ['r', 'b', 'g']
+labels = ['AC', 'AD', 'BD', 'BC']
 
-df_ = df[df.performance==0]
-plot_overlaps(df_, 'all', epoch, ax[0], title='Sample', y0=0., if_proba=1, ls='--', label='incorrect', cis=True)
+for k in range(3):
+    df_ = df[df.tasks==tasks[k]]
+    for i in range(2):
+        for j in range(2):
+            df__ = df_[(df_.performance==1) & (df_.sample_odor==i) & (df_.test_odor==j)]
+            plot_overlaps(df__, 'last', epoch, ax[k], y0=0., if_proba=0, label=labels[2*i+j], cis=None, ls=ls[2*i+j], colors=[colors[k]], alpha=(i+1)/2)
 
-df = df_sample.copy()
-df = df[df.laser==0]
-df = df[df.tasks=='DualGo']
-# df = df[df.mouse=='JawsM15']
+    ax[k].set_xlabel('Time (s)')
+    ax[k].set_ylabel('Sample Overlap')
+    # ax[k].set_ylim([-0.25, 1.25])
 
-df_ = df[df.performance==1]
-plot_overlaps(df_, 'all', epoch, ax[1], title='Sample', y0=0., if_proba=1, colors=['b'], label='correct', cis=True)
-
-df_ = df[df.performance==0]
-plot_overlaps(df_, 'all', epoch, ax[1], title='Sample', y0=0., if_proba=1, ls='--', colors=['b'], label='incorrect', cis=True)
-
-df = df_sample.copy()
-df = df[df.laser==0]
-df = df[df.tasks=='DualNoGo']
-# df = df[df.mouse=='JawsM15']
-
-df_ = df[df.performance==1]
-plot_overlaps(df_, 'all', epoch, ax[2], title='Sample', y0=0., if_proba=1, colors=['g'], label='correct', cis=True)
-
-df_ = df[df.performance==0]
-plot_overlaps(df_, 'all', epoch, ax[2], title='Sample', y0=0., if_proba=1, ls='--', colors=['g'], label='incorrect', cis=True)
-
-ax[0].set_ylabel('Sample Overlap')
-ax[0].set_ylim([-0.25, 1.25])
-ax[1].set_ylim([-0.25, 1.25])
-ax[2].set_ylim([-0.25, 1.25])
-# ax[0].set_title('DPA')
-# ax[1].set_title('Go')
-# ax[n_-1].set_title('NoGo')
-
-# ax[2].legend(fontsize=10)
+ax[-1].legend(fontsize=10)
 
 plt.savefig('figures/icrm/sample_overlaps_corr_incorr_%s.svg' % epoch, dpi=300)
 plt.show()
@@ -1306,7 +1140,7 @@ df = df[df.laser==0]
 # df = df[df.performance==0]
 # df = df[df.odr_perf==1]
 
-epoch= 'diag'
+epoch= 'LD'
 colors = ['r', 'b', 'g']
 tasks = ['DPA', 'DualGo', 'DualNoGo']
 
@@ -1333,8 +1167,7 @@ plt.savefig('figures/icrm/sample_overlaps_%s_pair_nopair.svg' % epoch, dpi=300)
 plt.show()
 #+end_src
 
-#+RESULTS:
-[[./figures/sample_overlaps/figure_46.png]]
+
 
 #+begin_src ipython
 n_ = len(options['days'])
@@ -1750,47 +1583,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-KeyError                                  Traceback (most recent call last)
-Cell In[66], line 10
-      7 df = df[df.response=='incorrect_fa']
-      8 df = df[df.mouse!='ACCM04']
----> 10 plot_overlaps(df, 'first', '%s' % epoch, ax[0], title='Sample', y0=0.)
-     12 df = df_sample.copy()
-     13 df = df[df.mouse!='ACCM04']
 
-Cell In[12], line 8, in plot_overlaps(df, day, epoch, ax, title, y0, size, if_abs)
-      6     mean_overlaps = df_.groupby('tasks')['abs_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-      7 else:
-----> 8     mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-     10 # lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
-     11 # upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
-     13 time_points = np.linspace(0, 14, size)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/groupby/generic.py:1964, in DataFrameGroupBy.__getitem__(self, key)
-   1957 if isinstance(key, tuple) and len(key) > 1:
-   1958     # if len == 1, then it becomes a SeriesGroupBy and this is actually
-   1959     # valid syntax, so don't raise
-   1960     raise ValueError(
-   1961         "Cannot subset columns with a tuple with more than one element. "
-   1962         "Use a list instead."
-   1963     )
--> 1964 return super().__getitem__(key)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/base.py:244, in SelectionMixin.__getitem__(self, key)
-    242 else:
-    243     if key not in self.obj:
---> 244         raise KeyError(f"Column not found: {key}")
-    245     ndim = self.obj[key].ndim
-    246     return self._gotitem(key, ndim=ndim)
-
-KeyError: 'Column not found: overlaps_SAMPLE'
-#+end_example
-[[./figures/sample_overlaps/figure_37.png]]
-:END:
 
  #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
@@ -1817,47 +1610,8 @@ plt.savefig('figs/sample_%s_overlaps.svg' % epoch, dpi=300)
 plt.show()
 #+end_src
 
-#+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-KeyError                                  Traceback (most recent call last)
-Cell In[100], line 8
-      5 # df = df[df.performance==0]
-      6 df = df[df.response=='incorrect_fa']
-----> 8 plot_overlaps(df, 'last', '%s' % epoch, ax[0], title='Sample', y0=0.)
-     10 df = df_sample.copy()
-     11 # df = df[df.performance==1]
 
-Cell In[99], line 12, in plot_overlaps(df, day, epoch, ax, title, y0, size, if_abs, ls)
-     10 else:
-     11     df_2 = df_[df_.sample_odor==0]
----> 12     mean_A = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-     14     df_2 = df_[df_.sample_odor==1]
-     15     mean_B = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
 
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/groupby/generic.py:1964, in DataFrameGroupBy.__getitem__(self, key)
-   1957 if isinstance(key, tuple) and len(key) > 1:
-   1958     # if len == 1, then it becomes a SeriesGroupBy and this is actually
-   1959     # valid syntax, so don't raise
-   1960     raise ValueError(
-   1961         "Cannot subset columns with a tuple with more than one element. "
-   1962         "Use a list instead."
-   1963     )
--> 1964 return super().__getitem__(key)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/base.py:244, in SelectionMixin.__getitem__(self, key)
-    242 else:
-    243     if key not in self.obj:
---> 244         raise KeyError(f"Column not found: {key}")
-    245     ndim = self.obj[key].ndim
-    246     return self._gotitem(key, ndim=ndim)
-
-KeyError: 'Column not found: overlaps_SAMPLE'
-#+end_example
-[[./figures/sample_overlaps/figure_44.png]]
-:END:
 
  #+begin_src ipython
 
@@ -1879,59 +1633,7 @@ plot_overlaps_mat(df, 'first', vmin=0, vmax=1, title='Sample')
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-KeyError                                  Traceback (most recent call last)
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3790, in Index.get_loc(self, key)
-   3789 try:
--> 3790     return self._engine.get_loc(casted_key)
-   3791 except KeyError as err:
 
-File index.pyx:152, in pandas._libs.index.IndexEngine.get_loc()
-
-File index.pyx:181, in pandas._libs.index.IndexEngine.get_loc()
-
-File pandas/_libs/hashtable_class_helper.pxi:7080, in pandas._libs.hashtable.PyObjectHashTable.get_item()
-
-File pandas/_libs/hashtable_class_helper.pxi:7088, in pandas._libs.hashtable.PyObjectHashTable.get_item()
-
-KeyError: False
-
-The above exception was the direct cause of the following exception:
-
-KeyError                                  Traceback (most recent call last)
-Cell In[37], line 5
-      2 df = df[df.laser==0]
-      4 df = df[df.odr_perf==1]
-----> 5 df = df[df.sample==1]
-      7 df = df[df.mouse!='ACCM04']
-      8 # df = df[df.response=='incorrect_fa']
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py:3893, in DataFrame.__getitem__(self, key)
-   3891 if self.columns.nlevels > 1:
-   3892     return self._getitem_multilevel(key)
--> 3893 indexer = self.columns.get_loc(key)
-   3894 if is_integer(indexer):
-   3895     indexer = [indexer]
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3797, in Index.get_loc(self, key)
-   3792     if isinstance(casted_key, slice) or (
-   3793         isinstance(casted_key, abc.Iterable)
-   3794         and any(isinstance(x, slice) for x in casted_key)
-   3795     ):
-   3796         raise InvalidIndexError(key)
--> 3797     raise KeyError(key) from err
-   3798 except TypeError:
-   3799     # If we have a listlike key, _check_indexing_error will raise
-   3800     #  InvalidIndexError. Otherwise we fall through and re-raise
-   3801     #  the TypeError.
-   3802     self._check_indexing_error(key)
-
-KeyError: False
-#+end_example
-:END:
 
 #+begin_src ipython
 df = df_sample.copy()
@@ -1945,59 +1647,7 @@ plot_overlaps_mat(df, 'first', vmin=0, vmax=1, title='Sample')
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-KeyError                                  Traceback (most recent call last)
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3790, in Index.get_loc(self, key)
-   3789 try:
--> 3790     return self._engine.get_loc(casted_key)
-   3791 except KeyError as err:
 
-File index.pyx:152, in pandas._libs.index.IndexEngine.get_loc()
-
-File index.pyx:181, in pandas._libs.index.IndexEngine.get_loc()
-
-File pandas/_libs/hashtable_class_helper.pxi:7080, in pandas._libs.hashtable.PyObjectHashTable.get_item()
-
-File pandas/_libs/hashtable_class_helper.pxi:7088, in pandas._libs.hashtable.PyObjectHashTable.get_item()
-
-KeyError: False
-
-The above exception was the direct cause of the following exception:
-
-KeyError                                  Traceback (most recent call last)
-Cell In[38], line 5
-      2 df = df[df.laser==0]
-      4 df = df[df.odr_perf==1]
-----> 5 df = df[df.sample==0]
-      7 df = df[df.mouse!='ACCM04']
-      8 plot_overlaps_mat(df, 'first', vmin=0, vmax=1, title='Sample')
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/frame.py:3893, in DataFrame.__getitem__(self, key)
-   3891 if self.columns.nlevels > 1:
-   3892     return self._getitem_multilevel(key)
--> 3893 indexer = self.columns.get_loc(key)
-   3894 if is_integer(indexer):
-   3895     indexer = [indexer]
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/pandas/core/indexes/base.py:3797, in Index.get_loc(self, key)
-   3792     if isinstance(casted_key, slice) or (
-   3793         isinstance(casted_key, abc.Iterable)
-   3794         and any(isinstance(x, slice) for x in casted_key)
-   3795     ):
-   3796         raise InvalidIndexError(key)
--> 3797     raise KeyError(key) from err
-   3798 except TypeError:
-   3799     # If we have a listlike key, _check_indexing_error will raise
-   3800     #  InvalidIndexError. Otherwise we fall through and re-raise
-   3801     #  the TypeError.
-   3802     self._check_indexing_error(key)
-
-KeyError: False
-#+end_example
-:END:
 
 #+begin_src ipython
 df = df_sample.copy()

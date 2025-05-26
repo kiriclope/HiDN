@@ -2,6 +2,7 @@ import numpy as np
 from scipy import stats
 from scipy.stats import circmean, norm
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.decomposition import PCA
 # from caiman.source_extraction.cnmf.deconvolution import constrained_foopsi
 from oasis.functions import deconvolve
 from src.common import constants as gv

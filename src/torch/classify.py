@@ -51,9 +51,22 @@ def get_classification(model, RETURN='overlaps', **options):
 
     X_B, y_B, y_B_labels = None, None, None
     y_labels = None
-    cv_B = True
+    cv_B = options['cv_B']
 
-    if (options['features'] == 'sample') or (options['features']=='pair'):
+    if (options['features'] == 'sample') and not ('ACC' in options['mouse']):
+        # cv_B = False
+        if cv_B:
+            options['laser'] = 1
+
+            X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+            y_B_labels = y_B.copy()
+            y_B = y_to_arr(y_B, **options)
+            print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+
+            # train and test on laser OFF trials in X_A, y_A
+            options['laser'] = 0
+
+    if (options['features']=='pair'):
         # test on incorret trials
         options['trials'] = 'incorrect'
 
@@ -66,20 +79,20 @@ def get_classification(model, RETURN='overlaps', **options):
         options['trials'] = 'correct'
 
     if (options['features']=='choice') and not ('ACC' in options['mouse']):
-        cv_B = False
-        # test on laser ON trials
-        # options['laser'] = 1
+        # cv_B = False
+        if cv_B:
+            # test on laser ON trials
+            options['laser'] = 1
 
-        # X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
-        # y_B_labels = y_B.copy()
-        # y_B = y_to_arr(y_B, **options)
-        # print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+            X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+            y_B_labels = y_B.copy()
+            y_B = y_to_arr(y_B, **options)
+            print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
 
-        # train and test on laser OFF trials in X_A, y_A
-        options['laser'] = 0
+            # train and test on laser OFF trials in X_A, y_A
+            options['laser'] = 0
 
     if (options['features']=='choice') and ('ACC' in options['mouse']):
-        # test on laser ON trials
         cv_B = False
 
     if (options['features'] == 'distractor') or (options['features'] == 'odr_choice'):

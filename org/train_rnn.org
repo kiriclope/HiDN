@@ -293,7 +293,6 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
           sign_readout = torch.sign(2 * y - 1.0) * readout.mean(dim=1)
           loss += F.relu(1.0 - sign_readout).mean()
 
-
           loss.backward()
 
           optimizer.step()
@@ -322,9 +321,9 @@ def split_data(X, Y, train_perc=0.8, batch_size=8, n_labels=2):
               loss = loss_fn(Y_pred, X)
 
               # # add readout term to fit behavior
-              readout = model.linear(Y_pred)[:, 54:]
-              sign_readout = torch.sign(2 * y - 1.0) * readout.mean(dim=1)
-              loss += F.relu(1.0 - sign_readout).mean()
+              # readout = model.linear(Y_pred)[:, 54:]
+              # sign_readout = torch.sign(2 * y - 1.0) * readout.mean(dim=1)
+              # loss += F.relu(- sign_readout).mean()
 
               val_loss += loss.item() * X.size(0)
 
@@ -371,7 +370,6 @@ def optimization(model, train_loader, val_loader, loss_fn, optimizer, num_epochs
 #+RESULTS:
 
 ** Prediction
-
 
 #+begin_src ipython
   def get_predictions(model, future_steps, device='cuda:1'):
@@ -675,7 +673,7 @@ print(X_data.shape)
 from src.decode.bump import circcvl
 # smoothed_data = circcvl(X_data, windowSize=2, axis=-1)
 print(X_data.shape)
-window_size = 6
+window_size = 12
 # from scipy.ndimage import gaussian_filter1d
 # smoothed_data = gaussian_filter1d(X_data, axis=-1, sigma=2)
 # smoothed_data = moving_average_multidim(X_data[..., :52], window_size, axis=-1)
@@ -699,34 +697,21 @@ smoothed_data = moving_average_multidim(X_data, window_size, axis=-1)
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/f387b711ca1d94e6c161e57c9f84c0977933423b.png]]
+[[./.ob-jupyter/8852382b8e3556eb5ee162c2b4ed01ce615ba3c1.png]]
 
 ** Training
 
 #+begin_src ipython
   X = smoothed_data
   y = y_data.choice.to_numpy()
-  print(X.shape, y.shape, y)
+  print(X.shape, y.shape)
 
   # X = rescale_to_minus_one_to_one(X)
   X = np.swapaxes(X, 1, -1)
 #+end_src
 
 #+RESULTS:
-#+begin_example
-(288, 693, 84) (288,) [1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1.
- 1. 1. 1. 1. 0. 1. 0. 1. 1. 1. 0. 0. 1. 0. 1. 0. 1. 0. 0. 0. 1. 0. 0. 0.
- 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 0. 1. 1. 0. 0.
- 1. 0. 0. 0. 0. 0. 0. 0. 1. 0. 1. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
- 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
- 0. 0. 1. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 1. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
- 0. 1. 1. 1. 1. 1. 1. 1. 1. 1. 0. 1. 0. 1. 1. 1. 1. 0. 1. 1. 1. 1. 1. 1.
- 1. 1. 1. 1. 1. 1. 0. 1. 1. 0. 0. 1. 1. 0. 0. 0. 0. 0. 0. 0. 0. 1. 0. 0.
- 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 1. 0. 1. 1.
- 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.
- 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 1. 0. 0. 0. 0. 0. 0.
- 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0. 0.]
-#+end_example
+: (288, 693, 84) (288,)
 
 #+begin_src ipython
 X = torch.tensor(X, dtype=torch.float32, device=DEVICE)
@@ -752,34 +737,35 @@ train_loader, val_loader = strat_split_data(X, y, train_perc=0.8, batch_size=bat
 : torch.Size([230, 1]) torch.Size([58, 1])
 
 #+begin_src ipython
-# model = FullRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
-model = LRRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
+model = FullRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
+# model = LRRNN(N_NEURON=num_features, N_BATCH=batch_size, DEVICE=device)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-learning_rate = 0.1
-num_epochs = 100
+learning_rate = 0.01
+num_epochs = 50
 
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
 optimization(model, train_loader, val_loader, criterion, optimizer, num_epochs, thresh=.001, penalty=None, lbd=1)
+torch.save(model.state_dict(), './model.pth')
 #+end_src
 
 #+RESULTS:
 #+begin_example
-Epoch 0/100, Training Loss: 0.9472, Validation Loss: 0.9502
-Epoch 10/100, Training Loss: 0.1119, Validation Loss: 0.7316
-Epoch 20/100, Training Loss: 0.0564, Validation Loss: 0.6981
-Epoch 30/100, Training Loss: 0.0480, Validation Loss: 0.6868
-Epoch 40/100, Training Loss: 0.0365, Validation Loss: 0.6485
-Epoch 50/100, Training Loss: 0.0287, Validation Loss: 0.6475
-Epoch 60/100, Training Loss: 0.0384, Validation Loss: 0.6386
-Epoch 70/100, Training Loss: 0.0240, Validation Loss: 0.6379
-Epoch 80/100, Training Loss: 0.0236, Validation Loss: 0.6405
-Epoch 90/100, Training Loss: 0.0185, Validation Loss: 0.6393
+Epoch 0/50, Training Loss: 7.8253, Validation Loss: 0.5442
+Epoch 5/50, Training Loss: 0.6882, Validation Loss: 0.0537
+Epoch 10/50, Training Loss: 0.2807, Validation Loss: 0.0199
+Epoch 15/50, Training Loss: 0.2418, Validation Loss: 0.0095
+Epoch 20/50, Training Loss: 0.1209, Validation Loss: 0.0060
+Epoch 25/50, Training Loss: 0.0042, Validation Loss: 0.0042
+Epoch 30/50, Training Loss: 0.0033, Validation Loss: 0.0033
+Epoch 35/50, Training Loss: 0.0028, Validation Loss: 0.0028
+Epoch 40/50, Training Loss: 0.0025, Validation Loss: 0.0025
+Epoch 45/50, Training Loss: 0.0023, Validation Loss: 0.0023
 #+end_example
 
 ** Testing
@@ -842,7 +828,7 @@ Epoch 90/100, Training Loss: 0.0185, Validation Loss: 0.6393
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/31d7b89bb577d35dce7c85ab37e1524feb9fc224.png]]
+[[./.ob-jupyter/3ff51445a03e36fb7df70e2a97a32ac9ee092da6.png]]
 
 #+begin_src ipython
 try:
@@ -863,7 +849,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/fcf861a125f2ebff6b44186d84e6137428526318.png]]
+[[./.ob-jupyter/81cbde27e733e605c088d8996fb890e518dec1f5.png]]
 
 #+begin_src ipython
   X_days, y_days = get_X_y_days(**options)
@@ -890,7 +876,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/c78f391234c138578f1df17612cc63155070e8f4.png]]
+[[./.ob-jupyter/aa5dd72cba2e29ca693fa39374e6594e1904ee1b.png]]
 
 #+begin_src ipython
 lbd, U2 = np.linalg.eig(weights.T)
@@ -912,18 +898,18 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/e8838d5e21a317bdeebe09b0bc841710cff97601.png]]
+[[./.ob-jupyter/b4ed0894e74ee9e51a960e56d3f200de3b40dbed.png]]
 
 #+begin_src ipython
 lbd[:10]
 #+end_src
 
 #+RESULTS:
-: array([ 2.5136525e+02+0.0000000e+00j, -1.2122800e+02+0.0000000e+00j,
-:         8.3399327e-06+4.6413838e-06j,  8.3399327e-06-4.6413838e-06j,
-:         7.3618685e-06+5.7432226e-06j,  7.3618685e-06-5.7432226e-06j,
-:        -5.9164117e-06+7.1160989e-06j, -5.9164117e-06-7.1160989e-06j,
-:         3.3103825e-06+8.3024152e-06j,  3.3103825e-06-8.3024152e-06j],
+: array([11.8278675  +0.j        ,  0.0820804 +10.441734j  ,
+:         0.0820804 -10.441734j  ,  2.1953633  +0.j        ,
+:        -1.8370997  +0.j        , -0.5066431  +0.7049943j ,
+:        -0.5066431  -0.7049943j , -0.7764151  +0.2512745j ,
+:        -0.7764151  -0.2512745j ,  0.43740162 +0.36472526j],
 :       dtype=complex64)
 
 #+begin_src ipython
@@ -934,19 +920,19 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/582ce17d289a5849f7708f31f0cf975692d86210.png]]
+[[./.ob-jupyter/303fd92bd9a55cd40016415f01c1d6648f7447a0.png]]
 
 #+begin_src ipython
 print(lbd[-11:])
 #+end_src
 
 #+RESULTS:
-: [ 3.3954148e-08+0.0000000e+00j -3.4787934e-08+6.2529118e-08j
-:  -3.4787934e-08-6.2529118e-08j  2.4910776e-08+1.0690769e-07j
-:   2.4910776e-08-1.0690769e-07j  1.1567952e-07+5.7147538e-08j
-:   1.1567952e-07-5.7147538e-08j  1.7485307e-08+7.0275696e-08j
-:   1.7485307e-08-7.0275696e-08j -8.8214609e-09+1.1144971e-08j
-:  -8.8214609e-09-1.1144971e-08j]
+: [6.1260878e-05+2.3657472e-05j 6.1260878e-05-2.3657472e-05j
+:  6.8771900e-05+6.3865255e-06j 6.8771900e-05-6.3865255e-06j
+:  5.1434119e-05+3.9122009e-05j 5.1434119e-05-3.9122009e-05j
+:  3.4701297e-05+0.0000000e+00j 9.2235596e-06+3.6033569e-05j
+:  9.2235596e-06-3.6033569e-05j 2.4772833e-06+1.0453249e-05j
+:  2.4772833e-06-1.0453249e-05j]
 
 #+begin_src ipython
 idx = 0
@@ -993,7 +979,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/7e60814be0604377248467f0c498068aab646926.png]]
+[[./.ob-jupyter/6ab0d58ab5c799c060c4e066898b3493fc841ec4.png]]
 
 #+begin_src ipython
 overlap = torch.tensor(X_test).to(torch.float).to(device) @ torch.tensor(Vt.T).to(torch.float).to(device)
@@ -1034,7 +1020,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/1e7f05cc1807157a035e4f845c39087353bfb14e.png]]
+[[./.ob-jupyter/239073f86fc05b5e4aeadabbdd3b4559dea14705.png]]
 
 #+begin_src ipython
 overlap = torch.tensor(X_test).to(torch.float).to(device) @ model.U / model.N_NEURON
@@ -1067,7 +1053,24 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/44cce634db45fef564da8363e7c5cefae7dcf967.png]]
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+AttributeError                            Traceback (most recent call last)
+Cell In[44], line 1
+----> 1 overlap = torch.tensor(X_test).to(torch.float).to(device) @ model.U / model.N_NEURON
+      3 fig, ax = plt.subplots(1, 2, figsize= [2 * width, height])
+      5 ax[0].plot(np.linspace(0, 14, 84), overlap[:8, :, idx].cpu().detach().mean(0) , 'r')
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/torch/nn/modules/module.py:1688, in Module.__getattr__(self, name)
+   1686     if name in modules:
+   1687         return modules[name]
+-> 1688 raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+AttributeError: 'FullRNN' object has no attribute 'U'
+#+end_example
+:END:
 
 #+begin_src ipython
 overlap = torch.tensor(X_test).to(torch.float).to(device) @ model.V / model.N_NEURON
@@ -1100,10 +1103,93 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/a39f59536b61f23c91a40da990f5ea6cd8327c69.png]]
+:RESULTS:
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+AttributeError                            Traceback (most recent call last)
+Cell In[45], line 1
+----> 1 overlap = torch.tensor(X_test).to(torch.float).to(device) @ model.V / model.N_NEURON
+      3 fig, ax = plt.subplots(1, 2, figsize= [2 * width, height])
+      5 ax[0].plot(np.linspace(0, 14, 84), overlap[:8, :, idx].cpu().detach().mean(0) , 'r')
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/torch/nn/modules/module.py:1688, in Module.__getattr__(self, name)
+   1686     if name in modules:
+   1687         return modules[name]
+-> 1688 raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+AttributeError: 'FullRNN' object has no attribute 'V'
+#+end_example
+:END:
+
+* reload
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
+
+#+begin_src ipython
+import gc
+gc.collect()
+
+torch.cuda.empty_cache()
+torch.cuda.device(DEVICE)   # where X is the GPU index, e.g., 0, 1
+torch.cuda.synchronize()
+torch.cuda.reset_accumulated_memory_stats(DEVICE)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+model_state_dict = torch.load('./model.pth')
+model.load_state_dict(model_state_dict)
+model.eval();
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: torch.Size([288, 84, 693]) torch.Size([288, 1])
+
+#+begin_src ipython
+Y_pred = model(X[:8])
+readout = model.linear(Y_pred)
+
+Y_pred = model(X[16:24])
+readout2 = model.linear(Y_pred)
+
+# readout = torch.sign(2 * y[:32].unsqueeze(-1) - 1.0)  * model.linear(Y_pred)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(readout.shape)
+#+end_src
+
+#+RESULTS:
+: torch.Size([8, 84, 1])
+
+#+begin_src ipython
+xtime = np.linspace(0, 14, 84)
+cmap = plt.get_cmap('Blues')
+colors = [cmap((i+1)/ readout.shape[0]) for i in range(readout.shape[0]+1)]
+
+for i in range(readout.shape[0]):
+    plt.plot(xtime, readout[i, :, 0].cpu().detach().numpy(), color=colors[i], alpha=.5);
+    plt.plot(xtime, readout2[i, :, 0].cpu().detach().numpy(), color=colors[i], alpha=.5);
+
+add_vlines()
+plt.xlabel('Time (s)')
+plt.ylabel('readout')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/7f1a098ac3584abc64b1cc799ae4ef0263ec6f32.png]]

@@ -259,6 +259,42 @@ def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
 #+RESULTS:
 
 #+begin_src ipython
+def plot_overlaps(df, day, epoch, ax, y0=0.5, size=84, if_proba=0, cis=None, colors=None, **kwargs):
+    df_ = df[df.day == day].copy()
+    if colors is None:
+        colors = ['r', 'b', 'g']
+
+    if if_proba:
+        mean_overlaps = df_.groupby('tasks')['probas_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+    else:
+        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+    if cis is not None:
+        lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+        upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    time_points = np.linspace(0, 14, size)
+
+    for i, task in enumerate(mean_overlaps.index):
+        if cis is None:
+            ax.plot(time_points, mean_overlaps[task], color=colors[i], **kwargs)
+        else:
+            ax.plot(time_points, mean_overlaps[task], color=colors[i], **kwargs)
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    add_vlines(ax)
+    ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
 def bootstrap_ci(data, n_bootstrap=1000, ci=95):
     bootstrapped_means = np.array([np.mean(np.random.choice(data, size=len(data))) for _ in range(n_bootstrap)])
     lower_bound = np.percentile(bootstrapped_means, (100-ci)/2)
@@ -871,16 +907,53 @@ for epoch2 in ['CUE','RWD', 'LD', 'TEST', 'DIST', 'RWD2']:
 #+begin_src ipython
 options['T_WINDOW'] = 0.
 options = set_options(**options)
-for epoch in ['DIST', 'DIST_MD', 'MD', 'CUE', 'RWD' ,'LD', 'DELAY']:
+for epoch in ['DIST', 'DIST_MD', 'MD', 'CUE', 'RWD' ,'LD', 'TEST', 'CHOICE']:
     options['epochs'] = [epoch]
     df_dist['overlaps_%s' % epoch] = -df_dist['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
 
-    for epoch2 in ['ED', 'DIST', 'MD', 'CUE', 'RWD', 'LD']:
+    for epoch2 in ['ED', 'DIST', 'MD', 'CUE', 'RWD', 'LD', 'TEST', 'CHOICE']:
         options['epochs'] = [epoch2]
         df_dist['overlaps_%s_%s' % (epoch, epoch2)] = df_dist['overlaps_%s' % epoch].apply(lambda x: avg_epochs(np.array(x), **options))
 #+end_src
 
 #+RESULTS:
+
+ #+begin_src ipython
+n_ = len(options['days'])+1
+fig, ax = plt.subplots(nrows=1, ncols=n_, figsize=(n_*width, height), sharex=True)
+
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# df = df[df.mouse.isin(Jaws_mice)]
+# print(df.mouse.unique(), df.shape)
+
+epoch= 'TEST'
+
+df = df_dist.copy()
+# df = df[df.mouse=='JawsM15']
+
+ls = ['-', '--', '--', '-']
+colors = ['r', 'b', 'g']
+labels = ['AC', 'AD', 'BC', 'BD']
+
+for k in range(3):
+    df_ = df[df.tasks==tasks[k]]
+    for i in range(2):
+        for j in range(2):
+            df__ = df_[(df_.performance==1) & (df_.sample_odor==i) & (df_.test_odor==j)]
+            plot_overlaps(df__, 'last', epoch, ax[k], y0=0., if_proba=0, label=labels[2*i+j], cis=None, ls=ls[2*i+j], colors=[colors[k]], alpha=(i+1)/2)
+
+    ax[k].set_xlabel('Time (s)')
+    ax[k].set_ylabel('GnG Overlap')
+    ax[k].set_xlim([0, 12])
+
+ax[-1].legend(fontsize=10)
+
+plt.savefig('figures/icrm/sample_overlaps_corr_incorr_%s.svg' % epoch, dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/dist_overlaps/figure_30.png]]
 
  #+begin_src ipython
 
