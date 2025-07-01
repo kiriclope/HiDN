@@ -12,6 +12,7 @@ import numpy as np
 def set_options(**kwargs):
     opts = dict()
 
+    opts['cv_B'] = 0
     opts["NEW_DATA"] = 0
     opts["path"] = "/storage/leon/dual_task/"
     opts["fname"] =''
@@ -155,6 +156,7 @@ def set_options(**kwargs):
     opts["n_out"] = 5
     opts["outer_score"] = "f1_weighted"
     opts["scoring"] = 'roc_auc'
+    opts["hp_scoring"] = 'f1_weighted'
     # accuracy, roc_auc, f1_macro, f1_weighted
 
     # inner cv for hyperparam tuning
@@ -207,7 +209,7 @@ def set_options(**kwargs):
         opts["n_discard"] = 0
 
     if len(opts["days"])==2:
-        opts["n_first"] = 3  # 3 or 2
+        opts["n_first"] = 2  # 3 or 2
         opts["n_middle"] = 0  # 0 or 2
     else:
         opts["n_first"] = 2  # 3 or 2

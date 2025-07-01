@@ -163,6 +163,11 @@ def get_X_y_day_new(idx_day, data, data_type="raw"):
     except:
         pass
 
+    y_days.loc[(y_days.sample_odor == 0) & (y_days.test_odor == 0), "odor_pair"] = 0
+    y_days.loc[(y_days.sample_odor == 0) & (y_days.test_odor == 1), "odor_pair"] = 1
+    y_days.loc[(y_days.sample_odor == 1) & (y_days.test_odor == 1), "odor_pair"] = 2
+    y_days.loc[(y_days.sample_odor == 1) & (y_days.test_odor == 0), "odor_pair"] = 3
+
     y_days['day'] = idx_day
 
     return X_days, y_days
@@ -575,8 +580,10 @@ def get_X_y_S1_S2(X, y, **kwargs):
             idx_trials = y.odr_perf == 1
         elif kwargs["trials"] == "incorrect":
             idx_tasks = True
-            idx_S1 = y.odr_perf == 0
-            idx_S2 = y.tasks == "DPA"
+            # idx_laser = True
+            idx_S1 = y.odr_perf == 0 #& (y.laser==0)
+            idx_S2 = (y.tasks == "DPA") # & (y.laser==0)
+            # idx_S3 = y.laser == 1
 
         if kwargs["multilabel"]:
             idx_S3 = y.dist_odor == 2

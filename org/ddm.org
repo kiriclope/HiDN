@@ -1,0 +1,191 @@
+#+STARTUP: fold
+#+TITLE: Training Low Rank RNNs
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session dual :kernel dual_data :exports results :output-dir ./figures/ddm :file (lc/org-babel-tangle-figure-filename)
+
+* DDM
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+
+def simulate_diffusion(num_steps, angle_step_size, radius_step_size, min_radius, max_radius):
+    # Convert starting x, y coordinates to polar coordinates
+    theta = np.pi / 2  # Corresponds to (x, y) = (0, 1) on the unit circle
+    radius = 1.0  # Starting on the unit circle
+
+    # Record the positions over time
+    positions = [(theta, radius)]
+
+    for _ in range(num_steps):
+        # Randomly perturb the angle
+        theta += np.random.uniform(-angle_step_size, angle_step_size)
+        # Ensure the angle stays within [0, 2*pi]
+        theta = theta % (2 * np.pi)
+
+        # Randomly perturb the radius
+        radius += np.random.uniform(-radius_step_size, radius_step_size)
+        # Ensure the radius stays within [min_radius, max_radius]
+        radius = np.clip(radius, min_radius, max_radius)
+
+        positions.append((theta, radius))
+
+    return positions
+
+def plot_diffusion(positions, min_radius, max_radius):
+    # Convert positions to x, y coordinates
+    x = [r * np.cos(theta) for theta, r in positions]
+    y = [r * np.sin(theta) for theta, r in positions]
+
+    plt.figure(figsize=(6, 6))
+    plt.plot(x, y, marker='o', markersize=2, linestyle='-')
+    plt.xlim(-max_radius-0.1, max_radius+0.1)
+    plt.ylim(-max_radius-0.1, max_radius+0.1)
+    plt.axhline(0, color='gray', linewidth=0.5)
+    plt.axvline(0, color='gray', linewidth=0.5)
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title('Diffusion Between Two Radii')
+    plt.gca().set_aspect('equal')
+    plt.gca().add_patch(plt.Circle((0, 0), max_radius, color='b', fill=False, linestyle='--'))
+    plt.gca().add_patch(plt.Circle((0, 0), min_radius, color='r', fill=False, linestyle='--'))
+    plt.show()
+
+# Parameters
+num_steps = 1000
+angle_step_size = 0.1
+radius_step_size = 0.01
+min_radius = 0.8
+max_radius = 1.2
+
+positions = simulate_diffusion(num_steps, angle_step_size, radius_step_size, min_radius, max_radius)
+plot_diffusion(positions, min_radius, max_radius)
+#+end_src
+
+#+RESULTS:
+[[./figures/ddm/figure_0.png]]
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Simulation parameters
+v = 0.0         # drift strength
+D = 0.1         # diffusion constant
+T = 10.0        # total time
+dt = 0.001      # time step
+N = int(T / dt) # number of time steps
+K = 100
+
+# Define rotation input parameters
+rotation_start_time = [2, 5.0]   # input starts at t = 3.0 s
+rotation_end_time = [3, 6]   # input ends at t = 3.5 s
+rotation_angle = [np.pi/4, -np.pi/4]    # total phase rotation (45° in radians)
+# Determine the number of steps during which the input is applied
+# input_steps = int((rotation_end_time - rotation_start_time) / dt)
+
+# The constant extra angular velocity to achieve the rotation in the specified time:
+input_angular_velocity = []
+for k in range(2):
+    input_angular_velocity.append(rotation_angle[k] / (rotation_end_time[k] - rotation_start_time[k]))
+
+t_array = np.linspace(0, T, N)
+theta = np.zeros((N, K))
+theta[0] = 0  # starting angle
+
+# Simulation using Euler-Maruyama method with an additional input
+for j in range(K):
+    for i in range(1, N):
+        t = i * dt
+
+        # Standard Euler-Maruyama step with drift (v*cos(theta)) and noise
+        dW = np.sqrt(dt) * np.random.randn()
+        dtheta = v * np.cos(theta[i-1, j]) * dt + np.sqrt(2*D) * dW
+
+        # Add extra rotation input during the specified time window
+        for k in range(2):
+            if rotation_start_time[k] <= t <= rotation_end_time[k]:
+                dtheta += input_angular_velocity[k] * dt
+
+            theta[i, j] = theta[i-1, j] + dtheta
+
+        # wrap theta into [0, 2π)
+        theta[i, j] = theta[i, j] % (2*np.pi)
+
+# Unwrap for plotting a continuous trajectory
+theta_unwrapped = np.unwrap(theta, axis=0)
+
+plt.plot(t_array, theta_unwrapped[:, ::10], lw=1)
+plt.xlabel("Time (s)")
+plt.ylabel("θ (radians)")
+plt.axhline(np.pi/2, ls='--', color='k')
+plt.axhline(-np.pi/2, ls='--', color='k')
+plt.ylim([-np.pi, np.pi])
+
+# plt.grid(True)
+plt.show()
+#+end_src
+
+#+RESULTS:
+: 077cc970-9010-4294-852f-f326ede0ec57
+
+#+begin_src ipython
+result = theta_unwrapped[-1]
+plt.hist(result)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/ddm/figure_2.png]]
+
+#+begin_src ipython
+perf = np.array((result<0) & (result>-np.pi)).mean()
+print(perf*100)
+#+end_src
+
+#+RESULTS:
+: 42.0
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+x_vals = np.cos(theta[:, 2])
+y_vals = np.sin(theta[:, 2])
+
+fig, ax = plt.subplots()
+ax.set_aspect('equal')
+ax.set_xlim(-1.2, 1.2)
+ax.set_ylim(-1.2, 1.2)
+ax.set_title("Particle Diffusing on a Ring")
+circle = plt.Circle((0,0), 1, color='black', fill=False, linestyle='--')
+ax.add_artist(circle)
+point, = ax.plot([], [], 'ro', ms=8)
+
+def init():
+    point.set_data([], [])
+    return point,
+
+def animate(i):
+    point.set_data(x_vals[i], y_vals[i])
+    return point,
+
+ani = animation.FuncAnimation(fig, animate, frames=N,
+                              init_func=init, blit=True, interval=20)
+
+# Save animation as a GIF file
+ani.save("ring_diffusion.gif", writer="pillow", fps=30)
+
+plt.close(fig)
+#+end_src
+
+#+RESULTS:
+: /home/leon/tmp/ipykernel_3961597/1653480228.py:22: MatplotlibDeprecationWarning: Setting data with a non sequence type is deprecated since 3.7 and will be remove two minor releases later
+:   point.set_data(x_vals[i], y_vals[i])
+
+   #+begin_src ipython
+
+   #+end_src
+
+#+RESULTS:
+: edaac7a5-36f7-4bb4-85e5-ef46ac5a9909

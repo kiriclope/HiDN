@@ -1,0 +1,694 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session overlaps :kernel dual_data :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
+
+* Imports
+
+#+begin_src ipython
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+  import traceback
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import pandas as pd
+  import seaborn as sns
+
+  from time import perf_counter
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+  from src.decode.bump import circcvl
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.classify import get_classification
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+
+#+begin_src ipython
+def pad_with_nans(array, target_shape):
+    result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
+    print(result.shape)
+    slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
+    result[slices] = array[slices]
+    return result
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
+
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return 0.5  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
+
+  def safe_f1_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return 0.5  # return np.nan where the score cannot be calculated
+      return f1_score(y_true, y_score, average='weighted')
+      #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def rescale_coefs(model, coefs, bias):
+
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
+
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  from scipy.stats import bootstrap
+
+  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
+      result = bootstrap((data,), statistic)
+      ci_lower, ci_upper = result.confidence_interval
+      return np.array([ci_lower, ci_upper])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
+
+
+  def pkl_load(name, path="."):
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
+    try:
+        coef = estimator.named_steps["model"].coef_.flatten()
+        clf = estimator #.named_steps["model"]
+    except:
+        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
+        clf = estimator.best_estimator_.named_steps["model"]
+
+    norm_w = np.linalg.norm(coef) + 1e-6
+
+    # try:
+    #     X_test = clf.named_steps["scaler"].transform(X_test)
+    # except:
+    #     pass
+
+    # try:
+    #     X_test = clf.named_steps["pca"].transform(X_test)
+    # except:
+    #     pass
+
+    if IF_SIGN:
+        dot_product = (2*y_test -1) * np.dot(X_test, coef) / norm_w # / X_test.shape[1] * 1000
+        # dot_product = (2*y_test -1) * clf.named_steps["model"].decision_function(X_test)
+        # dot_product = (2*y_test -1) * clf.decision_function(X_test) / norm_w
+    else:
+        # dot_product = clf.decision_function(X_test) / norm_w
+        # dot_product = clf.named_steps["model"].decision_function(X_test)
+        dot_product = np.dot(X_test, coef) / norm_w # / X_test.shape[1] * 1000
+
+    return np.nanmean(dot_product)
+#+end_src
+
+#+RESULTS:
+
+* Plots
+
+#+begin_src ipython
+def significance_marker(p):
+    if p < 0.001:
+        return '***'
+    elif p < 0.01:
+        return '**'
+    elif p < 0.05:
+        return '*'
+    elif p <.1:
+        return '.'
+    else:
+        return ''
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+#+begin_example
+During startup - Warning messages:
+1: package ‘methods’ was built under R version 4.4.2
+2: package ‘datasets’ was built under R version 4.4.2
+3: package ‘utils’ was built under R version 4.4.2
+4: package ‘grDevices’ was built under R version 4.4.2
+5: package ‘graphics’ was built under R version 4.4.2
+6: package ‘stats’ was built under R version 4.4.2
+R[write to console]: In addition:
+R[write to console]: Warning message:
+R[write to console]: package ‘tools’ was built under R version 4.4.2
+#+end_example
+
+#+begin_src ipython
+def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
+    if day=='all':
+        df_ = df.copy()
+    else:
+        df_ = df[df.day == day].copy()
+
+    if colors is None:
+        colors = ['r', 'b', 'g']
+
+    if if_proba:
+        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    else:
+        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    time_points = np.linspace(0, 14, size)
+
+    for i, task in enumerate(mean_overlaps.index):
+        if label is None:
+            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls, **kwargs)
+            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        else:
+            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls, **kwargs)
+
+        if cis is not None:
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    # ax.set_ylabel('%s Overlap' % title)
+    add_vlines(ax)
+    ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_overlaps_traj(df, df2, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
+    if day=='all':
+        df_ = df.copy()
+        df2_ = df2.copy()
+    else:
+        df_ = df[df.day == day].copy()
+        df2_ = df[df.day == day].copy()
+
+    if colors is None:
+        colors = ['r', 'b', 'g']
+
+    if if_proba:
+        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+        mean_overlaps2 = df2_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    else:
+        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+        mean_overlaps2 = df2_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    time_points = np.linspace(0, 14, size)
+
+    for i, task in enumerate(mean_overlaps.index):
+        if label is None:
+            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls, **kwargs)
+            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        else:
+            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls, **kwargs)
+
+        if cis is not None:
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    # ax.set_ylabel('%s Overlap' % title)
+    add_vlines(ax)
+    ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def bootstrap_ci(data, n_bootstrap=1000, ci=95):
+    bootstrapped_means = np.array([np.mean(np.random.choice(data, size=len(data))) for _ in range(n_bootstrap)])
+    lower_bound = np.percentile(bootstrapped_means, (100-ci)/2)
+    upper_bound = np.percentile(bootstrapped_means, 100 - (100-ci)/2)
+    return lower_bound, upper_bound
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_mat(X, ax, vmin=-1, vmax=1, palette='bwr'):
+  im = ax.imshow(
+    X,
+    interpolation=None,
+    origin="lower",
+    cmap=palette,
+    extent=[0, 14, 0, 14],
+    vmin=vmin,
+    vmax=vmax,
+  )
+
+  add_vdashed(ax)
+  ax.set_xlim([2, 12])
+  ax.set_xticks([2, 4, 6, 8, 10, 12])
+  ax.set_ylim([2, 12])
+  ax.set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax.set_xlabel("Testing Time (s)")
+  ax.set_ylabel("Training Time (s)")
+  return im
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+
+def add_vdashed(ax=None, mouse=""):
+    # Define time intervals
+    t_STIM = [2, 3]
+    t_DIST = [4.5, 5.5]
+    t_CUE = [6.5, 7]
+    t_TEST = [9, 10]
+
+    # Add vertical dashed lines and text labels for each interval
+    if ax is not None:
+        # Draw vertical lines
+        for t in [t_STIM, t_DIST, t_TEST]:
+            ax.axvline(x=t[0], linestyle='--', color='k', lw=2)
+            ax.axvline(x=t[1], linestyle='--', color='k', lw=2)
+
+            ax.axhline(y=t[0], linestyle='--', color='k', lw=2)
+            ax.axhline(y=t[1], linestyle='--', color='k', lw=2)
+
+        # Add text labels at the middle of each interval
+        ax.text((t_STIM[0] + t_STIM[1]) / 2, 12.5, 'STIM', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+        ax.text((t_DIST[0] + t_DIST[1]) / 2, 12.5, 'DIST', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+        # ax.text((t_CUE[0] + t_CUE[1]) / 2, 12.5, 'CUE', color='black',
+        #         horizontalalignment='center', verticalalignment='center', fontsize=16)
+        ax.text((t_TEST[0] + t_TEST[1]) / 2, 12.5, 'TEST', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+
+        ax.text(12.5, (t_STIM[0] + t_STIM[1]) / 2, 'STIM', color='black',
+                horizontalalignment='center', verticalalignment='center', rotation='vertical',fontsize=16)
+        ax.text(12.5, (t_DIST[0] + t_DIST[1]) / 2, 'DIST', color='black',
+                horizontalalignment='center', verticalalignment='center', rotation='vertical',fontsize=16)
+        # ax.text(12.5, (t_CUE[0] + t_CUE[1]) / 2, 'CUE', color='black',
+        #         horizontalalignment='center', verticalalignment='center', rotation='vertical', fontsize=16)
+        ax.text(12.5, (t_TEST[0] + t_TEST[1]) / 2, 'TEST', color='black',
+                horizontalalignment='center', verticalalignment='center', rotation='vertical', fontsize=16)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
+    df_ = df[df.day == day].copy()
+    colors = ['r', 'b', 'g']
+    time_points = np.linspace(0, 14, 84)
+
+    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+    # fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+    for i, task in enumerate(df_.tasks.unique()):
+        df_task = df_[df_.tasks==task]
+        overlaps = df_task
+        overlaps = np.array(df_task['overlaps'].tolist())
+
+        mean_o = np.nanmean(overlaps, axis=0)
+
+        im = plot_mat(mean_o.reshape(84, 84), ax[i], vmin, vmax)
+
+    cax = inset_axes(ax[-1], width="5%", height="100%", loc='center right',
+                     bbox_to_anchor=(0.12, 0, 1, 1), bbox_transform=ax[-1].transAxes, borderpad=0)
+
+    # Add colorbar to the new axis
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.set_label("%s Overlaps" % title)
+
+    plt.subplots_adjust(right=0.85)  # Adjust figure to allocate space
+
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src ipython
+  DEVICE = 'cuda:0'
+  old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+  # mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+
+  # mice = ['JawsM15']
+
+  tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+  kwargs = {
+      'mice': mice,
+      'mouse': mice[0], 'laser': 0,
+      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
+      'preprocess': False, 'scaler_BL': 'robust',
+      'avg_noise':True, 'unit_var_BL': True,
+      'random_state': None, 'T_WINDOW': 0.0,
+      'l1_ratio': 0.95,
+      'n_comp': 16,
+      'scaler': 'standard',
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 5, 'n_repeats': 10,
+      'class_weight': 0,
+      'multilabel': 0,
+      'mne_estimator':'generalizing', # sliding or generalizing
+      'n_jobs': 64,
+  }
+
+  # kwargs['days'] = ['first', 'middle', 'last']
+  kwargs['days'] = ['first', 'last']
+  # kwargs['days'] = 'all'
+  options = set_options(**kwargs)
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  safe_f1 = make_scorer(safe_f1_score, needs_proba=True)
+
+  dum = 'overlaps_loocv_correct_l1'
+  # dum = 'overlaps_loocv_laser_only'
+  # dum = 'overlaps_loocv_laser_all_l2'
+  options['cv_B'] = False
+  # dum = 'overlaps_all_loocv'
+#+end_src
+
+#+RESULTS:
+
+* Decoding vs days
+** utils
+
+#+begin_src ipython
+def decode_axis(model, **options):
+    new_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
+    options['NEW_DATA'] = 0
+
+    dfs = []
+    for mouse in options['mice']:
+        df_mouse = []
+        options['mouse'] = mouse
+        options = set_options(**options)
+        days = options['days']
+
+        if mouse in new_mice:
+            options['reload'] = 0
+            options['NEW_DATA'] = 1
+        else:
+            options['reload'] = 0
+            options['NEW_DATA'] = 0
+
+        for task in ['all']:
+            options['task'] = task
+
+            for day in ['first']:
+                options['day'] = day
+
+                #try:
+                if 0==0:
+                    components, exp_var = get_classification(model, RETURN='pca', **options)
+                    options['reload'] = 0
+                    print(components.shape, exp_var.shape)
+                    df_mouse.append(pd.DataFrame(exp_var, columns=['explained_variance']).reset_index())
+                # except Exception as e:
+                # print("An error occurred:", e)
+                # pass
+
+        df_mouse = pd.concat(df_mouse)
+        df_mouse['mouse'] = mouse
+        dfs.append(df_mouse)
+
+    return pd.concat(dfs)
+    #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def save_overlaps(df, marg, dum, **options):
+    if len(options['days'])>3:
+        name = 'df_%s_%s_days' % (marg, dum)
+    elif len(options['days'])==2:
+        name = 'df_%s_%s_early_late' % (marg, dum)
+    else:
+        name = 'df_%s_%s' % (marg, dum)
+
+    if len(mice)==1:
+        pkl_save(df, '%s' % name, path="/storage/leon/dual_task/data/%s/overlaps" % options['mouse'])
+    elif len(mice)==2:
+        pkl_save(df, '%s' % name, path="/storage/leon/dual_task/data/mice/overlaps_ACC")
+    else:
+        pkl_save(df, '%s' % name, path="/storage/leon/dual_task/data/mice/overlaps")
+#+end_src
+
+#+RESULTS:
+
+** run
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/Dclassify')
+from src.classificationCV import ClassificationCV
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['n_jobs'] = -1
+options['reload'] = 0
+
+options['T_WINDOW'] = 0.0
+
+options['cv'] = LeaveOneOut()
+options['verbose'] = 1
+net = None
+params = {}
+model = ClassificationCV(net, params, **options)
+print(model.pipe)
+#+end_src
+
+#+RESULTS:
+: PCA False 16
+: PCA 16
+: Pipeline(steps=[('scaler', StandardScaler()), ('pca', PCA(n_components=16)),
+:                 ('model', None)])
+
+#+begin_src ipython
+options['features'] = 'sample'
+options['epochs'] = ['DELAY']
+df = decode_axis(model, **options)
+ #+end_src
+
+#+RESULTS:
+#+begin_example
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 13)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (125, 14) ['DualNoGo' 'DualGo' 'DPA']
+X (125, 184, 84) nans 0.0 y (125,) [0. 1.]
+(16, 184) (16,)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 13)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (115, 14) ['DualNoGo' 'DualGo' 'DPA']
+X (115, 201, 84) nans 0.0 y (115,) [0. 1.]
+(16, 201) (16,)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 13)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (121, 14) ['DPA' 'DualGo' 'DualNoGo']
+X (121, 423, 84) nans 0.0 y (121,) [0. 1.]
+(16, 423) (16,)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (122, 16) ['DualGo' 'DualNoGo' 'DPA']
+X (122, 693, 84) nans 0.0 y (122,) [0. 1.]
+(16, 693) (16,)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (147, 16) ['DualNoGo' 'DualGo' 'DPA']
+X (147, 444, 84) nans 0.0 y (147,) [0. 1.]
+(16, 444) (16,)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (149, 16) ['DualNoGo' 'DPA' 'DualGo']
+X (149, 668, 84) nans 0.0 y (149,) [0. 1.]
+(16, 668) (16,)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 13)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (130, 14) ['DualGo' 'DPA' 'DualNoGo']
+X (130, 232, 84) nans 0.0 y (130,) [0. 1.]
+(16, 232) (16,)
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 15)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (220, 16) ['DPA' 'DualGo' 'DualNoGo']
+X (220, 361, 84) nans 0.0 y (220,) [0. 1.]
+(16, 361) (16,)
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 15)
+DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+y_labels (209, 16) ['DualNoGo' 'DPA' 'DualGo']
+X (209, 113, 84) nans 0.0 y (209,) [0. 1.]
+(16, 113) (16,)
+#+end_example
+
+#+begin_src ipython
+print(df[df.mouse=='JawsM15'])
+#+end_src
+
+#+RESULTS:
+#+begin_example
+    index  explained_variance    mouse
+0       0           98.541893  JawsM15
+1       1           31.642260  JawsM15
+2       2           24.575338  JawsM15
+3       3           22.603245  JawsM15
+4       4           18.848274  JawsM15
+5       5           15.765272  JawsM15
+6       6           15.368903  JawsM15
+7       7           14.510834  JawsM15
+8       8           12.181429  JawsM15
+9       9           11.502284  JawsM15
+10     10           10.926422  JawsM15
+11     11           10.445864  JawsM15
+12     12           10.418303  JawsM15
+13     13            9.947380  JawsM15
+14     14            9.644477  JawsM15
+15     15            9.264197  JawsM15
+#+end_example
+
+#+begin_src ipython
+sns.lineplot(data=df, x='index', y='explained_variance')
+plt.xlabel('PC #')
+plt.ylabel('Explained Variance')
+plt.savefig('figures/pca/explained_variance.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_24.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:

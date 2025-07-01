@@ -53,18 +53,28 @@ def get_classification(model, RETURN='overlaps', **options):
     y_labels = None
     cv_B = options['cv_B']
 
-    if (options['features'] == 'sample') and not ('ACC' in options['mouse']):
+    if (options['features'] == 'sample'):# and not ('ACC' in options['mouse']):
         # cv_B = False
         if cv_B:
-            options['laser'] = 1
+            options['trials'] = 'incorrect'
 
             X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
             y_B_labels = y_B.copy()
             y_B = y_to_arr(y_B, **options)
-            print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+            print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
 
-            # train and test on laser OFF trials in X_A, y_A
-            options['laser'] = 0
+            # train and test on correct trials in X_A, y_A
+            options['trials'] = 'correct'
+
+            # options['laser'] = 1
+
+            # X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+            # y_B_labels = y_B.copy()
+            # y_B = y_to_arr(y_B, **options)
+            # print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+
+            # # train and test on laser OFF trials in X_A, y_A
+            # options['laser'] = 0
 
     if (options['features']=='pair'):
         # test on incorret trials
@@ -78,22 +88,32 @@ def get_classification(model, RETURN='overlaps', **options):
         # train and test on correct trials in X_A, y_A
         options['trials'] = 'correct'
 
-    if (options['features']=='choice') and not ('ACC' in options['mouse']):
+    if (options['features']=='choice'): # and not ('ACC' in options['mouse']):
         # cv_B = False
         if cv_B:
-            # test on laser ON trials
-            options['laser'] = 1
+            options['trials'] = 'incorrect'
 
             X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
             y_B_labels = y_B.copy()
             y_B = y_to_arr(y_B, **options)
-            print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+            print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
 
-            # train and test on laser OFF trials in X_A, y_A
-            options['laser'] = 0
+            # train and test on correct trials in X_A, y_A
+            options['trials'] = 'correct'
 
-    if (options['features']=='choice') and ('ACC' in options['mouse']):
-        cv_B = False
+            # # test on laser ON trials
+            # options['laser'] = 1
+
+            # X_B, y_B = get_X_y_S1_S2(X_days, y_days, **options)
+            # y_B_labels = y_B.copy()
+            # y_B = y_to_arr(y_B, **options)
+            # print('X_B', X_B.shape, 'nans', np.isnan(X_B).mean(), 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique())
+
+            # # train and test on laser OFF trials in X_A, y_A
+            # options['laser'] = 0
+
+    # if (options['features']=='choice') and ('ACC' in options['mouse']):
+    #     cv_B = False
 
     if (options['features'] == 'distractor') or (options['features'] == 'odr_choice'):
         # test on odr incorrect trials, DPA, and laser ON trials see src/common/get_data.py
@@ -107,7 +127,7 @@ def get_classification(model, RETURN='overlaps', **options):
         print('X_B', X_B.shape, 'y_B', y_B.shape, np.unique(y_B), y_B_labels.tasks.unique(), y_B_labels.odr_perf.unique())
 
         # train on odr correct trials
-        options['laser'] = 0
+        # options['laser'] = 0
         options['features'] = feat
         options['task'] = 'Dual'
         options['trials'] = 'correct'
@@ -137,6 +157,11 @@ def get_classification(model, RETURN='overlaps', **options):
         pass
     elif 'bolasso' in RETURN:
         coefs = model.get_bolasso_coefs(X_avg, y_avg, n_boots=options['n_boots'], penalty=options['bolasso_penalty'], pval=options['pval'], confidence=options['bolasso_pval'])
+    elif 'pca' in RETURN:
+        # X_delay = X[..., options['bins_DELAY']]
+        # X_reshaped = X.reshape(X_delay.shape[0], -1)  # shape (n_sample, n_features * n_time)
+        model.fit_pca(X_avg)
+        return model.components_, model.explained_variance_
     else:
         model.fit(X_avg, y_avg)
 

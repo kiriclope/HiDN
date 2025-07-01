@@ -11,17 +11,13 @@ STARTUP: fold
 %run /home/leon/dual_task/dual_data/notebooks/setup.py
 %matplotlib inline
 %config InlineBackend.figure_format = 'png'
-
 #+end_src
 
 #+RESULTS:
-:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
-: <Figure size 600x370.82 with 0 Axes>
-:END:
 
 * Imports
 
@@ -85,71 +81,12 @@ def licks_raster(trial_licks, stimulus_onsets=None, ax=None, color='k'):
     if ax is None:
         fig, ax = plt.subplots()
 
-     # for trial_idx, licks_in_trial in enumerate(trial_licks):
-        # ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 2.5, color=color)  # vertical lines per lick
-
-    ax.eventplot(trial_licks, colors=color, lineoffsets=1, linelengths=0.1, orientation='horizontal')
-    add_vlines2(ax=ax)
-    ax.set_xlabel('Time from sample onset (s)')
-    ax.set_ylabel('Trial')
-    ax.set_ylim(0.5, len(trial_licks) + 0.5)
-    ax.set_xlim(0, 14)
-    #+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import matplotlib.pyplot as plt
-from matplotlib.collections import LineCollection
-
-def licks_raster(trial_licks, stimulus_onsets=None, ax=None, color='k', tick_height=1):
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    lines = []
-    # Vectorized: build all segments first
     for trial_idx, licks_in_trial in enumerate(trial_licks):
-        y = trial_idx + 1
-        for lick_time in licks_in_trial:
-            lines.append([(lick_time, y - tick_height / 2), (lick_time, y + tick_height / 2)])
-
-    # Draw all lines in one call
-    lc = LineCollection(lines, colors=color, linewidths=2)
-    ax.add_collection(lc)
+        ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 2.5, color=color)  # vertical lines per lick
 
     add_vlines2(ax=ax)
-    ax.set_xlabel('Time from sample onset (s)')
+    ax.set_xlabel('Time from stimulus onset (s)')
     ax.set_ylabel('Trial')
-    ax.set_ylim(0.5, len(trial_licks) + 0.5)
-    ax.set_xlim(0, 14)
-
-# Example usage:
-# trial_licks = [np.array([2.5, 5.1]), np.array([1.0, 3.0, 7.0]), ...]
-# licks_raster(trial_licks)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import matplotlib.pyplot as plt
-
-def licks_raster_all(trial_type, trial_licks, stimulus_onsets=None, ax=None, color='k'):
-
-    # trial_licks: list of arrays, as before
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    for trial_idx, licks_in_trial in enumerate(trial_licks):
-        if trial_type.iloc[trial_idx]=='DPA':
-            ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 0.5, color='r')
-        if trial_type.iloc[trial_idx]=='DualGo':
-            ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 0.5, color='b')
-        if trial_type.iloc[trial_idx]=='DualNoGo':
-            ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 0.5, color='g')
-
-    add_vlines2(ax=ax)
-    ax.set_xlabel('Time from sample onset (s)')
-    ax.set_ylabel('Trial #')
     ax.set_ylim(0.5, len(trial_licks) + 0.5)
     ax.set_xlim(0, 14)
     #+end_src
@@ -202,8 +139,8 @@ def licks_hist(trial_licks, stimulus_onsets=None, bin_size=0.25, t_min=0, t_max=
     # Plot
     ax.bar(bin_centers, lick_rate, width=bin_size, align='center', color=color)
     add_vlines2(ax=ax)
-    ax.set_xlabel('Time from sample onset (s)')
-    ax.set_ylabel('# Licks')
+    ax.set_xlabel('Time from stimulus onset (s)')
+    ax.set_ylabel('Lick rate (Hz)')
 #+end_src
 
 #+RESULTS:
@@ -214,8 +151,8 @@ def licks_hist(trial_licks, stimulus_onsets=None, bin_size=0.25, t_min=0, t_max=
 from src.common.options import set_options
 path = '/storage/leon/dual_task/data/2Samples-DualTask-BehavioralData'
 
-window_start = 6.5  # seconds after stimulus
-window_end   = 7.5   # seconds after stimulus
+window_start = 0.0  # seconds after stimulus
+window_end   = 8.0   # seconds after stimulus
 window_length = window_end - window_start
 
 mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
@@ -269,8 +206,6 @@ for mouse in mice:
 
             df['licks'] = trial_licks
             df['performance'] = df['outcome'].apply(lambda x: 0 if ((x==2) or (x==3)) else 1)
-            df['odr_perf'] = df['outcome'].apply(lambda x: 0 if ((x==2) or (x==3)) else 1)
-
             df['paired'] = df['outcome'].apply(lambda x: 0 if ((x==4) or (x==3)) else 1)
             df['tasks'] = df['distractor'].apply(
                 lambda x: 'DPA' if x == 0 else ('DualGo' if x == 1 else 'DualNoGo')
@@ -383,8 +318,8 @@ Model:                            GLM   Df Residuals:                     3646
 Model Family:                Binomial   Df Model:                            1
 Link Function:                  Logit   Scale:                          1.0000
 Method:                          IRLS   Log-Likelihood:                -1954.7
-Date:                Mon, 30 Jun 2025   Deviance:                       3909.5
-Time:                        11:59:15   Pearson chi2:                 3.65e+03
+Date:                Fri, 27 Jun 2025   Deviance:                       3909.5
+Time:                        13:07:26   Pearson chi2:                 3.65e+03
 No. Iterations:                     4   Pseudo R-squ. (CS):           0.006168
 Covariance Type:            nonrobust
 ==============================================================================
@@ -407,28 +342,14 @@ from pymer4.models import Lmer
 #+end_src
 
 #+RESULTS:
-#+begin_example
-During startup - Warning messages:
-1: package ‘methods’ was built under R version 4.4.2
-2: package ‘datasets’ was built under R version 4.4.2
-3: package ‘utils’ was built under R version 4.4.2
-4: package ‘grDevices’ was built under R version 4.4.2
-5: package ‘graphics’ was built under R version 4.4.2
-6: package ‘stats’ was built under R version 4.4.2
-R[write to console]: In addition:
-R[write to console]: Warning message:
-R[write to console]: package ‘tools’ was built under R version 4.4.2
-#+end_example
-
 
 #+begin_src ipython
 df_ = df_mouse.reset_index(drop=True).drop(columns='licks')
-
-# df_ = df_[df_.tasks!='DualGo']
-# df_ = df_[df_.laser==0]
+df_ = df_[df_.tasks!='DualGo']
+df_ = df_[df_.laser==0]
 df_ = df_[(df_.outcome==3) | (df_.outcome==4)]
 
-formula = 'performance ~ laser + licks_LD * day + (1 + day | mouse)'
+formula = 'performance ~ licks_LD * day + (1 | mouse)'
 
 model = Lmer(formula=formula, data=df_, family='binomial')
 results = model.fit()
@@ -440,197 +361,86 @@ print(results)
 #+RESULTS:
 #+begin_example
 Linear mixed model fit by maximum likelihood  ['lmerMod']
-Formula: performance~laser+licks_LD*day+(1+day|mouse)
+Formula: performance~licks_LD*day+(1|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 4512	 Groups: {'mouse': 9.0}
+Number of observations: 1824	 Groups: {'mouse': 9.0}
 
-Log-likelihood: -2252.791 	 AIC: 4521.583
+Log-likelihood: -882.096 	 AIC: 1774.192
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.521  0.722
-mouse          day  0.098  0.313
+mouse  (Intercept)  0.268  0.518
 
-               IV1  IV2   Corr
-mouse  (Intercept)  day -0.702
+No random effect correlations specified
 
 Fixed effects:
 
               Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  OR_97.5_ci  \
-(Intercept)     -0.894  -1.407   -0.382  0.262  0.409      0.245       0.683
-laser            0.104  -0.062    0.270  0.085  1.110      0.940       1.310
-licks_LD        -0.939  -1.200   -0.677  0.133  0.391      0.301       0.508
-day              0.628   0.413    0.843  0.110  1.874      1.511       2.323
-licks_LD:day     0.141   0.062    0.220  0.040  1.151      1.063       1.246
+(Intercept)     -0.383  -0.860    0.094  0.243  0.682      0.423       1.098
+licks_LD        -0.504  -0.694   -0.314  0.097  0.604      0.500       0.730
+day              0.563   0.457    0.668  0.054  1.755      1.580       1.951
+licks_LD:day     0.022  -0.037    0.082  0.030  1.022      0.963       1.085
 
                Prob  Prob_2.5_ci  Prob_97.5_ci  Z-stat  P-val  Sig
-(Intercept)   0.290        0.197         0.406  -3.419  0.001  ***
-laser         0.526        0.485         0.567   1.231  0.218
-licks_LD      0.281        0.231         0.337  -7.034  0.000  ***
-day           0.652        0.602         0.699   5.726  0.000  ***
-licks_LD:day  0.535        0.515         0.555   3.482  0.000  ***
+(Intercept)   0.405        0.297         0.523  -1.575  0.115
+licks_LD      0.377        0.333         0.422  -5.202  0.000  ***
+day           0.637        0.612         0.661  10.456  0.000  ***
+licks_LD:day  0.506        0.491         0.520   0.731  0.465
 #+end_example
 
 #+begin_src ipython
-def generate_colors(N, cmap_name='viridis'):
-    cmap = plt.get_cmap(cmap_name)
-    return cmap(np.linspace(0, 1, N))
+mouse = 'ChRM04'
 #+end_src
 
 #+RESULTS:
-
-#+begin_src ipython
-import matplotlib.pyplot as plt
-import numpy as np
-
-def plot_betas(results, random_effects, title, width=width, height=height):
-    keys = list(results.Estimate.keys())
-    n_factors = len(keys)
-    n_subjects = random_effects.shape[0]
-
-    # For per-subject colors
-    cmap = plt.get_cmap('tab20')
-    subject_colors = [cmap(i % 20) for i in range(n_subjects)]
-
-    # Prepare data: each factor gets a vector of all subject-level betas
-    data = []
-    for key in keys:
-        res = results.Estimate[key].copy()
-        random_col = key if key in random_effects else '(Intercept)'
-        res += random_effects[random_col]
-        data.append(res)
-
-    fig, ax = plt.subplots(figsize=(width, height))
-    # Draw boxplots
-    box = ax.boxplot(data, positions=np.arange(n_factors), patch_artist=True, showfliers=False, medianprops=dict(color='k', lw=2))
-
-    cmap = plt.get_cmap('plasma')
-    box_colors = [cmap(i / max(1, n_factors-1)) for i in range(n_factors)]
-
-    for patch, color in zip(box['boxes'], box_colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.5)          # set box transparency (0=transparent, 1=opaque)
-        patch.set_edgecolor('k')      # optional: black box outline
-        patch.set_linewidth(1.5)
-
-    # Overlay dotted points for each subject
-    for subj in range(n_subjects):
-        betas = [data[i][subj] for i in range(n_factors)]
-        ax.scatter(
-            np.arange(n_factors)+0.05*np.random.randn(n_factors), # jitter x
-            betas,
-            color=subject_colors[subj],
-            edgecolor='k',
-            marker='o',
-            s=40,
-            linewidth=0.5,
-            alpha=0.8,
-            linestyle=':',  # dots, not dashed
-            zorder=3,
-        )
-
-    # Sig stars, as before
-    for i, key in enumerate(keys):
-        pval = results['P-val'][key]
-        stars = '***' if pval < 0.001 else ('**' if pval < 0.01 else ('*' if pval < 0.05 else ('.' if pval < 0.1 else '')))
-        if stars:
-            top = max([d[subj] for d in data for subj in range(n_subjects)])
-            ax.text(i, top*1, stars, fontsize=16, ha='center', va='bottom', color='black', zorder=5)
-
-    ax.axhline(y=0, color='black', ls='--', lw=1)
-    ax.set_xticks(np.arange(n_factors))
-    ax.set_xticklabels(keys, rotation=45, ha='right')
-    ax.set_ylabel('$\\beta$')
-    ax.set_title(title, fontsize=16)
-
-    fig.tight_layout()
-    return fig, ax
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-plot_betas(results, random_effects, '', height=1.25*height)
-plt.xticks(np.arange(5),['Intercept', 'Laser', 'Early Licks', 'Day', 'Early Licks * Day'], rotation=45, fontsize=14)
-plt.savefig('figures/licks/glm_cr_licks_day.svg', dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/0ebb50ef6cafe7f8928fd0c3cbd74ac6c1af28f9.png]]
-
-#+begin_src ipython
-fig, ax = plt.subplots(1, 3, figsize=(3*width, 2* height))
-
-mouse = 'JawsM15'
-df_ = df_mouse[(df_mouse.tasks=='DPA') & (df_mouse.laser!=-1)]
-licks_raster(df_.licks, ax=ax[0], color='r')
-
-df_ = df_mouse[(df_mouse.tasks=='DualGo') & (df_mouse.laser!=-1)]
-licks_raster(df_.licks, ax=ax[1], color='b')
-
-df_ = df_mouse[(df_mouse.tasks=='DualNoGo') & (df_mouse.laser!=-1)]
-licks_raster(df_.licks, ax=ax[2], color='g')
-
-tasks = ['DPA', 'DualGo', 'DualNoGo']
-for i in range(3):
-    ax[i].set_xlim([0, 12])
-    ax[i].set_yticks(np.linspace(0, 192*2, 4))
-    ax[i].set_title(tasks[i])
-
-plt.savefig('figures/licks/licks_raster_condition.svg', dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/a0ee91928d565e8327601381d0b2c6106366dc7f.png]]
-
-#+begin_src ipython
-mouse = 'JawsM15'
-df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.laser==0)]
-licks_raster_all(df_.tasks, df_.licks, ax=None, color='r')
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/b348658fd32bd7bf8150fe48fe0674bda5544630.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(1, 3, figsize=(3*width, height))
-mouse = 'ChRM04'
-df_ = df_mouse[(df_mouse.tasks=='DPA')]
+
 df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.tasks=='DPA') & (df_mouse.laser==0)]
-licks_hist(df_.licks, ax=ax[0], color='r')
+licks_raster(df_.licks, ax=ax[0], color='r')
 
-df_ = df_mouse[(df_mouse.tasks=='DualGo')]
 df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.tasks=='DualGo') & (df_mouse.laser==0)]
-licks_hist(df_.licks, ax=ax[1], color='b')
+licks_raster(df_.licks, ax=ax[1], color='b')
 
-df_ = df_mouse[(df_mouse.tasks=='DualNoGo')]
 df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.tasks=='DualNoGo') & (df_mouse.laser==0)]
-licks_hist(df_.licks, ax=ax[2], color='g')
+licks_raster(df_.licks, ax=ax[2], color='g')
 
-tasks = ['DPA', 'DualGo', 'DualNoGo']
-for i in range(3):
-    ax[i].set_xlim([0, 12])
-    # ax[i].set_yticks(np.arange(7))
-    # ax[i].set_ylim([0, 6])
-    ax[i].set_title(tasks[i])
-
-plt.savefig('figures/licks/licks_hist_condition.svg', dpi=300)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/e80ade49d6f779c700957e136e85e81e4556eda8.png]]
+[[./.ob-jupyter/d96b78704a94ed9f616c81ff6a331b0163afd018.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(1, 3, figsize=(3*width, height))
+
+df_ = df_mouse[(df_mouse.tasks=='DPA') & (df_mouse.laser==0)]
+# df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.tasks=='DPA') & (df_mouse.laser==0)]
+licks_hist(df_.licks, ax=ax[0], color='r')
+
+df_ = df_mouse[(df_mouse.tasks=='DualGo') & (df_mouse.laser==0)]
+#df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.tasks=='DualGo') & (df_mouse.laser==0)]
+licks_hist(df_.licks, ax=ax[1], color='b')
+
+df_ = df_mouse[(df_mouse.tasks=='DualNoGo') & (df_mouse.laser==0)]
+# df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.tasks=='DualNoGo') & (df_mouse.laser==0)]
+licks_hist(df_.licks, ax=ax[2], color='g')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/0d96ea1acbcc4ab569f448cd638a105b5e9f5d8e.png]]
 
 #+begin_src ipython
 from src.decode.bump import decode_bump, circcvl
 fig, ax = plt.subplots(1, 3, figsize=(3*width, height))
 
-mouse = 'JawsM15'
+mouse = 'ChRM23'
 size = 32
 
 df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.tasks=='DPA') & (df_mouse.laser==0)].reset_index()
@@ -649,33 +459,20 @@ ax[2].plot(circcvl(df_.licks_LD, windowSize=size), color='g')
 ax[2].set_xlabel('Trial')
 ax[2].set_ylabel('Lick rate (Hz)')
 
-
-tasks = ['DPA', 'DualGo', 'DualNoGo']
-for i in range(3):
-    ax[i].set_xlim([0, 192])
-    ax[i].set_xticks(np.linspace(0, 192, 4))
-    ax[i].set_title(tasks[i])
-    ax[i].set_ylim([0, 1])
-
-    for j in range(1, 6):
-        ax[i].axvline(32*j, color='k', ls='--', alpha=0.5)
-
-plt.savefig('figures/licks/licks_trial_condition.svg', dpi=300)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/268b407ebe26ea670b2240b6afe7941a4da2e998.png]]
+[[./.ob-jupyter/8b12d376ff50050ca53f562f5202853ca948439f.png]]
 
 #+begin_src ipython
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-size = 8
 # Add a 'trial' index per mouse-task group, if not already present
 df_mouse['trial'] = df_mouse.groupby(['mouse', 'tasks', 'laser']).cumcount()
 
-df_filtered = df_mouse.copy()
+df_filtered = df_mouse[df_mouse['laser'] == 0]
 df_filtered = df_filtered[df_filtered.mouse!='ACCM04']
 df_filtered = df_filtered[df_filtered.mouse!='ACCM03']
 # df_filtered = df_filtered[(df_filtered.outcome==3) | (df_filtered.outcome==4)]
@@ -690,206 +487,451 @@ fig, axes = plt.subplots(1, 3, figsize=(3*width, height))
 for i, task in enumerate(tasks_to_plot):
     df_task = df_filtered[df_filtered['tasks'] == task]
     # Plot mean and CI for each trial averaged across mice
-    df_off = df_task[df_task.laser==0]
     sns.lineplot(
-        data=df_off,
+        data=df_task,
         x='trial',
-        y=circcvl(df_off['licks_LD'], windowSize=size),
+        y=circcvl(df_task['licks_LD'], windowSize=32),
         # y='licks_LD',
         ax=axes[i],
+        ci='sd',          # or 'sem', or None for no CI
         estimator='mean', # default is mean
-        errorbar='se',    # newer seaborn
-        color=['r','b','g'][i],
+        errorbar='sd',    # newer seaborn
+        color=['r','b','g'][i]
     )
-
-    # df_on = df_task[df_task.laser==1]
-    # sns.lineplot(
-    #     data=df_on,
-    #     x='trial',
-    #     y=circcvl(df_on['licks_LD'], windowSize=size),
-    #     # y='licks_LD',
-    #     ax=axes[i],
-    #     estimator='mean', # default is mean
-    #     errorbar='se',    # newer seaborn
-    #     color=['r','b','g'][i],
-    #     alpha=0.2,
-    # )
-
-    axes[i].set_title(task)
-    axes[i].set_xlabel('Trial #')
-
-    axes[i].set_ylabel('Early Licks (Hz)')
-
-    for j in range(1, 6):
-        axes[i].axvline(32*j, color='k', ls='--', alpha=0.5)
-
-for i in range(3):
-    # axes[i].set_xlim([0, 192])
-    axes[i].set_xticks(np.linspace(0, 192, 4))
-    axes[i].set_title(tasks[i])
-
-    # if i==1:
-        # axes[i].set_ylim([2, 8])
-# else:
-# axes[i].set_ylim([0, 2.5])
-
-
-plt.savefig('figures/licks/early_licks_trial_condition.svg', dpi=300)
-
-plt.tight_layout()
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/50a705bb632bb41104cd84ad9bb09a9bf2bbda13.png]]
-
-#+begin_src ipython
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-size = 8
-# Add a 'trial' index per mouse-task group, if not already present
-df_mouse['trial'] = df_mouse.groupby(['mouse', 'tasks']).cumcount()
-
-df_filtered = df_mouse.copy()
-df_filtered = df_filtered[df_filtered.mouse!='ACCM04']
-df_filtered = df_filtered[df_filtered.mouse!='ACCM03']
-df_filtered = df_filtered[(df_filtered.outcome==3) | (df_filtered.outcome==4)]
-
-
-# df_filtered = df_filtered[df_filtered.mouse!='ChRM23']
-
-# df_filtered['trial'] = df_filtered.groupby(['mouse', 'tasks']).cumcount()
-# print(df_filtered.trial)
-tasks_to_plot = ['DPA', 'DualGo', 'DualNoGo']
-
-fig, axes = plt.subplots(1, 3, figsize=(3*width, height))
-
-for i, task in enumerate(tasks_to_plot):
-    df_task = df_filtered[df_filtered['tasks'] == task]
-    # Plot mean and CI for each trial averaged across mice
-    df_off = df_task[df_task.laser!=2]
-    sns.lineplot(
-        data=df_off,
-        x='trial',
-        y=circcvl(df_off['performance'], windowSize=size),
-        # y='licks_LD',
-        ax=axes[i],
-        estimator='mean', # default is mean
-        errorbar='se',    # newer seaborn
-        color=['r','b','g'][i],
-    )
-
-    # df_on = df_task[df_task.laser==1]
-    # sns.lineplot(
-    #     data=df_on,
-    #     x='trial',
-    #     y=circcvl(df_on['performance'], windowSize=size),
-    #     # y='licks_LD',
-    #     ax=axes[i],
-    #     estimator='mean', # default is mean
-    #     errorbar='se',    # newer seaborn
-    #     color=['r','b','g'][i],
-    #     alpha=0.2,
-    # )
-
     axes[i].set_title(task)
     axes[i].set_xlabel('Trial')
-
-    axes[i].set_ylabel('CR Rate')
-
-for i in range(3):
-    # axes[i].set_xlim([0, 192])
-    axes[i].set_xticks(np.linspace(0, 192, 4))
-    axes[i].set_title(tasks[i])
-
-    if i==1:
-        axes[i].set_ylim([0, 1.1])
-    else:
-        axes[i].set_ylim([0, 1.1])
-
-    for j in range(1, 6):
-        axes[i].axvline(64*j, color='k', ls='--', alpha=0.5)
-
-plt.savefig('figures/licks/CR_trial_condition.svg', dpi=300)
+    if i == 0:
+        axes[i].set_ylabel('Lick rate before Test (Hz)')
 
 plt.tight_layout()
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/e4e6f06735cc5928507da31c8a19f65be96e0450.png]]
+[[./.ob-jupyter/ffc19a8d3c215ffaa6c70a092912b83d612890c1.png]]
 
 #+begin_src ipython
-import seaborn as sns
+
+#+end_src
+
+* Behavioral Data
+
+#+begin_src ipython
+import glob
+import os
+import warnings
+import numpy as np
+
+# Suppress the "All-NaN slice encountered" RuntimeWarning
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="All-NaN slice encountered")
+
+
+path = '/storage/dual_task/data/2Samples-DualTask-BehavioralData'
+cols = ['sample', 'test', 'response', 'pair', 'tasks', 'cue', 'GNG_response', 'GNG_pair', 'laser']
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# mice = ['JawsM15']
+
+df_all = []
+for mouse in mice:
+    df = []
+    print(mouse)
+    for day in np.arange(1, 7):
+
+        try:
+        # if 1:
+            file_name = path + '/%s-DualTask-BehavioralData' % mouse + '/day_%d/' % day
+            print(file_name)
+            file = find_mat_files(file_name)
+
+            try:
+                data = loadmat(file)
+            except:
+                pass
+
+            licks_dpa, licks_go, licks_nogo, licks_all, labels = get_licks_mouse(data, path, response='', trial_length=14, verbose=0)
+
+            # licks_counts, bin_edges, _ = plt.hist(licks_all[i], bins=84, density=False);
+
+            licks_list = []
+            for i in range(licks_all.shape[0]):
+                try:
+                    licks_counts, bin_edges, _ = plt.hist(licks_all[i], bins=84, density=False);
+                    plt.clf()
+                    licks_list.append(licks_counts)
+                except:
+                    licks_list.append(np.array(licks_counts) * np.nan)
+                    pass
+
+            df_day = pd.DataFrame({'lick_binned': licks_list, 'lick_times': licks_all.tolist(), 'task': labels})
+            df_day['day'] = day
+
+            df.append(df_day)
+        except:
+            print('file missing', mouse, day)
+            pass
+
+    df_days = pd.concat(df)
+    df_days['mouse'] = mouse
+    df_all.append(df_days)
+
+df_all = pd.concat(df_all)
+#+end_src
+
+#+RESULTS:
+
+
+#+begin_src ipython
+print(df_all.mouse.unique())
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: AttributeError                            Traceback (most recent call last)
+: Cell In[7], line 1
+: ----> 1 print(df_all.mouse.unique())
+:
+: AttributeError: 'list' object has no attribute 'mouse'
+:END:
+
+#+begin_src ipython
+print(df_all.shape[0])
+#+end_src
+
+#+RESULTS:
+: 00755d08-2cca-46dc-b5ae-2d3501ceabd2
+
+#+begin_src ipython
+pkl_save(df_all, 'df_licks', path="../data/mice/")
+#+end_src
+
+#+RESULTS:
+: saving to ../data/mice//df_licks.pkl
+
+* load
+
+#+begin_src ipython
+df_all = pkl_load('df_licks', path="../data/mice/")
+#+end_src
+
+#+RESULTS:
+: loading from ../data/mice//df_licks.pkl
+
+#+begin_src ipython
+print(df_all.keys(), df_all.shape)
+#+end_src
+
+#+RESULTS:
+: Index(['lick_binned', 'lick_times', 'task', 'day', 'mouse'], dtype='object') (4608, 5)
+
+#+begin_src ipython
+df_all.lick_times
+#+end_src
+
+#+RESULTS:
+#+begin_example
+0     [8.487, 8.631, 8.745, 9.876, 10.019, 10.289, 1...
+1     [4.972000000000001, 5.267000000000003, 5.37700...
+2     [4.750999999999991, 7.731999999999999, 8.34699...
+3     [5.140000000000015, 7.365000000000009, 7.50800...
+4     [5.381999999999977, 5.561999999999983, 5.67699...
+                            ...
+91    [4.947999999999865, 5.152999999999793, 5.30499...
+92    [8.697999999999865, 8.883000000000266, 8.99800...
+93    [8.110000000000582, 8.28900000000067, 8.539000...
+94    [2.3419999999996435, 2.5600000000004, nan, nan...
+95    [5.095999999999549, 5.52599999999984, 5.677999...
+Name: lick_times, Length: 4608, dtype: object
+#+end_example
+
+#+begin_src ipython
+df_ = df_all[df_all.mouse=='ACCM04']
+licks = df_['lick_times'].apply(pd.Series).to_numpy()
+licks_counts, bin_edges, _ = plt.hist(licks.reshape(-1), bins=84, density=False);
+print(licks.shape, licks_counts.shape)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (480, 34) (84,)
+[[./.ob-jupyter/559aa2ffdfc99428dcc000f13b972da047847e33.png]]
+:END:
+
+#+begin_src ipython
+plt.plot(bin_edges[:-1], licks_counts.T)
+add_vlines2()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/e48ace8b89f67164a759f2110c7a039156a0ce68.png]]
+
+* Single Mouse
+
+#+begin_src ipython
+path = '/storage/leon/dual_task/data/2Samples-DualTask-BehavioralData'
+mouse = 'ChRM23'
+day = 1
+file_name = path + '/%s-DualTask-BehavioralData' % mouse + '/day_%d/' % day
+file = find_mat_files(file_name)
+data = loadmat(file)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(data.keys())
+#+end_src
+
+#+RESULTS:
+: dict_keys(['__header__', '__version__', '__globals__', 'AbolishTrials', 'AllData', 'AllSample', 'AllTest', 'AllTrials', 'Data', 'Data1', 'DataD', 'DataD_GO', 'DataD_NG', 'DataID', 'DataID1', 'DataID2', 'DataID3', 'DataS', 'Delay', 'Delay1', 'FDelay', 'FirstOdor', 'FirstOdor1', 'ITI', 'LDelay', 'LaserPeriod', 'MeantrialLen', 'Odor', 'Odor1', 'ResponseDelay', 'Sample', 'Sample1', 'SampleD', 'SampleD_GO', 'SampleD_NG', 'SampleS', 'SecondOdor', 'SecondOdor1', 'SerialData', 'Test', 'Test1', 'TrialNum', 'TrialNumD', 'TrialNumS', 'Trials', 'Trials1', 'TrialsD', 'TrialsD_GO', 'TrialsD_NG', 'TrialsS', 'Water', 'Water1', 'laserTime', 'lickTime'])
+
+#+begin_src ipython
+import numpy as np
+
+# stimulus_onsets: 1D array of stimulus onset times (sorted)
+stimulus_onsets = data['Sample'][:, 0] / 1e3
+# licks: 1D array of lick timestamps (sorted)
+licks = data['lickTime'][:, 0] / 1e3
+
+print(stimulus_onsets.shape, licks.shape)
+trial_licks = []
+for i in range(len(stimulus_onsets) - 1):
+    start = stimulus_onsets[i]
+    end = stimulus_onsets[i + 1]
+    mask = (licks >= start) & (licks < end)
+    trial_licks.append(licks[mask])
+
+# For the last trial, include all licks after the last onset:
+last_mask = licks >= stimulus_onsets[-1]
+trial_licks.append(licks[last_mask])
+
+# trial_licks is a list; each element is an array of licks for that trial
+#+end_src
+
+#+RESULTS:
+: (192,) (1521,)
+
+#+begin_src ipython
 import matplotlib.pyplot as plt
 
-size = 96
-# Add a 'trial' index per mouse-task group, if not already present
-df_mouse['trial'] = df_mouse.groupby(['mouse']).cumcount()
+# trial_licks: list of arrays, as before
+plt.figure(figsize=(8, 6))
+for trial_idx, licks_in_trial in enumerate(trial_licks):
+    # Convert licks to times relative to stimulus onset
+    rel_licks = licks_in_trial - stimulus_onsets[trial_idx]
+    plt.vlines(rel_licks, trial_idx + 0.5, trial_idx + 1.5)  # vertical lines per lick
 
-df_filtered = df_mouse.copy()
-df_filtered = df_filtered[df_filtered.mouse!='ACCM04']
-df_filtered = df_filtered[df_filtered.mouse!='ACCM03']
-df_filtered = df_filtered[(df_filtered.outcome==3) | (df_filtered.outcome==4)]
+add_vlines2()
+plt.xlabel('Time from stimulus onset (s)')
+plt.ylabel('Trial')
+plt.ylim(0.5, len(trial_licks) + 0.5)
+plt.xlim(0, 14)
+plt.show()
+#+end_src
 
-df_filtered['z_licks'] = df_filtered.groupby(['mouse', 'laser', 'day'])['licks_LD'].transform(
-    lambda x: (x - x.mean()) / x.std()
+#+RESULTS:
+[[./.ob-jupyter/4471bfbe4103ffc3fb060de4667e619a611546e2.png]]
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Parameters
+bin_size = 0.25  # in seconds
+t_min = -0.0    # seconds before stimulus
+t_max = 14     # seconds after stimulus
+
+# Bin edges (relative to stimulus onset)
+bins = np.arange(t_min, t_max + bin_size, bin_size)
+bin_centers = (bins[:-1] + bins[1:]) / 2
+
+# Collect all relative lick times
+all_rel_licks = []
+for i, licks_in_trial in enumerate(trial_licks):
+    rel_licks = licks_in_trial - stimulus_onsets[i]
+    # Optionally filter only to within peri-stimulus window:
+    rel_licks = rel_licks[(rel_licks >= t_min) & (rel_licks < t_max)]
+    all_rel_licks.append(rel_licks)
+all_rel_licks = np.hstack(all_rel_licks)  # combine all trials
+
+# Histogram and normalize
+counts, _ = np.histogram(all_rel_licks, bins=bins)
+n_trials = len(trial_licks)
+lick_rate = counts / n_trials / bin_size  # rate in Hz
+
+# Plot
+plt.bar(bin_centers, lick_rate, width=bin_size, align='center', color='k')
+add_vlines2()
+plt.xlabel('Time from stimulus onset (s)')
+plt.ylabel('Lick rate (Hz)')
+# plt.title('Average Lick Rate vs. Time')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/036220ef5c7a61ce704f028fb118579a711b1482.png]]
+
+#+begin_src ipython
+window_start = 6.5   # seconds after stimulus
+window_end   = 7.0   # seconds after stimulus
+window_length = window_end - window_start
+
+avg_lick_rates = []
+
+for i, licks_in_trial in enumerate(trial_licks):
+    # Rel. to onset:
+    rel_licks = licks_in_trial - stimulus_onsets[i]
+    # Count licks within [6.5, 7.0) s after onset
+    n_licks = np.sum((rel_licks >= window_start) & (rel_licks < window_end))
+    # Lick rate = count / window
+    rate = n_licks / window_length  # in Hz
+    avg_lick_rates.append(rate)
+
+avg_lick_rates = np.array(avg_lick_rates)
+# avg_lick_rates: one value per trial (Hz)
+print(avg_lick_rates.shape)
+#+end_src
+
+#+RESULTS:
+: (192,)
+
+#+begin_src ipython
+df = data['AllTrials'][0][0][-1]
+col_names = ['sample', 'test', 'outcome', 'pair', 'distractor', 'cue', 'odr_outcome', 'odr_pair', 'laser']
+df = pd.DataFrame(df, columns=col_names)
+df['performance'] = df['outcome'].apply(lambda x: 0 if ((x==2) or (x==3)) else 1)
+df['paired'] = df['outcome'].apply(lambda x: 0 if ((x==4) or (x==3)) else 1)
+df['tasks'] = df['distractor'].apply(
+    lambda x: 'DPA' if x == 0 else ('DualGo' if x == 1 else 'DualNoGo')
 )
+df['licks_LD'] = avg_lick_rates
+print(df.keys())
+#+end_src
 
-# df_filtered = df_filtered[df_filtered.mouse!='ChRM23']
+#+RESULTS:
+: Index(['sample', 'test', 'outcome', 'pair', 'distractor', 'cue', 'odr_outcome',
+:        'odr_pair', 'laser', 'performance', 'paired', 'tasks', 'licks_LD'],
+:       dtype='object')
 
-# df_filtered['trial'] = df_filtered.groupby(['mouse', 'tasks']).cumcount()
-# print(df_filtered.trial)
-tasks_to_plot = ['licks_LD', 'performance']
+#+begin_src ipython
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
 
-fig, axes = plt.subplots(1, 3, figsize=(3*width, height))
+df_ = df[df.laser==0]
 
-for i, task in enumerate(tasks_to_plot):
-    df_task = df_filtered
-    # Plot mean and CI for each trial averaged across mice
-    df_off = df_task[df_task.laser!=2]
-    sns.lineplot(
-        data=df_off,
-        x='trial',
-        y=circcvl(df_off[task], windowSize=size),
-        # y='licks_LD',
-        ax=axes[i],
-        estimator='mean', # default is mean
-        errorbar='se',    # newer seaborn
-        color=['r','b','g'][i],
-    )
+formula = 'performance ~ licks_LD * tasks'
 
-    # df_on = df_task[df_task.laser==1]
-    # sns.lineplot(
-    #     data=df_on,
-    #     x='trial',
-    #     y=circcvl(df_on[task], windowSize=size),
-    #     # y='licks_LD',
-    #     ax=axes[i],
-    #     estimator='mean', # default is mean
-    #     errorbar='se',    # newer seaborn
-    #     color=['r','b','g'][i],
-    #     alpha=0.2,
-    # )
+model = smf.glm(formula=formula, data=df_, family=sm.families.Binomial())
+results = model.fit()
 
-    #axes[i].set_title(task)
-    axes[i].set_xlabel('Trial')
-    axes[i].set_ylabel(task)
+print(results.summary())
+#+end_src
 
-    for j in range(1, 6):
-        axes[i].axvline(96*j, color='k', ls='--')
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:            performance   No. Observations:                   96
+Model:                            GLM   Df Residuals:                       90
+Model Family:                Binomial   Df Model:                            5
+Link Function:                  Logit   Scale:                          1.0000
+Method:                          IRLS   Log-Likelihood:                -55.471
+Date:                Thu, 26 Jun 2025   Deviance:                       110.94
+Time:                        18:27:46   Pearson chi2:                     94.0
+No. Iterations:                    19   Pseudo R-squ. (CS):             0.1108
+Covariance Type:            nonrobust
+==============================================================================================
+                                 coef    std err          z      P>|z|      [0.025      0.975]
+----------------------------------------------------------------------------------------------
+Intercept                      0.4055      0.373      1.088      0.277      -0.325       1.136
+tasks[T.DualGo]               -0.2719      0.522     -0.521      0.603      -1.296       0.752
+tasks[T.DualNoGo]              1.4663      0.654      2.243      0.025       0.185       2.748
+licks_LD                      -0.2027      0.731     -0.277      0.782      -1.636       1.230
+licks_LD:tasks[T.DualGo]       5.3109   3134.316      0.002      0.999   -6137.836    6148.458
+licks_LD:tasks[T.DualNoGo]    -0.7332      1.052     -0.697      0.486      -2.795       1.329
+==============================================================================================
+#+end_example
 
-plt.tight_layout()
+#+begin_src ipython
+plt.plot(avg_lick_rates, 'o', ms=6)
+plt.xlabel('trial')
+plt.ylabel('lick rate (Hz)')
+plt.show
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: <function matplotlib.pyplot.show(close=None, block=None)>
+[[./.ob-jupyter/002ad3bb73903c90a7ad16fba0d2840f7422f112.png]]
+:END:
+
+#+begin_src ipython
+path = 'ACC'
+licks_dpa, licks_go, licks_nogo, licks_trial, labels = get_licks_mouse(data, path, response='', trial_length=14, verbose=1)
+print(licks_dpa.shape)
+licks_all = [np.hstack(licks_dpa), np.hstack(licks_go), np.hstack(licks_nogo)]
+print(np.array(licks_trial[0]).shape)
+licks_density, bins = plot_licks_hist(licks_all, n_bins=84)
+print('lick_density', licks_density.shape)
+plt.savefig('licks_first.svg', dpi=300)
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: licks: all (96, 27) licks: DPA (32, 13) Go (32, 20) NoGo (32, 27)
+: (32, 13)
+: (27,)
+: lick_count (3, 84)
+: lick_density (3, 84)
+[[./.ob-jupyter/ca95b6484d73ffeec5c850f52bec4e007cd70d9f.png]]
+:END:
+
+#+begin_src ipython
+print(licks_trial.shape)
+licks_counts, bin_edges, _ = plt.hist(np.hstack(licks_trial), bins=84, density=False)
+plt.clf()
+print(licks_counts.shape)
+plt.plot(bin_edges[:-1], licks_counts)
+add_vlines2()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (96, 10)
+: (84,)
+[[./.ob-jupyter/0ddf543d1638c8fd126a19b39085e542535e7320.png]]
+:END:
+
+#+begin_src ipython
+licks_list = []
+for i in range(licks_trial.shape[0]):
+    try:
+        licks_counts, bin_edges, _ = plt.hist(licks_trial[i], bins=84, density=False);
+        licks_list.append(licks_counts.copy())
+        licks_counts[licks_counts==0] *= np.nan
+        plt.plot(bin_edges[:-1], (i+1)*licks_counts, "|")
+    except:
+        pass
+
+add_vlines2()
+plt.xlabel("Time (s)")
+plt.ylabel("Trial #")
+plt.xlim(-0.5, 14)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/99b56709717e925eb4f7b771196baa39cec13a36.png]]
+:RESULTS:
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_axes.py:6831: RuntimeWarning: All-NaN slice encountered
+:   xmin = min(xmin, np.nanmin(xi))
+: /home/leon/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_axes.py:6832: RuntimeWarning: All-NaN slice encountered
+:   xmax = max(xmax, np.nanmax(xi))
+[[./.ob-jupyter/a43abedf5fe4910c8853365cf406c071becb8e60.png]]
+:END:
 
 #+begin_src ipython
-32*3
+
 #+end_src
 
 #+RESULTS:
-: 96

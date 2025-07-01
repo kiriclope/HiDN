@@ -45,7 +45,7 @@ class EnergyLandscape():
 
         return matrix
 
-    def get_steady_state(self, p_transition):
+    def get_steady_state_old(self, p_transition):
         """This implementation comes from Colin Carroll"""
 
         n_states = p_transition.shape[0]
@@ -62,6 +62,18 @@ class EnergyLandscape():
         pinv = np.linalg.pinv(A)
         # Return last row
         return pinv.T[-1]
+
+
+    def get_steady_state(self, p_transition):
+        """Returns stationary distribution of the Markov chain."""
+        eigvals, eigvecs = np.linalg.eig(p_transition.T)
+        idx = np.argmin(np.abs(eigvals - 1))
+        steady_state = np.real(eigvecs[:, idx])
+        steady_state = steady_state / np.sum(steady_state)    # normalize
+        steady_state[steady_state < 0] = 0                    # clip negatives if any due to numerics
+        steady_state = steady_state / np.sum(steady_state)    # renormalize
+        return steady_state
+
 
     def get_energy(self, steady_state, window=10):
         # Compute the energy landscape as the negative log of the steady state distribution (Boltzmann, kb=1)
@@ -81,8 +93,9 @@ class EnergyLandscape():
 
     def fit(self, X, bins, window=10, covariance_type='diag', n_iter=1000):
 
-        X_discrete = np.digitize(X, bins, right=False)-1
-        num_bins = len(bins)
+        num_bins = len(bins) - 1
+        # X_discrete = np.digitize(X, bins, right=False)-1
+        X_discrete = np.clip(np.digitize(X, bins)-1, 0, num_bins-1)
 
         if self.IF_HMM:
             self.transition_matrix = self.get_transition_hmm(X_discrete, num_bins=num_bins, covariance_type=covariance_type, n_iter=n_iter)
