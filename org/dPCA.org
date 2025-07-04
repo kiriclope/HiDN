@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session dpca :kernel dual_data :exports results :output-dir ./figures/dpca :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session overlaps :kernel dual_data :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -24,6 +24,7 @@
 #+begin_src ipython
   from sklearn.exceptions import ConvergenceWarning
   warnings.filterwarnings("ignore")
+  import traceback
 
   import sys
   sys.path.insert(0, '/home/leon/dual_task/dual_data/')
@@ -36,19 +37,24 @@
   import pickle as pkl
   import numpy as np
   import matplotlib.pyplot as plt
+  import pandas as pd
+  import seaborn as sns
+
   from time import perf_counter
 
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+
+  from src.common.plot_utils import add_vlines, add_vdashed
   from src.common.options import set_options
   from src.stats.bootstrap import my_boots_ci
-  from src.decode.bump import decode_bump, circcvl
   from src.common.get_data import get_X_y_days, get_X_y_S1_S2
   from src.preprocess.helpers import avg_epochs
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-from src.dPCA import dPCA
+  from src.decode.bump import circcvl
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.classify import get_classification
 #+end_src
 
 #+RESULTS:
@@ -56,111 +62,51 @@ from src.dPCA import dPCA
 * Helpers
 
 #+begin_src ipython
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.impute import SimpleImputer
-import numpy as np
-
-class CustomImputer(BaseEstimator, TransformerMixin):
-    """
-    A custom imputer for 5D data that flattens the last dimension(s) to apply
-    scikit‐learn's SimpleImputer, then reshapes back to the original 5D form.
-    """
-    def __init__(self, strategy="mean"):
-        """
-        Parameters
-        ----------
-        strategy : str, optional (default="mean")
-            The imputation strategy to pass to SimpleImputer.
-            Could be "mean", "median", "most_frequent", or "constant".
-        """
-        self.strategy = strategy
-        self.imputer_ = None
-        self.original_shape_ = None
-
-    def fit_transform(self, X, y=None):
-        self.fit(X, y)
-        return self.transform(X)
-
-    def fit(self, X, y=None):
-        """
-        Fit the imputer to X.
-
-        Parameters
-        ----------
-        X : ndarray of shape (n1, n2, n3, n4, n5)
-            The 5D data to fit.
-
-        Returns
-        -------
-        self : Custom5DImputer
-        """
-        self.original_shape_ = X.shape
-
-        # (n1, n2, n3, n4, n5) → reshape to 2D for SimpleImputer
-        # One common approach is to treat everything as features except the first axis:
-        # e.g. (n1, n2*n3*n4*n5). Or flatten sections differently if needed.
-        X_2d = X.reshape(X.shape[0], -1)
-
-        # Create and fit an actual SimpleImputer
-        self.imputer_ = SimpleImputer(strategy=self.strategy)
-        self.imputer_.fit(X_2d)
-
-        return self
-
-    def transform(self, X):
-        """
-        Transform (impute) X with the fitted imputer.
-
-        Parameters
-        ----------
-        X : ndarray of shape (n1, n2, n3, n4, n5)
-            The 5D data to transform/impute.
-
-        Returns
-        -------
-        X_imputed : ndarray of shape (n1, n2, n3, n4, n5)
-            The imputed 5D data.
-        """
-        # Check shape consistency
-        if X.shape != self.original_shape_:
-            raise ValueError(
-                f"Shape of X {X.shape} does not match the fitted shape {self.original_shape_}."
-            )
-
-        # Reshape to 2D
-        X_2d = X.reshape(X.shape[0], -1)
-
-        # Transform
-        X_2d_imputed = self.imputer_.transform(X_2d)
-
-        # Reshape back to 5D
-        X_imputed = X_2d_imputed.reshape(self.original_shape_)
-
-        return X_imputed
+def pad_with_nans(array, target_shape):
+    result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
+    print(result.shape)
+    slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
+    result[slices] = array[slices]
+    return result
 #+end_src
 
 #+RESULTS:
 
-** Other
+#+begin_src ipython :tangle ../src/torch/utils.py
+  import numpy as np
 
+  def safe_roc_auc_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return 0.5  # return np.nan where the score cannot be calculated
+      return roc_auc_score(y_true, y_score)
 
-#+begin_src ipython
-class standard_scaler():
-      def __init__(self, axis=0):
-            self.axis = axis
+  def safe_f1_score(y_true, y_score):
+      y_true = np.asarray(y_true)
+      if len(np.unique(y_true)) == 1:
+          return 0.5  # return np.nan where the score cannot be calculated
+      return f1_score(y_true, y_score, average='weighted')
+      #+end_src
 
-      def fit(self, X):
-            self.mean = np.nanmean(X, axis=axis, keepdims=True)
-            self.std = np.nanstd(X, axis=axis, keepdims=True) + 1e-6
+#+RESULTS:
 
-            return self
+#+begin_src ipython :tangle ../src/torch/utils.py
+  def rescale_coefs(model, coefs, bias):
 
-      def transform(self, X):
-            return (X - self.mean) / self.std
+          try:
+                  means = model.named_steps["scaler"].mean_
+                  scales = model.named_steps["scaler"].scale_
 
-      def fit_transform(self, X):
-            self.fit(X)
-            return self.transform(X)
+                  # Rescale the coefficients
+                  rescaled_coefs = np.true_divide(coefs, scales)
+
+                  # Adjust the intercept
+                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
+
+                  return rescaled_coefs, rescaled_bias
+          except:
+                  return coefs, bias
+
 #+end_src
 
 #+RESULTS:
@@ -171,11 +117,6 @@ class standard_scaler():
   def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
       result = bootstrap((data,), statistic)
       ci_lower, ci_upper = result.confidence_interval
-
-#+RESULTS:
-
-#+RESULTS:
-
       return np.array([ci_lower, ci_upper])
 #+end_src
 
@@ -191,51 +132,311 @@ class standard_scaler():
 
 #+RESULTS:
 
-#+begin_src ipython
-def angle_AB(A, B):
-      A_norm = A / (np.linalg.norm(A) + 1e-5)
-      B_norm = B / (np.linalg.norm(B) + 1e-5)
-
-      cos_theta = A_norm @ B_norm.T
-      angle_radians = np.arccos(np.clip(cos_theta, -1.0, 1.0))
-
-      return np.degrees(angle_radians)
-#+end_src
-
-#+RESULTS:
-
 #+begin_src ipython :tangle ../src/torch/utils.py
   import pickle as pkl
 
   def pkl_save(obj, name, path="."):
-      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
 
 
   def pkl_load(name, path="."):
-      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
 
 #+end_src
 
 #+RESULTS:
 
-** Plots
+#+begin_src ipython
+def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
+    try:
+        coef = estimator.named_steps["model"].coef_.flatten()
+        clf = estimator #.named_steps["model"]
+    except:
+        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
+        clf = estimator.best_estimator_.named_steps["model"]
+
+    norm_w = np.linalg.norm(coef) + 1e-6
+
+    # try:
+    #     X_test = clf.named_steps["scaler"].transform(X_test)
+    # except:
+    #     pass
+
+    # try:
+    #     X_test = clf.named_steps["pca"].transform(X_test)
+    # except:
+    #     pass
+
+    if IF_SIGN:
+        dot_product = (2*y_test -1) * np.dot(X_test, coef) / norm_w # / X_test.shape[1] * 1000
+        # dot_product = (2*y_test -1) * clf.named_steps["model"].decision_function(X_test)
+        # dot_product = (2*y_test -1) * clf.decision_function(X_test) / norm_w
+    else:
+        # dot_product = clf.decision_function(X_test) / norm_w
+        # dot_product = clf.named_steps["model"].decision_function(X_test)
+        dot_product = np.dot(X_test, coef) / norm_w # / X_test.shape[1] * 1000
+
+    return np.nanmean(dot_product)
+#+end_src
+
+#+RESULTS:
+
+* Plots
 
 #+begin_src ipython
-  def get_theta(a, b, GM=0, IF_NORM=0):
+def significance_marker(p):
+    if p < 0.001:
+        return '***'
+    elif p < 0.01:
+        return '**'
+    elif p < 0.05:
+        return '*'
+    elif p <.1:
+        return '.'
+    else:
+        return ''
+#+end_src
 
-      u, v = a, b
+#+RESULTS:
 
-      if GM:
-          # for i in range(b.shape[0]):
-          v = b - (b @ a) * a / (a @ a)
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
 
-      if IF_NORM:
-          u = u / (np.linalg.norm(u) + 1e-6)
-          v = v / (np.linalg.norm(v) + 1e-6)
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
 
-          # return np.arccos(np.clip(u @ v, -1.0, 1.0))
+from pymer4.models import Lmer
+#+end_src
 
-      return np.arctan2(v, u) % (2.0 * np.pi)
+#+RESULTS:
+#+begin_example
+During startup - Warning messages:
+1: package ‘methods’ was built under R version 4.4.2
+2: package ‘datasets’ was built under R version 4.4.2
+3: package ‘utils’ was built under R version 4.4.2
+4: package ‘grDevices’ was built under R version 4.4.2
+5: package ‘graphics’ was built under R version 4.4.2
+6: package ‘stats’ was built under R version 4.4.2
+R[write to console]: In addition:
+R[write to console]: Warning message:
+R[write to console]: package ‘tools’ was built under R version 4.4.2
+#+end_example
+
+#+begin_src ipython
+def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
+    if day=='all':
+        df_ = df.copy()
+    else:
+        df_ = df[df.day == day].copy()
+
+    if colors is None:
+        colors = ['r', 'b', 'g']
+
+    if if_proba:
+        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    else:
+        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    time_points = np.linspace(0, 14, size)
+
+    for i, task in enumerate(mean_overlaps.index):
+        if label is None:
+            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls, **kwargs)
+            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        else:
+            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls, **kwargs)
+
+        if cis is not None:
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    # ax.set_ylabel('%s Overlap' % title)
+    add_vlines(ax)
+    ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_overlaps_traj(df, df2, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
+    if day=='all':
+        df_ = df.copy()
+        df2_ = df2.copy()
+    else:
+        df_ = df[df.day == day].copy()
+        df2_ = df[df.day == day].copy()
+
+    if colors is None:
+        colors = ['r', 'b', 'g']
+
+    if if_proba:
+        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+        mean_overlaps2 = df2_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    else:
+        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+        mean_overlaps2 = df2_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    time_points = np.linspace(0, 14, size)
+
+    for i, task in enumerate(mean_overlaps.index):
+        if label is None:
+            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls, **kwargs)
+            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        else:
+            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls, **kwargs)
+
+        if cis is not None:
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    # ax.set_ylabel('%s Overlap' % title)
+    add_vlines(ax)
+    ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def bootstrap_ci(data, n_bootstrap=1000, ci=95):
+    bootstrapped_means = np.array([np.mean(np.random.choice(data, size=len(data))) for _ in range(n_bootstrap)])
+    lower_bound = np.percentile(bootstrapped_means, (100-ci)/2)
+    upper_bound = np.percentile(bootstrapped_means, 100 - (100-ci)/2)
+    return lower_bound, upper_bound
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_mat(X, ax, vmin=-1, vmax=1, palette='bwr'):
+  im = ax.imshow(
+    X,
+    interpolation=None,
+    origin="lower",
+    cmap=palette,
+    extent=[0, 14, 0, 14],
+    vmin=vmin,
+    vmax=vmax,
+  )
+
+  add_vdashed(ax)
+  ax.set_xlim([2, 12])
+  ax.set_xticks([2, 4, 6, 8, 10, 12])
+  ax.set_ylim([2, 12])
+  ax.set_yticks([2, 4, 6, 8, 10, 12])
+
+  ax.set_xlabel("Testing Time (s)")
+  ax.set_ylabel("Training Time (s)")
+  return im
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+
+def add_vdashed(ax=None, mouse=""):
+    # Define time intervals
+    t_STIM = [2, 3]
+    t_DIST = [4.5, 5.5]
+    t_CUE = [6.5, 7]
+    t_TEST = [9, 10]
+
+    # Add vertical dashed lines and text labels for each interval
+    if ax is not None:
+        # Draw vertical lines
+        for t in [t_STIM, t_DIST, t_TEST]:
+            ax.axvline(x=t[0], linestyle='--', color='k', lw=2)
+            ax.axvline(x=t[1], linestyle='--', color='k', lw=2)
+
+            ax.axhline(y=t[0], linestyle='--', color='k', lw=2)
+            ax.axhline(y=t[1], linestyle='--', color='k', lw=2)
+
+        # Add text labels at the middle of each interval
+        ax.text((t_STIM[0] + t_STIM[1]) / 2, 12.5, 'STIM', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+        ax.text((t_DIST[0] + t_DIST[1]) / 2, 12.5, 'DIST', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+        # ax.text((t_CUE[0] + t_CUE[1]) / 2, 12.5, 'CUE', color='black',
+        #         horizontalalignment='center', verticalalignment='center', fontsize=16)
+        ax.text((t_TEST[0] + t_TEST[1]) / 2, 12.5, 'TEST', color='black',
+                horizontalalignment='center', verticalalignment='center', fontsize=16)
+
+        ax.text(12.5, (t_STIM[0] + t_STIM[1]) / 2, 'STIM', color='black',
+                horizontalalignment='center', verticalalignment='center', rotation='vertical',fontsize=16)
+        ax.text(12.5, (t_DIST[0] + t_DIST[1]) / 2, 'DIST', color='black',
+                horizontalalignment='center', verticalalignment='center', rotation='vertical',fontsize=16)
+        # ax.text(12.5, (t_CUE[0] + t_CUE[1]) / 2, 'CUE', color='black',
+        #         horizontalalignment='center', verticalalignment='center', rotation='vertical', fontsize=16)
+        ax.text(12.5, (t_TEST[0] + t_TEST[1]) / 2, 'TEST', color='black',
+                horizontalalignment='center', verticalalignment='center', rotation='vertical', fontsize=16)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
+    df_ = df[df.day == day].copy()
+    colors = ['r', 'b', 'g']
+    time_points = np.linspace(0, 14, 84)
+
+    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+    # fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+    for i, task in enumerate(df_.tasks.unique()):
+        df_task = df_[df_.tasks==task]
+        overlaps = df_task
+        overlaps = np.array(df_task['overlaps'].tolist())
+
+        mean_o = np.nanmean(overlaps, axis=0)
+
+        im = plot_mat(mean_o.reshape(84, 84), ax[i], vmin, vmax)
+
+    cax = inset_axes(ax[-1], width="5%", height="100%", loc='center right',
+                     bbox_to_anchor=(0.12, 0, 1, 1), bbox_transform=ax[-1].transAxes, borderpad=0)
+
+    # Add colorbar to the new axis
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.set_label("%s Overlaps" % title)
+
+    plt.subplots_adjust(right=0.85)  # Adjust figure to allocate space
+
 #+end_src
 
 #+RESULTS:
@@ -244,1305 +445,1752 @@ def angle_AB(A, B):
 
 #+begin_src ipython
   DEVICE = 'cuda:0'
-  #  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+  Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+
   mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+  # mice = Jaws_mice
+  # mice = ['JawsM15']
+
   tasks = ['DPA', 'DualGo', 'DualNoGo']
-  # mice = ['AP02', 'AP12']
-  # mice = ['PP09', 'PP17']
 
   kwargs = {
-      'mouse': mice[1], 'laser': 0,
-      'trials': '', 'reload': 0, 'data_type': 'dF',
-      'prescreen': None, 'pval': 0.05, 'n_comp': 0,
+      'mice': mice,
+      'mouse': mice[0], 'laser': 0,
+      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
+      'prescreen': None, 'pval': 0.05,
       'preprocess': False, 'scaler_BL': 'robust',
-      'avg_noise': True, 'unit_var_BL': True,
+      'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
-      'n_comp': None, 'scaler': None,
-      'bootstrap': 1, 'n_boots': 1000,
-      'n_splits': 3, 'n_repeats': 10,
+      'n_comp': 0, 'scaler': None,
+      'bootstrap': 1, 'n_boots': 128,
+      'n_splits': 5, 'n_repeats': 10,
       'class_weight': 0,
-      'multilabel':0,
-      'mne_estimator': 'generalizing', # sliding or generalizing
-      'n_jobs': 128,
-      'bolasso_penalty': 'l2',
-      'bolasso_pval': 0.05,
-      'laser' : -1,
+      'multilabel': 0,
+      'mne_estimator':'generalizing', # sliding or generalizing
+      'n_jobs': 64,
   }
 
   # kwargs['days'] = ['first', 'middle', 'last']
   kwargs['days'] = ['first', 'last']
   # kwargs['days'] = 'all'
-  # kwargs['days'] = ['first']
-
   options = set_options(**kwargs)
-  print(options['days'])
-  options['mice'] = mice
-  name = '5folds'
+
+  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
+  safe_f1 = make_scorer(safe_f1_score, needs_proba=True)
+
+  dum = 'overlaps_loocv_correct_l1'
+  # dum = 'overlaps_loocv_laser_only'
+  # dum = 'overlaps_loocv_laser_all_l2'
+  options['cv_B'] = True
+  # dum = 'overlaps_all_loocv'
 #+end_src
 
 #+RESULTS:
-: ['first', 'last']
+
+* Decoding vs days
+** utils
 
 #+begin_src ipython
-import pandas as pd
-options['mice'] = ['JawsM15']
+def decode_axis(model, **options):
+    new_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
+    options['NEW_DATA'] = 0
 
-new_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
+    dfs = []
+    for mouse in options['mice']:
+        df_mouse = []
+        options['mouse'] = mouse
+        options = set_options(**options)
+        days = options['days']
 
-options['reload'] = 0
-X_mouse, y_mouse = [], []
-y_laser = []
-y_choice = []
-y_dfs = []
-
-for idx, mouse in enumerate(options['mice']):
-    options['mouse'] = mouse
-    options['features'] = 'sample'
-    options['verbose'] = 0
-
-    options['trials'] = ''
-    options['reload'] = 0
-
-    if mouse in new_mice:
-        options['NEW_DATA'] = 1
-    else:
-        options['NEW_DATA'] = 0
-
-    options = set_options(**options)
-
-    X_list = []
-    # y_list = []
-    # y_list2 = []
-    # y_list3 = []
-    y_df__ = []
-    tasks = ["DPA", "DualGo", "DualNoGo"]
-
-    for i, day in enumerate(options['days']):
-        X_dum = []
-        # y_dum = []
-        # y_dum2 = []
-        # y_dum3 = []
-        y_df_ = []
-
-        options['day'] = day
-
-        for task in tasks:
-            options['task'] = task
-            X_days, y_days = get_X_y_days(**options)
+        if mouse in new_mice:
             options['reload'] = 0
-            X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
+            options['NEW_DATA'] = 1
+        else:
+            options['reload'] = 0
+            options['NEW_DATA'] = 0
 
-            X_dum.append(X_data)
-            y_df_.append(y_data)
+        for task in ['all']:
+            options['task'] = task
 
-            # y_dum.append(y_data.sample_odor)
-            # y_dum.append(y_data.odor_pair)
-            # y_dum2.append(y_data.laser)
-            # y_dum3.append(y_data.choice)
+            for day in days:
+                options['day'] = day
 
-        y_df_ = pd.concat(y_df_)
-        y_df_['DAY'] = day
-        y_df__.append(y_df_)
+                try:
+                # if 0==0:
+                    overlaps = get_classification(model, RETURN='df_scores', **options)
+                    options['reload'] = 0
+                    df_mouse.append(overlaps)
+                except:
+                    pass
 
-        X_list.append(X_dum)
+        df_mouse = pd.concat(df_mouse)
+        df_mouse['mouse'] = mouse
+        dfs.append(df_mouse)
 
-        # y_list.append(y_dum)
-        # y_list2.append(y_dum2)
-        # y_list3.append(y_dum3)
+    return pd.concat(dfs)
+    #+end_src
 
-    X_mouse.append(X_list)
-    y_df__ = pd.concat(y_df__)
-    y_df__['mouse'] = mouse
-    y_dfs.append(y_df__)
+#+RESULTS:
 
-    # y_mouse.append(y_list)
-    # y_laser.append(y_list2)
-    # y_choice.append(y_list3)
+#+begin_src ipython
+def save_overlaps(df, marg, dum, **options):
+    if len(options['days'])>3:
+        name = 'df_%s_%s_days' % (marg, dum)
+    elif len(options['days'])==2:
+        name = 'df_%s_%s_early_late' % (marg, dum)
+    else:
+        name = 'df_%s_%s' % (marg, dum)
 
-y_dfs = pd.concat(y_dfs)
+    if len(mice)==1:
+        pkl_save(df, '%s' % name, path="/storage/leon/dual_task/data/%s/overlaps" % options['mouse'])
+    elif len(mice)==2:
+        pkl_save(df, '%s' % name, path="/storage/leon/dual_task/data/mice/overlaps_ACC")
+    else:
+        pkl_save(df, '%s' % name, path="/storage/leon/dual_task/data/mice/overlaps")
+#+end_src
+
+#+RESULTS:
+
+** run
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/Dclassify')
+from src.classificationCV import ClassificationCV
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-#print(np.array(X_mouse[0]).shape, y_dfs.shape)
+from sklearn.linear_model import LogisticRegression
+net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=64, fit_intercept=True)
+params = {'model__C': np.logspace(-3, 3, 10)}
+
+# net = LogisticRegression(penalty='elasticnet', solver='saga', n_jobs=64, class_weight='balanced', fit_intercept=True)
+# params = {'model__C': np.logspace(-3, 3, 10), 'model__l1_ratio': np.linspace(0, 1, 10)}
+
+# options['hp_scoring'] = lambda estimator, X_test, y_test: np.abs(overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1))
+options['hp_scoring'] = 'accuracy'
+options['scoring'] = overlaps_scorer
+
+options['n_jobs'] = -1
+options['reload'] = 0
+
+options['T_WINDOW'] = 0.0
+
+options['cv'] = LeaveOneOut()
+options['verbose'] = 1
+model = ClassificationCV(net, params, **options)
 #+end_src
 
 #+RESULTS:
-
-* dPCA
-** Stimuli choice time
-*** reshape
+: PCA False 0
 
 #+begin_src ipython
-from sklearn.model_selection import KFold, LeaveOneOut, StratifiedKFold, RepeatedKFold
-from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
+options['features'] = 'sample'
+options['epochs'] = ['ED']
+df_sample = decode_axis(model, **options)
 
-def crossval_dpca(X_stim, Z, dpca, folds, IF_SCALE=0):
+df_sample['performance'] = df_sample['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_sample['pair'] = df_sample['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+save_overlaps(df_sample, 'sample', dum, **options)
+ #+end_src
 
-    Dp_cv = []
-    Ds_cv = []
+ #+RESULTS:
+ #+begin_example
+ Loading files from /storage/leon/dual_task/data/JawsM01
+ X_days (768, 184, 84) y_days (768, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
+ X_B (72, 184, 84) y_B (72,) [0. 1.] ['DualGo' 'DPA' 'DualNoGo']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+ y_labels (216, 14) ['DualNoGo' 'DualGo' 'DPA']
+ X (216, 184, 84) nans 0.0 y (216,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 12s
+ {'model__C': 0.4641588833612777}
+ LeaveOneOut()
+ Computing cv scores ...Elapsed (with compilation) = 0h 0m 43s
+ df_A (216, 15) scores (216, 7056) labels (216, 14)
+ scores_B (72, 84, 84)
+ df_B (72, 15) scores (72, 7056) labels (72, 14)
+ df (288, 15)
+ Loading files from /storage/leon/dual_task/data/JawsM01
+ X_days (768, 184, 84) y_days (768, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
+ X_B (5, 184, 84) y_B (5,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+ y_labels (91, 14) ['DPA' 'DualGo' 'DualNoGo']
+ X (91, 184, 84) nans 0.0 y (91,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 13s
+ {'model__C': 1000.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 0m 32s
+ df_A (91, 15) scores (91, 7056) labels (91, 14)
+ scores_B (5, 84, 84)
+ df_B (5, 15) scores (5, 7056) labels (5, 14)
+ df (96, 15)
+ Loading files from /storage/leon/dual_task/data/JawsM06
+ X_days (1152, 201, 84) y_days (1152, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
+ X_B (105, 201, 84) y_B (105,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+ y_labels (183, 14) ['DualNoGo' 'DualGo' 'DPA']
+ X (183, 201, 84) nans 0.0 y (183,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 12s
+ {'model__C': 10.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 0m 44s
+ df_A (183, 15) scores (183, 7056) labels (183, 14)
+ scores_B (105, 84, 84)
+ df_B (105, 15) scores (105, 7056) labels (105, 14)
+ df (288, 15)
+ Loading files from /storage/leon/dual_task/data/JawsM06
+ X_days (1152, 201, 84) y_days (1152, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
+ X_B (40, 201, 84) y_B (40,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+ y_labels (248, 14) ['DualGo' 'DualNoGo' 'DPA']
+ X (248, 201, 84) nans 0.0 y (248,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 13s
+ {'model__C': 0.4641588833612777}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 0m 52s
+ df_A (248, 15) scores (248, 7056) labels (248, 14)
+ scores_B (40, 84, 84)
+ df_B (40, 15) scores (40, 7056) labels (40, 14)
+ df (288, 15)
+ Loading files from /storage/leon/dual_task/data/JawsM12
+ X_days (960, 423, 84) y_days (960, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
+ X_B (106, 423, 84) y_B (106,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+ y_labels (182, 14) ['DPA' 'DualGo' 'DualNoGo']
+ X (182, 423, 84) nans 0.0 y (182,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 13s
+ {'model__C': 1000.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 1m 6s
+ df_A (182, 15) scores (182, 7056) labels (182, 14)
+ scores_B (106, 84, 84)
+ df_B (106, 15) scores (106, 7056) labels (106, 14)
+ df (288, 15)
+ Loading files from /storage/leon/dual_task/data/JawsM12
+ X_days (960, 423, 84) y_days (960, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
+ X_B (51, 423, 84) y_B (51,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+ y_labels (141, 14) ['DPA' 'DualGo' 'DualNoGo']
+ X (141, 423, 84) nans 0.0 y (141,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 13s
+ {'model__C': 2.154434690031882}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 0m 47s
+ df_A (141, 15) scores (141, 7056) labels (141, 14)
+ scores_B (51, 84, 84)
+ df_B (51, 15) scores (51, 7056) labels (51, 14)
+ df (192, 15)
+ Loading files from /storage/leon/dual_task/data/JawsM15
+ X_days (1152, 693, 84) y_days (1152, 15)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
+ X_B (93, 693, 84) y_B (93,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+ y_labels (195, 16) ['DualGo' 'DualNoGo' 'DPA']
+ X (195, 693, 84) nans 0.0 y (195,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 13s
+ {'model__C': 1000.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 1m 31s
+ df_A (195, 17) scores (195, 7056) labels (195, 16)
+ scores_B (93, 84, 84)
+ df_B (93, 17) scores (93, 7056) labels (93, 16)
+ df (288, 17)
+ Loading files from /storage/leon/dual_task/data/JawsM15
+ X_days (1152, 693, 84) y_days (1152, 15)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
+ X_B (39, 693, 84) y_B (39,) [0. 1.] ['DualNoGo' 'DPA' 'DualGo']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+ y_labels (249, 16) ['DualGo' 'DualNoGo' 'DPA']
+ X (249, 693, 84) nans 0.0 y (249,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 14s
+ {'model__C': 1000.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 1m 48s
+ df_A (249, 17) scores (249, 7056) labels (249, 16)
+ scores_B (39, 84, 84)
+ df_B (39, 17) scores (39, 7056) labels (39, 16)
+ df (288, 17)
+ Loading files from /storage/leon/dual_task/data/JawsM18
+ X_days (1152, 444, 84) y_days (1152, 15)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
+ X_B (53, 444, 84) y_B (53,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+ y_labels (235, 16) ['DualNoGo' 'DualGo' 'DPA']
+ X (235, 444, 84) nans 0.0 y (235,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 14s
+ {'model__C': 1000.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 1m 17s
+ df_A (235, 17) scores (235, 7056) labels (235, 16)
+ scores_B (53, 84, 84)
+ df_B (53, 17) scores (53, 7056) labels (53, 16)
+ df (288, 17)
+ Loading files from /storage/leon/dual_task/data/JawsM18
+ X_days (1152, 444, 84) y_days (1152, 15)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
+ X_B (5, 444, 84) y_B (5,) [0. 1.] ['DualNoGo' 'DualGo' 'DPA']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+ y_labels (283, 16) ['DPA' 'DualNoGo' 'DualGo']
+ X (283, 444, 84) nans 0.0 y (283,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 14s
+ {'model__C': 0.4641588833612777}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 1m 35s
+ df_A (283, 17) scores (283, 7056) labels (283, 16)
+ scores_B (5, 84, 84)
+ df_B (5, 17) scores (5, 7056) labels (5, 16)
+ df (288, 17)
+ Loading files from /storage/leon/dual_task/data/ChRM04
+ X_days (1152, 668, 84) y_days (1152, 15)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
+ X_B (54, 668, 84) y_B (54,) [0. 1.] ['DPA' 'DualNoGo' 'DualGo']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+ y_labels (234, 16) ['DualNoGo' 'DPA' 'DualGo']
+ X (234, 668, 84) nans 0.0 y (234,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 15s
+ {'model__C': 10.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 1m 39s
+ df_A (234, 17) scores (234, 7056) labels (234, 16)
+ scores_B (54, 84, 84)
+ df_B (54, 17) scores (54, 7056) labels (54, 16)
+ df (288, 17)
+ Loading files from /storage/leon/dual_task/data/ChRM04
+ X_days (1152, 668, 84) y_days (1152, 15)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
+ X_B (24, 668, 84) y_B (24,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+ y_labels (264, 16) ['DualNoGo' 'DualGo' 'DPA']
+ X (264, 668, 84) nans 0.0 y (264,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 14s
+ {'model__C': 1000.0}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 1m 57s
+ df_A (264, 17) scores (264, 7056) labels (264, 16)
+ scores_B (24, 84, 84)
+ df_B (24, 17) scores (24, 7056) labels (24, 16)
+ df (288, 17)
+ Loading files from /storage/leon/dual_task/data/ChRM23
+ X_days (960, 232, 84) y_days (960, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS first LASER 0
+ X_B (90, 232, 84) y_B (90,) [0. 1.] ['DPA' 'DualGo' 'DualNoGo']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
+ y_labels (198, 14) ['DualGo' 'DPA' 'DualNoGo']
+ X (198, 232, 84) nans 0.0 y (198,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 14s
+ {'model__C': 2.154434690031882}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 0m 53s
+ df_A (198, 15) scores (198, 7056) labels (198, 14)
+ scores_B (90, 84, 84)
+ df_B (90, 15) scores (90, 7056) labels (90, 14)
+ df (288, 15)
+ Loading files from /storage/leon/dual_task/data/ChRM23
+ X_days (960, 232, 84) y_days (960, 13)
+ DATA: FEATURES sample TASK all TRIALS incorrect DAYS last LASER 0
+ X_B (47, 232, 84) y_B (47,) [0. 1.] ['DualGo' 'DualNoGo' 'DPA']
+ DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
+ y_labels (145, 14) ['DualNoGo' 'DualGo' 'DPA']
+ X (145, 232, 84) nans 0.0 y (145,) [0. 1.]
+ Fitting hyperparameters on single epoch ...
+ Elapsed (with compilation) = 0h 0m 14s
+ {'model__C': 0.4641588833612777}
+ LeaveOneOut()
+ Computing cv scores ...
+ Elapsed (with compilation) = 0h 0m 41s
+ df_A (145, 15) scores (145, 7056) labels (145, 14)
+ scores_B (47, 84, 84)
+ df_B (47, 15) scores (47, 7056) labels (47, 14)
+ df (192, 15)
+ saving to /storage/leon/dual_task/data/mice/overlaps/df_sample_overlaps_loocv_correct_l1_early_late.pkl
+ #+end_example
 
-    Zp_cv =  []
-    Zs_cv =  []
-    Zps_cv =  []
+#+begin_src ipython
+# options['features'] = 'distractor'
+# options['epochs'] = ['MD']
+# df_dist = decode_axis(model, **options)
 
-    scaler = StandardScaler()
-
-    # remove nans from cv
-    axes = tuple(range(1, X_stim.ndim))
-    mask = np.any(np.isnan(X_stim), axis=axes)
-    X = X_stim[~mask]
-
-    # Iterate over each fold
-    for train_index, test_index in folds.split(X):
-
-            X_train, X_test = X[train_index], X[test_index]
-
-            if IF_SCALE:
-                X_train = np.swapaxes(X_train, 0, 1)
-                train_size = X_train.shape
-                X_train = X_train.reshape((X_train.shape[0], -1)).T
-                X_train = scaler.fit_transform(X_train).T.reshape(train_size)
-                X_train = np.swapaxes(X_train, 0, 1)
-
-                X_test = np.swapaxes(X_test, 0, 1)
-                test_size = X_test.shape
-                X_test = X_test.reshape((X_test.shape[0], -1)).T
-                X_test = scaler.transform(X_test).T.reshape(test_size)
-                X_test = np.swapaxes(X_test, 0, 1)
-
-            X_avg = np.nanmean(X_train, 0)
-            axes2 = tuple(range(1, X_avg.ndim))
-            X_avg -= np.nanmean(X_avg, axis=axes2, keepdims=True) # subtract mean across neurons
-            dpca.fit(X_avg, X_train)
-
-            Dp_cv.append(dpca.D['p'])
-            Ds_cv.append(dpca.D['s'])
-
-            X_avg = np.nanmean(X_test, 0)
-            axes2 = tuple(range(1, X_avg.ndim))
-            X_avg -= np.nanmean(X_avg, axis=axes2, keepdims=True) # subtract mean across neurons
-            X_test_pca = dpca.transform(X_avg)
-
-            # Store the projected test samples
-            Zp_cv.append(X_test_pca['p'])
-            Zs_cv.append(X_test_pca['s'])
-            Zps_cv.append(X_test_pca['ps'])
-
-    dpca.D['p'] = np.nanmean(Dp_cv, axis=0)
-    dpca.D['s'] = np.nanmean(Ds_cv, axis=0)
-
-    Z['p'] = np.nanmean(Zp_cv, axis=0)
-    Z['s'] = np.nanmean(Zs_cv, axis=0)
-    Z['ps'] = np.nanmean(Zps_cv, axis=0)
-
-    return Z, dpca
+# df_dist['performance'] = df_dist['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+# df_dist['pair'] = df_dist['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+# save_overlaps(df_dist, 'dist', dum, **options)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-def reshape_X(X, y, size=32):
-    tasks = ['DPA', 'DualGo', 'DualNoGo']
-    X_stim = np.zeros((3, 2, 2, size*3, X.shape[-2], 84)) * np.nan
+options['cv_B'] = False
+options['trials'] = 'all'
+options['features'] = 'choice'
+options['epochs'] = ['CHOICE']
+df_choice = decode_axis(model, **options)
 
-    for i in range(3):
-        idx = (y.tasks == tasks[i]) & (y.laser == 0)
+df_choice['performance'] = df_choice['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_choice['pair'] = df_choice['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+save_overlaps(df_choice, 'choice', dum, **options)
+#+end_src
 
-        X0 = X[idx]
-        y0 = y[idx]
+#+RESULTS:
+#+begin_example
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 0
+y_labels (288, 14) ['DualGo' 'DPA' 'DualNoGo']
+X (288, 184, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 13s
+{'model__C': 2.154434690031882}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 40s
+scores (288, 84, 84) -0.01467063477553045
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 0
+y_labels (96, 14) ['DPA' 'DualGo' 'DualNoGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 14s
+{'model__C': 1000.0}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 14s
+scores (96, 84, 84) -0.03197574684374853
+df_A (96, 15) scores (96, 7056) labels (96, 14)
+df (96, 15)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 0
+y_labels (288, 14) ['DPA' 'DualNoGo' 'DualGo']
+X (288, 201, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 13s
+{'model__C': 46.41588833612773}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 44s
+scores (288, 84, 84) 0.020515087527196482
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 0
+y_labels (288, 14) ['DualGo' 'DualNoGo' 'DPA']
+X (288, 201, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 14s
+{'model__C': 0.001}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 41s
+scores (288, 84, 84) 0.0
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 0
+y_labels (288, 14) ['DPA' 'DualGo' 'DualNoGo']
+X (288, 423, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 14s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 14s
+scores (288, 84, 84) 0.03641499993003317
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 0
+y_labels (192, 14) ['DualNoGo' 'DualGo' 'DPA']
+X (192, 423, 84) nans 0.0 y (192,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 14s
+{'model__C': 1000.0}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 39s
+scores (192, 84, 84) 0.009274663815247204
+df_A (192, 15) scores (192, 7056) labels (192, 14)
+df (192, 15)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 0
+y_labels (288, 16) ['DualGo' 'DPA' 'DualNoGo']
+X (288, 693, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 15s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 57s
+scores (288, 84, 84) 0.10067911891099471
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 0
+y_labels (288, 16) ['DualGo' 'DualNoGo' 'DPA']
+X (288, 693, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 19s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 59s
+scores (288, 84, 84) 0.0754622490056117
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 0
+y_labels (288, 16) ['DPA' 'DualNoGo' 'DualGo']
+X (288, 444, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 16s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 18s
+scores (288, 84, 84) 0.10127100505032913
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 0
+y_labels (288, 16) ['DPA' 'DualGo' 'DualNoGo']
+X (288, 444, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 15s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 18s
+scores (288, 84, 84) 0.03369867205538436
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 0
+y_labels (288, 16) ['DualNoGo' 'DualGo' 'DPA']
+X (288, 668, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 16s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 51s
+scores (288, 84, 84) 0.0822002601328584
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 0
+y_labels (288, 16) ['DualGo' 'DPA' 'DualNoGo']
+X (288, 668, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 16s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 52s
+scores (288, 84, 84) 0.029120491234991906
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 0
+y_labels (288, 14) ['DualGo' 'DPA' 'DualNoGo']
+X (288, 232, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 16s
+{'model__C': 2.154434690031882}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 51s
+scores (288, 84, 84) 0.037729589758343715
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 0
+y_labels (192, 14) ['DualNoGo' 'DualGo' 'DPA']
+X (192, 232, 84) nans 0.0 y (192,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 16s
+{'model__C': 2.154434690031882}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 23s
+scores (192, 84, 84) 0.05611916838581721
+df_A (192, 15) scores (192, 7056) labels (192, 14)
+df (192, 15)
+saving to /storage/leon/dual_task/data/mice/overlaps/df_choice_overlaps_loocv_correct_l1_early_late.pkl
+#+end_example
 
-        for j in range(2):
-            for k in range(2):
-                dum = X0[(y0.sample_odor==j) & (y0.choice==k)]
-                X_stim[i, j, k, :dum.shape[0]] = dum
+#+begin_src ipython
+options['laser'] = 1
+options['cv_B'] = False
+options['trials'] = 'all'
+options['features'] = 'choice'
+options['epochs'] = ['CHOICE']
+df_choice_on = decode_axis(model, **options)
 
-    X_stim = np.swapaxes(X_stim, 1, 2)
-    X_stim = np.swapaxes(X_stim, 1, 3)
+df_choice_on['performance'] = df_choice_on['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+df_choice_on['pair'] = df_choice_on['response'].apply(lambda x: 0 if (('rej' in x) or ('fa' in x)) else 1)
+save_overlaps(df_choice_on, 'choice', dum + '_laser', **options)
+#+end_src
 
-    print('X_stim', X_stim.shape)
-    # all conditions
-    X_all_cond = np.vstack(X_stim.copy())
-    X_all_cond = np.swapaxes(X_all_cond, 1, 3)
+#+RESULTS:
+#+begin_example
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 1
+y_labels (288, 14) ['DualNoGo' 'DPA' 'DualGo']
+X (288, 184, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 14s
+{'model__C': 46.41588833612773}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 8s
+scores (288, 84, 84) -0.038488639882788604
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 1
+y_labels (96, 14) ['DPA' 'DualNoGo' 'DualGo']
+X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 15s
+{'model__C': 1000.0}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 15s
+scores (96, 84, 84) 0.0035470508030293816
+df_A (96, 15) scores (96, 7056) labels (96, 14)
+df (96, 15)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 1
+y_labels (288, 14) ['DualGo' 'DPA' 'DualNoGo']
+X (288, 201, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 15s
+{'model__C': 2.154434690031882}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 43s
+scores (288, 84, 84) 0.032805221926405455
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 1
+y_labels (288, 14) ['DualNoGo' 'DualGo' 'DPA']
+X (288, 201, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 15s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 43s
+scores (288, 84, 84) 0.04016296228326867
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 1
+y_labels (288, 14) ['DPA' 'DualGo' 'DualNoGo']
+X (288, 423, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 15s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 15s
+scores (288, 84, 84) 0.039290812839399246
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 1
+y_labels (192, 14) ['DualNoGo' 'DualGo' 'DPA']
+X (192, 423, 84) nans 0.0 y (192,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 17s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 40s
+scores (192, 84, 84) 0.007799593855524098
+df_A (192, 15) scores (192, 7056) labels (192, 14)
+df (192, 15)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 1
+y_labels (288, 16) ['DualNoGo' 'DPA' 'DualGo']
+X (288, 693, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 16s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 58s
+scores (288, 84, 84) -0.021291298030511288
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 1
+y_labels (288, 16) ['DualGo' 'DPA' 'DualNoGo']
+X (288, 693, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 16s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 56s
+scores (288, 84, 84) -0.15996661975784887
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 1
+y_labels (288, 16) ['DPA' 'DualNoGo' 'DualGo']
+X (288, 444, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 19s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 23s
+scores (288, 84, 84) 0.012166516058347256
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 1
+y_labels (288, 16) ['DualNoGo' 'DualGo' 'DPA']
+X (288, 444, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 19s
+{'model__C': 2.154434690031882}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 23s
+scores (288, 84, 84) 0.04777660879958477
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 1
+y_labels (288, 16) ['DualNoGo' 'DualGo' 'DPA']
+X (288, 668, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 20s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 56s
+scores (288, 84, 84) 0.06912770694677728
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 1
+y_labels (288, 16) ['DualNoGo' 'DualGo' 'DPA']
+X (288, 668, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 23s
+{'model__C': 0.09999999999999999}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 1m 57s
+scores (288, 84, 84) 0.02881310640975593
+df_A (288, 17) scores (288, 7056) labels (288, 16)
+df (288, 17)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS first LASER 1
+y_labels (288, 14) ['DualNoGo' 'DualGo' 'DPA']
+X (288, 232, 84) nans 0.0 y (288,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 20s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 54s
+scores (288, 84, 84) -0.05433159532094259
+df_A (288, 15) scores (288, 7056) labels (288, 14)
+df (288, 15)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 13)
+DATA: FEATURES choice TASK all TRIALS all DAYS last LASER 1
+y_labels (192, 14) ['DPA' 'DualGo' 'DualNoGo']
+X (192, 232, 84) nans 0.0 y (192,) [0. 1.]
+Fitting hyperparameters on single epoch ...
+Elapsed (with compilation) = 0h 0m 20s
+{'model__C': 0.4641588833612777}
+LeaveOneOut()
+Computing cv scores ...
+Elapsed (with compilation) = 0h 0m 28s
+scores (192, 84, 84) 0.05723690681162451
+df_A (192, 15) scores (192, 7056) labels (192, 14)
+df (192, 15)
+saving to /storage/leon/dual_task/data/mice/overlaps/df_choice_overlaps_loocv_correct_l1_laser_early_late.pkl
+#+end_example
 
-    # condition as a marginalization
-    # X_cond = np.swapaxes(X_stim, 2, 4)
-    X_cond = np.swapaxes(X_stim, 0, 1)
-    X_cond = np.swapaxes(X_cond, 1, 4)
-    X_cond = np.swapaxes(X_cond, 2, 3)
+#+begin_src ipython
+df_choice.laser.unique()
+#+end_src
 
-    print(X_all_cond.shape, X_cond.shape)
+#+RESULTS:
+: array([0.])
 
-    return X_all_cond, X_cond
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Data
+** utils
+
+#+begin_src ipython
+def load_data(marg, dum, **options):
+    if len(options['days'])>3:
+        name = 'df_%s_%s_days' % (marg, dum)
+    elif len(options['days'])==2:
+        name = 'df_%s_%s_early_late' % (marg, dum)
+    else:
+        name = 'df_%s_%s' % (marg, dum)
+
+    if len(options['mice'])==1:
+        df = pkl_load('%s' % name, path="/storage/leon/dual_task/data/%s/overlaps" % options['mouse'])
+    elif len(options['mice'])==2:
+        df = pkl_load('%s' % name, path="/storage/leon/dual_task/data/mice/overlaps_ACC")
+    else:
+        df = pkl_load('%s' % name, path="/storage/leon/dual_task/data/mice/overlaps")#.reset_index()
+
+    return df
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-# crossvalidate the regularization parameter
-def crossval_dpca_reg(X_trials, marginalization='st', lambdas=np.logspace(-3, 3, 10)):
-    """ Crossvalidates (5-fold) the lambda for the PCA model. Better than built-in function as built-in does not crossvalidate.
-    Inputs:         X_trials:           trial-by-trial input vector (trials, neurons, stimuli, times)
-                    marginalization:    marginalization points
-                    lambdas:            range of potential lambdas to test for
+def get_avg_overlaps(df, epoch_list, **options):
 
-    Outputs:        best_lambda:    Best crossvalidated lambda parameter
-                    all_scores:     dictionary of all lambdas with their respective crossvalidation scores
-    """
-    kf = KFold(n_splits=5, shuffle=True, random_state=None)
+        df['overlaps_diag'] = df['overlaps'].apply(lambda x: np.diag(np.array(x).reshape(84, 84)))
 
-    axes = tuple(range(1, X_trials.ndim))
-    mask = np.any(np.isnan(X_trials), axis=axes)
-    X = X_trials[~mask]
+        for epoch2 in epoch_list:
+                options['epochs'] = [epoch2]
+                df['overlaps_diag_%s' % epoch2] = df['overlaps_diag'].apply(lambda x: avg_epochs(np.array(x), **options))
+
+        for epoch in epoch_list:
+                options['epochs'] = [epoch]
+                df['overlaps_%s' % epoch] = df['overlaps'].apply(lambda x: avg_epochs(np.array(x).reshape(84, 84).T, **options))
+
+                for epoch2 in epoch_list:
+                        options['epochs'] = [epoch2]
+                        df['overlaps_%s_%s' % (epoch, epoch2)] = df['overlaps_%s' % epoch].apply(lambda x: avg_epochs(np.array(x), **options))
 
 
-    best_lambda = None
-    best_score = -np.inf
-    all_scores = {}
-    for lam in lambdas:
-        scores = []
-        for train_idx, test_idx in kf.split(X):
-            # Average over training trials
-            X_train_avg = np.nanmean(X[train_idx], axis=0)
+        return df
+#+end_src
 
-            axes = tuple(range(1, X_train_avg.ndim))
-            X_train_avg -= np.nanmean(X_train_avg, axis=axes, keepdims=True) # subtract mean across neurons
+#+RESULTS:
 
-            # Average over testing trials
-            X_test = X[test_idx]  # keep trials separate
-            X_test_avg = np.nanmean(X_test, axis=0)
-            X_test_avg -= np.nanmean(X_test_avg, axis=axes, keepdims=True)
+** run
+*** load
 
-            # Fit dPCA on training average
-            dpca = dPCA.dPCA(labels=marginalization, regularizer=lam)
-            dpca.protect = ['t']
-            Z = dpca.fit_transform(X_train_avg, X[train_idx])
-
-            # Compute reconstruction trial-averages from components of training data
-            X_recons = []
-            for marg in Z:
-                X_marg = dpca.inverse_transform(Z[marg], marg)
-                X_recons.append(X_marg)
-            X_reconstructed = np.sum(X_recons, axis=0)
-
-            # Evaluate reconstruction of the test average
-            mse = np.mean((X_test_avg - X_reconstructed) ** 2)
-            total_var = np.mean(X_test_avg ** 2)
-            explained_ratio = 1 - mse / total_var
-            scores.append(explained_ratio)
-
-        # average out crossvalidations
-        mean_score = np.mean(scores)
-        all_scores[lam] = mean_score
-        if mean_score > best_score:
-            best_score = mean_score
-            best_lambda = lam
-
-    return best_lambda
+#+begin_src ipython
+options['T_WINDOW'] = 0.0
+options = set_options(**options)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-Z_mouse = []
-dpca_mouse = []
-
-imputer = CustomImputer()
-
-for idx_mouse, mouse in enumerate(options['mice']):
-    Z_days = []
-    dpca_days = []
-
-    options['mouse'] = mouse
-    options = set_options(**options)
-    print(mouse)
-
-    for i, day in enumerate(options['days']):
-        X = np.array(X_mouse[idx_mouse][i])
-        X = X.reshape((-1, X.shape[-2], X.shape[-1]))
-
-        y = y_dfs[(y_dfs.mouse==mouse) & (y_dfs.DAY == day)]
-
-        X_stim, X_cond = reshape_X(X, y)
-        # X_stim = imputer.fit_transform(X_stim)
-        X_avg = np.nanmean(X_cond, 0)
-
-        print('X_stim', X_stim.shape, 'X_cond', X_cond.shape, 'X_avg', X_avg.shape)
-
-        reg = crossval_dpca_reg(X_cond, marginalization='psct', lambdas=np.logspace(-3, 3, 10))
-
-        dpca = dPCA.dPCA(labels='psct', n_components=1, regularizer=reg)
-        dpca.protect = ['t']
-
-        axes = tuple(range(1, X_avg.ndim))
-        X_avg -= np.nanmean(X_avg, axis=axes, keepdims=True) # subtract mean across neurons
-
-        Z = dpca.fit_transform(X_avg, X_cond)
-
-        # Z = []
-        # for i in range(3):
-        #     Zi = dpca.transform(np.nanmean(X_cond[i], 0))
-        #     Z.append(Zi)
-
-        # folds = KFold(n_splits=5)
-        folds = RepeatedKFold(n_splits=5, n_repeats=10)
-        # folds = LeaveOneOut() # too long
-
-        Z, dpca = crossval_dpca(X_cond, Z, dpca, folds, IF_SCALE=0)
-
-        Z_days.append(Z)
-        dpca_days.append(dpca)
-
-    Z_mouse.append(Z_days)
-    dpca_mouse.append(dpca_days)
+df_sample = load_data('sample', dum, **options)
+df_sample = get_avg_overlaps(df_sample, ['ED', 'MD', 'LD', 'TEST'], **options)
 #+end_src
 
 #+RESULTS:
-: JawsM15
-: X_stim (3, 96, 2, 2, 693, 84)
-: (288, 693, 2, 2, 84) (96, 693, 2, 2, 3, 84)
-: X_stim (288, 693, 2, 2, 84) X_cond (96, 693, 2, 2, 3, 84) X_avg (693, 2, 2, 3, 84)
-: X_stim (3, 96, 2, 2, 693, 84)
-: (288, 693, 2, 2, 84) (96, 693, 2, 2, 3, 84)
-: X_stim (288, 693, 2, 2, 84) X_cond (96, 693, 2, 2, 3, 84) X_avg (693, 2, 2, 3, 84)
+: loading from /storage/leon/dual_task/data/mice/overlaps/df_sample_overlaps_loocv_correct_l1_early_late.pkl
 
 #+begin_src ipython
-Z_mouse = np.array(Z_mouse)
-dpca_mouse = np.array(dpca_mouse)
-print(Z_mouse.shape, dpca_mouse.shape)
+# df_dist = load_data('dist', dum, **options)
+#df_dist = get_avg_overlaps(df_dist, ['MD', 'CUE', 'CHOICE'], **options)
 #+end_src
 
 #+RESULTS:
-: (1, 2) (1, 2)
 
 #+begin_src ipython
-pkl_save(Z_mouse, 'Z_mouse_%s' % name, path="/storage/leon/dual_task/data/mice/dPCA")
-pkl_save(dpca_mouse, 'dPCA_mouse_%s' % name, path="/storage/leon/dual_task/data/mice/dPCA")
+df_choice = load_data('choice', dum, **options)
+df_choice = get_avg_overlaps(df_choice,  ['ED', 'LD', 'TEST', 'CHOICE'], **options)
 #+end_src
 
 #+RESULTS:
-
-*** plots
+: loading from /storage/leon/dual_task/data/mice/overlaps/df_choice_overlaps_loocv_correct_l1_early_late.pkl
 
 #+begin_src ipython
-idx_mouse = 0
-print(options['mice'][idx_mouse])
-Z = Z_mouse[idx_mouse]
-print(Z.shape)
-dpca = dpca_mouse[idx_mouse]
-print(Z[0]['t'].shape)
-task = 0
+df_choice_on = load_data('choice', 'overlaps_loocv_correct_elasticnet_laser', **options)
+df_choice_on = get_avg_overlaps(df_choice_on,  ['ED', 'LD', 'TEST', 'CHOICE', 'RWD2'], **options)
 #+end_src
 
 #+RESULTS:
-: JawsM15
-: (2,)
-: (1, 2, 2, 3, 84)
+: loading from /storage/leon/dual_task/data/mice/overlaps/df_choice_overlaps_loocv_correct_elasticnet_laser_early_late.pkl
+
+*** overlaps
+
+#+begin_src ipython
+def plot_overlaps_mean(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
+    if day=='all':
+        df_ = df.copy()
+    else:
+        df_ = df[df.day == day].copy()
+
+    if colors is None:
+        colors = ['r', 'b', 'g']
+
+    if if_proba:
+        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    else:
+        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+
+        if cis is not None:
+            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
+            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
+
+    time_points = np.linspace(0, 14, size)
+
+    for i, task in enumerate(mean_overlaps.index):
+        dum = np.mean(mean_overlaps[task][:14])
+        if label is None:
+            ax.plot(time_points, mean_overlaps[task]-dum, label=f"{task}", color=colors[i], ls=ls, **kwargs)
+            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+        else:
+            ax.plot(time_points, mean_overlaps[task]-dum, label=label, color=colors[i], ls=ls, **kwargs)
+
+        if cis is not None:
+            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
+
+    ax.set_xlabel('Time (s)')
+    # ax.set_ylabel('%s Overlap' % title)
+    add_vlines(ax)
+    ax.axhline(y0, ls='--', color='k')
+    ax.legend(fontsize=10)
+
+def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
+    stacked = np.stack(x)
+    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# Jaws_mice = ['JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+
+df = df_sample.copy()
+df1 = df_choice.copy()
+
+print(df.laser.unique(), df1.laser.unique())
+
+df = df[df.mouse.isin(Jaws_mice)]
+df1 = df1[df1.mouse.isin(Jaws_mice)]
+
+period = 'first'
+
+epoch= 'LD'
+epoch1= 'CHOICE'
+
+# df = df[df.laser==1]
+# df1 = df1[df1.laser==1]
+
+df = df[df.performance==1]
+df1 = df1[df1.performance==1]
+
+# df = df[df.mouse=='JawsM15']
+# df1 = df1[df1.mouse=='JawsM15']
+
+ls = ['-', '--', '--', '-']
+colors = ['r', 'b', 'g']
+labels = ['AC', 'BC', 'AD', 'BD']
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+#+end_src
+
+#+RESULTS:
+: [0.] [0.]
 
  #+begin_src ipython
-from src.common.plot_utils import add_vlines
+n_ = len(options['days'])+1
+fig, ax = plt.subplots(nrows=3, ncols=n_, figsize=(0.9*n_*width, 0.9*3*height))
 
-def plot_dPCA(Z, key, ax, task=0):
-    size = Z[key].shape[0]
-    xtime = np.linspace(0, 14, Z[key].shape[-1])
+for k in range(3):
+    df_ = df[df.tasks==tasks[k]]
+    df1_ = df1[df1.tasks==tasks[k]]
 
-    colors=['b', 'b', 'r', 'r']
-    labels = ['AD', 'AC', 'BC', 'BD']
-    ls = ['--', '-', '--', '-']
+    for j in range(2):
+        for i in range(2):
+            df__ = df_[(df_.sample_odor==i) & (df_.test_odor==j)]
+            df1__ = df1_[(df1_.sample_odor==i) & (df1_.test_odor==j)]
 
-    if key=='s':
-        name = 'Sample'
-    if key=='p':
-        name = 'Pair'
-    if key=='t':
-        name = 'Time'
+            plot_overlaps(df__, period, epoch, ax[k][0], y0=0., if_proba=0, label=labels[2*i+j],
+                          cis=None, ls=ls[2*i+j], colors=[colors[k]], alpha=(i+1)/2)
+            plot_overlaps(df1__, period, epoch1, ax[k][1], y0=0., if_proba=0, label=labels[2*i+j],
+                          cis=None, ls=ls[2*i+j], colors=[colors[k]], alpha=(i+1)/2)
 
-    # fig, ax = plt.subplots(1, size, figsize=[size * width, height])
-    if size==1:
-        ax = [ax]
+            overlaps = df__[df__.day==period].groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
+            overlaps1 = df1__[df1__.day==period].groupby('tasks')['overlaps_%s' % epoch1].apply(lambda x: np.nanmean(np.stack(x), axis=0))
 
-    for idx in range(2):
-        for i in range(Z[key].shape[2]):
-            for j in range(Z[key].shape[0]):
-                ax[j].plot(xtime, Z[key][j, i, idx, task].T, ls=ls[i], color=colors[i+ 2*idx], label=labels[i])
-                add_vlines(ax=ax[j])
-                ax[j].set_xlabel('Time (s)')
-                ax[j].set_ylabel('%s dPC %d' % (name, j+1))
+            ax[k][2].plot(overlaps[0][:65]-np.mean(overlaps[0][:14]), overlaps1[0][:65]-np.mean(overlaps1[0][:14]), label=labels[2*i+j],
+                          ls=ls[2*i+j], color=colors[k], alpha=(i+1)/2)
 
+            # ax[k][2].set_aspect('equal')
 
-            if size>1:
-                ax[2].plot(Z[key][0, i, idx], Z[key][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
-                ax[2].set_xlabel('%s dPC 1' % name)
-                ax[2].set_ylabel('%s dPC 2' % name)
+        ax[k][0].set_xlabel('Time (s)')
+        ax[k][0].set_ylabel('Sample Overlap')
 
-    ax[0].legend(fontsize=10)
-    # plt.show()
-#+end_src
+        ax[k][1].set_xlabel('Time (s)')
+        ax[k][1].set_ylabel('Choice Overlap')
 
-#+RESULTS:
+        ax[k][2].set_xlabel('Sample Overlap')
+        ax[k][2].set_ylabel('Choice Overlap')
 
-#+begin_src ipython
-fig, ax = plt.subplots(1, 3, figsize=[3 * width, height])
+ax[0][-1].legend(fontsize=10)
 
-plot_dPCA(Z[0], 's', ax[0] , task)
-plot_dPCA(Z[0], 'p', ax[1], task)
-
-ls = ['--', '-', '--', '-']
-labels = ['AD', 'AC', 'BC', 'BD']
-colors=['b', 'b', 'r', 'r']
-
-for i in range(2):
-    for idx in range(2):
-        ax[2].plot(Z[0]['s'][0, i, idx, task].T, Z[0]['p'][0, i, idx, task].T, ls=ls[i], label=labels[i], color=colors[i+2*idx])
-#+end_src
-
-#+RESULTS:
-[[./figures/dpca/figure_21.png]]
-
-#+begin_src ipython
-fig, ax = plt.subplots(1, 3, figsize=[3 * width, height])
-
-plot_dPCA(Z[1], 's', ax[0], task)
-plot_dPCA(Z[1], 'p', ax[1], task)
-
-for i in range(2):
-    for idx in range(2):
-        ax[2].plot(Z[1]['s'][0, i, idx, task].T, Z[1]['p'][0, i, idx, task].T, ls=ls[i], label=labels[i], color=colors[i+2*idx])
-#+end_src
-
-#+RESULTS:
-[[./figures/dpca/figure_22.png]]
-
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-*** Energy
-
-#+begin_src ipython
-def remove_close_entries_with_indices(nums, threshold, modulus):
-    # Create a list of tuples (value, index)
-    indexed_nums = list(enumerate(nums))
-
-    # Sort based on the values but keep the original indices
-    indexed_nums.sort(key=lambda x: x[1])
-
-    # Function to calculate circular distance
-    def circular_distance(x, y, mod):
-        return min((x - y) % mod, (y - x) % mod)
-
-    filtered_indices = []
-    filtered_nums = []
-
-    for idx, num in indexed_nums:
-        if not filtered_nums:
-            filtered_nums.append(num)
-            filtered_indices.append(idx)
-        elif all(circular_distance(num, existing_num, modulus) >= threshold for existing_num in filtered_nums):
-            filtered_nums.append(num)
-            filtered_indices.append(idx)
-
-    return filtered_indices
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import numpy as np
-from scipy.optimize import differential_evolution
-from scipy.interpolate import interp1d
-import matplotlib.pyplot as plt
-
-def find_multiple_minima_from_values(x_vals, y_vals, num_runs=100, tol=0.1, popsize=2, maxiter=1000, min_distance=35):
-
-    energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
-    bounds = [(x_vals.min(), x_vals.max())]
-    results = []
-
-    result_old = 999
-    for _ in range(num_runs):
-        result = differential_evolution(energy_function, bounds, strategy='rand1bin',
-                                        maxiter=maxiter, popsize=popsize, tol=tol,
-                                        seed=np.random.randint(0, 10000))
-
-        results.append((result.x[0], result.fun))
-
-    results = np.array(results)
-    indices = remove_close_entries_with_indices(results[:, 0], min_distance, 360)
-    results = results[indices]
-
-    return results
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-from src.attractor.landscape import EnergyLandscape
-energy = EnergyLandscape(IF_HMM=0)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-num_bins = 64
-window = 10
-bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
-if len(options['days'])>3:
-     days = np.arange(1, 7)
-else:
-     days = options['days']
-
-print(days)
-#+end_src
-
-#+RESULTS:
-: ['first', 'last']
-
-#+begin_src ipython
-index = []
-for dpca in dpca_mouse[idx_mouse]:
-    print(dpca.D['s'].shape)
-    theta = get_theta(dpca.D['s'].T[0], dpca.D['p'].T[0], IF_NORM=1, GM=1)
-
-    index.append(np.argsort(theta, -1))
-index = np.array(index)
-print(index.shape)
-#+end_src
-
-#+RESULTS:
-: (693, 1)
-: (693, 1)
-: (2, 693)
-
-#+begin_src ipython
-epoch = np.concatenate((options['bins_BL'], options['bins_STIM'], options['bins_ED']))
-energy_mouse, ci_mouse = [], []
-
-for idx, mouse in enumerate([1]):
-    X_list = X_mouse[idx_mouse]
-
-    options['mouse'] = options['mice'][idx_mouse]
-    options = set_options(**options)
-
-    energy_day = []
-    ci_day = []
-
-    for i, day in enumerate(options['days']):
-
-        X = np.vstack(X_list[i])
-        X = X [:, index[i]]
-        X = X[..., options['bins_ED']]
-        # X = X[..., epoch]
-
-        # X = X_list[i][0]
-        # X = X [:, index[i]]
-        # X = X[..., options['bins_DELAY']]
-        # X = X[..., epoch]
-
-        # print(X.shape)
-        _, phi = decode_bump(X, axis=1)
-
-        landscape = energy.fit(phi, bins, window=window)
-        energy_day.append(landscape)
-
-        ci = None
-        ci_day.append(ci)
-
-    energy_mouse.append(energy_day)
-    ci_mouse.append(ci_day)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-cmap = plt.get_cmap('Blues')
-print(options['n_days'])
-colors = [cmap((i+1)/ options['n_days']) for i in range(options['n_days']+1)]
-#+end_src
-
-#+RESULTS:
-: 6
-
-#+begin_src ipython
-from scipy.signal import find_peaks, find_peaks_cwt
-
-minima_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
-
-for idx, mouse in enumerate([1]):
-    energy_day = energy_mouse[0]
-
-    options['mouse'] = options['mice'][idx_mouse]
-    options = set_options(**options)
-
-    for i, day in enumerate(options['days']):
-        locations = np.linspace(0, 360, energy_day[i].shape[0])
-
-        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))
-        minimas = find_multiple_minima_from_values(locations, energy_day[i])[:, 0]
-        # print(minimas)
-
-        if len(minimas)<2:
-            minimas = [minimas[0], minimas[0]]
-
-        minima_mouse[idx][i] = minimas[:2]
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-y_loc = []
-for idx, mouse in enumerate(options['mice']):
-     id = ~np.isnan(minima_mouse[idx].T)
-     minima = minima_mouse[idx].T
-
-     # y1 = locations[minima[0][id[0]].astype('int')] * np.pi / 180.0
-     # y2 = locations[minima[1][id[1]].astype('int')] * np.pi / 180.0
-
-     y1 = minima[0][id[0]].astype('int') * np.pi / 180.0
-     y2 = minima[1][id[1]].astype('int') * np.pi / 180.0
-
-     y_mean = (np.sin(y1)+np.sin(y2)) / 2
-
-     while len(y_mean)<len(days):
-          y_mean = np.append(y_mean, np.nan)
-
-     y_loc.append(y_mean)
-
-y_loc = np.array(y_loc)
-
-plt.plot(np.arange(1, len(days)+1), np.nanmean(y_loc, 0), '-o')
-plt.plot(np.arange(1, len(days)+1), y_loc.T, '-', alpha=.2)
-
-# plt.xticks(np.arange(1, 7))
-plt.axhline(0, ls='--', color='k')
-plt.xlabel('Day')
-plt.ylabel('Y-loc (a.u.)')
+plt.savefig('figures/icrm/%s_overlaps_%s_%s.svg' % (period, epoch, epoch1), dpi=300)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/dpca/figure_32.png]]
+[[./figures/overlaps/figure_37.png]]
 
 #+begin_src ipython
-from scipy.signal import find_peaks
-fig, ax = plt.subplots(1, 2, figsize= [2*width, 1*width * golden_ratio])
-ax_flat = ax.flatten()
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+palette = sns.diverging_palette(360, 0, as_cmap=True)
+palette = 'bwr'
+# palette='jet'
 
-minima_mouse = np.zeros((9, 6, 2), dtype='int') * np.nan
+def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title='', palette=palette):
+    df_ = df[df.day == day].copy()
+    colors = ['r', 'b', 'g']
+    time_points = np.linspace(0, 14, 84)
 
-for idx, mouse in enumerate([1]):
-    peaks_list, minimas_list = [], []
-    energy_day = energy_mouse[idx]
+    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+    # fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
 
-    # options['mouse'] = mouse
-    options = set_options(**options)
+    for i, task in enumerate(df_.tasks.unique()):
+        df_task = df_[df_.tasks==task]
+        overlaps = df_task
+        overlaps = np.array(df_task['overlaps'].tolist())
 
-    ax = ax_flat[idx]
+        mean_o = np.nanmean(overlaps, axis=0)
 
-    for i, day in enumerate(options['days']):
-        locations = np.linspace(0, 360, energy_day[i].shape[0])
-        ax.plot(locations, energy_day[i] * 100 , color=colors[i])
-        ax.set_title(mouse)
+        im = plot_mat(mean_o.reshape(84, 84), ax[i], vmin, vmax, palette)
 
-        # peaks = find_peaks_cwt(energy_day[i], widths=np.arange(1, 10))[:2]
-        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))[:2]
+    cax = inset_axes(ax[-1], width="5%", height="100%", loc='center right',
+                     bbox_to_anchor=(0.12, 0, 1, 1), bbox_transform=ax[-1].transAxes, borderpad=0)
 
-        # peaks,  _ = find_peaks(energy_day[i], width=8)[:2]
-        # minimas, _ = find_peaks(-energy_day[i], width=8)[:2]
+    # Add colorbar to the new axis
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.set_label("%s Overlaps" % title)
 
-        # ax.plot(locations[peaks], energy_day[i][peaks] * 100, '^', color=colors[i])
-        # ax.plot(locations[minimas], energy_day[i][minimas] * 100, 'o', color=colors[i])
-
-        minimas = find_multiple_minima_from_values(locations, energy_day[i])
-        ax.plot(minimas[:, 0], minimas[:, 1] * 100, 'o', color=colors[i])
-
-        minima_mouse[idx][i] = minimas[:2, 0]
-
-        # if len(peaks)<2:
-        #     peaks =[peaks[0], peaks[0]]
-        # if len(minimas)<2:
-        #     minimas = [minimas[0], minimas[0]]
-
-        # peaks_list.append(peaks[:1])
-        # minimas_list.append(minimas[:1])
-
-        # print(peaks, minimas)
-
-        ax.set_xlabel('Pref Loc (°)')
-        ax.set_ylabel('Energy')
-        # ax.set_ylim([0, 3])
-#+end_src
-
-#+RESULTS:
-[[./figures/dpca/figure_33.png]]
-
-#+begin_src ipython
+    plt.subplots_adjust(right=0.85)  # Adjust figure to allocate space
 
 #+end_src
 
 #+RESULTS:
 
-** Stimuli pair time
-*** reshape
+#+begin_src ipython
+plot_overlaps_mat(df1[df1.pair==1], 'last', vmin=-1, vmax=1, title='Choice')
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_39.png]]
 
 #+begin_src ipython
-DURATION = 14
+plot_overlaps_mat(df[df.sample_odor==1], 'last', vmin=-.5, vmax=.5, title='Sample')
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_40.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** Correlations off on
+
+#+begin_src ipython
+from scipy.stats import pearsonr
+name = 'overlaps_CHOICE_LD'
+
+# df = df_choice[['mouse', 'performance', 'odr_perf', name, 'laser', 'day', 'sample_odor']]
+df = df_choice[['mouse', 'performance', 'odr_perf', name, 'laser', 'sample_odor', 'day', 'tasks']]
+laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18'] #, 'ChRM04', 'ChRM23']
+# laser_mice = ['JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+
+df = df[df.mouse.isin(laser_mice)]
+# df = df[df.tasks!='DualGo']
+df = df.drop(columns='tasks')
+# df = df[df.tasks=='DPA'].drop(columns='tasks')
+
+# df2 = df_choice_on[['mouse', 'performance', 'odr_perf', name, 'laser', 'day', 'sample_odor']]
+df2 = df_choice_on[['mouse', 'performance', 'odr_perf', name, 'laser', 'sample_odor', 'day', 'tasks']]
+# df2 = df2[df2.mouse.isin(laser_mice)]
+# df2 = df2[df2.tasks!='DualGo']
+df2 = df2.drop(columns='tasks')
+# df2 = df2[df2.tasks=='DPA'].drop(columns='tasks')
+
+df_off = df[df.laser==0].groupby(['mouse', 'day', 'sample_odor']).mean().reset_index()
+df_on = df2[df2.laser==1].groupby(['mouse', 'day', 'sample_odor']).mean().reset_index()
+
+# df_off = df[df.laser==0].groupby(['mouse', 'day']).mean().reset_index()
+# df_on = df2[df2.laser==1].groupby(['mouse', 'day']).mean().reset_index()
+
+delta_df = df_off.drop(columns=[name, 'performance', 'odr_perf', 'laser'])
+
+delta_df['overlaps_off'] = df_off[name] #  * (2 * df_off['sample_odor'] -1)
+delta_df['overlaps_on'] = df_on[name]  # * (2* df_on['sample_odor'] -1)
+
+delta_df['delta_overlaps'] = delta_df['overlaps_on'] - delta_df['overlaps_off']
+
+delta_df['perf_off'] = df_off['performance']
+delta_df['perf_on'] = df_on['performance']
+
+delta_df['odr_perf_off'] = df_off['odr_perf']
+delta_df['odr_perf_on'] = df_on['odr_perf']
+
+delta_df['delta_perf'] = delta_df['perf_on'] - delta_df['perf_off']
+delta_df['delta_odr_perf'] = delta_df['odr_perf_on'] - delta_df['odr_perf_off']
+
+print(delta_df.head())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+     mouse    day  sample_odor  overlaps_off  overlaps_on  delta_overlaps  \
+0  JawsM01  first          0.0     -0.092162     0.192288        0.284451
+1  JawsM01  first          1.0     -0.047120     0.122227        0.169347
+2  JawsM01   last          0.0     -0.082076     0.350631        0.432708
+3  JawsM01   last          1.0     -0.097937     0.254306        0.352243
+4  JawsM06  first          0.0      0.041179     0.091499        0.050320
+
+   perf_off   perf_on  odr_perf_off  odr_perf_on  delta_perf  delta_odr_perf
+0  0.701389  0.812500      0.958333     0.927083    0.111111       -0.031250
+1  0.798611  0.805556      0.937500     0.937500    0.006944        0.000000
+2  0.958333  0.923611      0.968750     0.812500   -0.034722       -0.156250
+3  0.937500  0.951389      1.000000     0.833333    0.013889       -0.166667
+4  0.590278  0.618056      0.843750     0.656250    0.027778       -0.187500
+#+end_example
+
+#+begin_src ipython
+df_day = df_off.copy()
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2 * width, height))
+
+delta_overlaps = df_off[df_off.day=='first'][name].to_numpy() - df_off[df_off.day=='last'][name].to_numpy()
+delta_perf = df_off[df_off.day=='first']['performance'].to_numpy() - df_off[df_off.day=='last']['performance'].to_numpy()
+
+# corr, p_value = pearsonr(delta_perf, delta_overlaps)
+#ax[0].set_title("Corr: %.2f, p-value: %.3f" % (corr, p_value))
+
+ax[0].scatter(delta_perf, delta_overlaps)
+ax[0].set_xlabel('$\\Delta$ DPA Perf first-last')
+ax[0].set_ylabel('$\\Delta$ Overlaps first-last')
+
+delta_odr_perf = df_off[df_off.day=='first']['odr_perf'].to_numpy() - df_off[df_off.day=='last']['odr_perf'].to_numpy()
+
+corr, p_value = pearsonr(delta_odr_perf, delta_overlaps)
+ax[1].set_title("Corr: %.2f, p-value: %.3f" % (corr, p_value))
+
+ax[1].scatter(delta_odr_perf, delta_overlaps)
+ax[1].set_xlabel('$\\Delta$ GoNoGo Perf first-last')
+ax[1].set_ylabel('$\\Delta$ Overlaps first-last')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_43.png]]
+
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from scipy.stats import pearsonr
+
+# Set a clean seaborn style and context for better aesthetics
+# sns.set(style="whitegrid", context="talk")
+
+# Create the figure and axis with an appropriate size
+fig, ax = plt.subplots()
+
+# Make a copy of your data frame (modify filters as needed)
+df_ = delta_df.copy()
+# df_ = df_[df_.mouse!='ChRM04']
+# df_= delta_df.copy()[delta_df.day=='last']
+
+# Plot the regression line with a confidence interval using regplot
+sns.regplot(data=df_, x='delta_overlaps', y='delta_perf', scatter=True,
+            fit_reg=True, ci=95, ax=ax, marker='o',
+            scatter_kws={'s': 0, 'alpha': 0.7},
+            line_kws={'color': 'k', 'lw': 2, 'ls':'--'})
+
+# Overlay a scatterplot that distinguishes data points by 'mouse'
+sns.scatterplot(data=df_, x='delta_overlaps', y='delta_perf',
+                hue='mouse', style=None, s=80, alpha=0.8, ax=ax,
+                legend=None)
+
+# Compute Pearson correlation statistics
+corr, p_value = pearsonr(df_['delta_overlaps'], df_['delta_perf'])
+
+# Annotate the computed correlation statistics on the plot
+annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
+ax.annotate(annotation, xy=(.65, 0.95), xycoords='axes fraction', fontsize=14,
+            backgroundcolor='white', verticalalignment='top', horizontalalignment='left',
+            bbox=dict(edgecolor=None, facecolor='white', boxstyle='round'))
+
+# Set title and axis labels using LaTeX formatting for mathematical symbols
+# ax.set_title("Correlation of Changes in Overlap and Performance", fontsize=18)
+ax.set_xlabel("$\\Delta$ Choice Overlap On-Off")
+ax.set_ylabel("$\\Delta$ DPA Perf On-Off")
+
+# Adjust tick parameters for better readability
+# ax.tick_params(labelsize=14)
+
+# Optionally, adjust or add a legend (if necessary)
+# ax.legend(title="Mouse", fontsize=12, title_fontsize=12, loc='best')
+
+# Optimize layout and save the final figure
+plt.tight_layout()
+plt.savefig('dpa_corr.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_44.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from scipy.stats import pearsonr
+
+# Set a clean seaborn style and context for better aesthetics
+# sns.set(style="whitegrid", context="talk")
+
+# Create the figure and axis with an appropriate size
+fig, ax = plt.subplots()
+
+# Make a copy of your data frame (modify filters as needed)
+df_ = delta_df.copy()
+# df_ = df_[df_.mouse!='ChRM04']
+# df_= delta_df.copy()[delta_df.day=='last']
+
+# Plot the regression line with a confidence interval using regplot
+sns.regplot(data=df_, x='delta_overlaps', y='delta_odr_perf', scatter=True,
+            fit_reg=True, ci=95, ax=ax,
+            scatter_kws={'s': 0, 'alpha': 0.7},
+            line_kws={'color': 'k', 'lw': 2, 'ls':'--'})
+
+# Overlay a scatterplot that distinguishes data points by 'mouse'
+sns.scatterplot(data=df_, x='delta_overlaps', y='delta_odr_perf',
+                hue='mouse', style=None, s=80, alpha=0.8, ax=ax,
+                legend=None)
+
+# Compute Pearson correlation statistics
+corr, p_value = pearsonr(df_['delta_overlaps'], df_['delta_odr_perf'])
+
+# Annotate the computed correlation statistics on the plot
+annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
+ax.annotate(annotation, xy=(.65, 0.95), xycoords='axes fraction', fontsize=14,
+            backgroundcolor='white', verticalalignment='top', horizontalalignment='left',
+            bbox=dict(edgecolor=None, facecolor='white', boxstyle='round'))
+
+# Set title and axis labels using LaTeX formatting for mathematical symbols
+# ax.set_title("Correlation of Changes in Overlap and Performance", fontsize=18)
+ax.set_xlabel("$\\Delta$ Choice Overlap On-Off")
+ax.set_ylabel("$\\Delta$ GoNoGo Perf On-Off")
+
+# Adjust tick parameters for better readability
+# ax.tick_params(labelsize=14)
+
+# Optionally, adjust or add a legend (if necessary)
+# ax.legend(title="Mouse", fontsize=12, title_fontsize=12, loc='best')
+
+# Optimize layout and save the final figure
+plt.tight_layout()
+plt.savefig('gng_corr.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_45.png]]
+
+*** flow
+
+#+begin_src ipython
+import numpy as np
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+from scipy.spatial import cKDTree
+
+def create_mesh(x, y, size=100, sigma=1, interp_method='linear', mask_radius=10):
+    """
+    x, y: arrays of shape (n_traj, n_points)
+    size: grid size along each axis
+    sigma: Gaussian smoothing for velocities (0=none)
+    interp_method: 'linear', 'cubic', or 'nearest'
+    mask_radius: mask out grid points farther than this multiple of median point spacing
+
+    Returns: xi, yi, ui, vi (masked arrays)
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    # Flatten for easier handling
+    x_flat = x.flatten()
+    y_flat = y.flatten()
+
+    # Compute dense grid
+    x_min, x_max = np.min(x_flat)-1, np.max(x_flat)+1
+    y_min, y_max = np.min(y_flat)-1, np.max(y_flat)+1
+
+    xi, yi = np.meshgrid(np.linspace(x_min, x_max, size),
+                         np.linspace(y_min, y_max, size))
+
+    # Compute velocities (finite differences along time axis)
+    dx = np.gradient(x, axis=1)
+    dy = np.gradient(y, axis=1)
+
+    # Optional smoothing of velocities
+    if sigma > 0:
+        dx = gaussian_filter(dx, sigma=sigma)
+        dy = gaussian_filter(dy, sigma=sigma)
+
+    dx_flat = dx.flatten()
+    dy_flat = dy.flatten()
+
+    # Prepare for griddata interpolation
+    points = np.vstack((x_flat, y_flat)).T
+
+    # Interpolate velocity components onto grid
+    ui = griddata(points, dx_flat, (xi, yi), method=interp_method, fill_value=np.nan)
+    vi = griddata(points, dy_flat, (xi, yi), method=interp_method, fill_value=np.nan)
+
+    # Find where it failed
+    mask = np.isnan(ui)
+
+    # Interpolate only those points with 'nearest'
+    if np.any(mask):
+        ui_nearest = griddata(points, dx_flat, (xi, yi), method='nearest')
+        vi_nearest = griddata(points, dy_flat, (xi, yi), method='nearest')
+        ui[mask] = ui_nearest[mask]
+        vi[mask] = vi_nearest[mask]
+
+    # # Mask far-from-data regions (optional)
+    # tree = cKDTree(points)
+    # dists, _ = tree.query(np.column_stack([xi.flatten(), yi.flatten()]), k=1)
+    # dists = dists.reshape(xi.shape)
+    # median_spacing = np.median(np.sqrt(np.diff(x_flat)**2 + np.diff(y_flat)**2))
+    # mask = dists > (mask_radius * median_spacing)
+    # ui = np.ma.masked_where(mask, ui)
+    # vi = np.ma.masked_where(mask, vi)
+
+    return xi, yi, ui, vi
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-from sklearn.model_selection import KFold, LeaveOneOut
+import matplotlib as mpl
 
-def crossval_dpca(X_stim, Z, dpca, folds):
+def plot_field(x, y, ax, window, IF_FP=0, task=0):
+    # x = overlaps[:, window:, 0]
+    # y = overlaps[:, window:, 1]
 
-    Dp_cv = []
-    Ds_cv = []
+    xi, yi, ui, vi = create_mesh(x, y, size=100)
+    speed = np.sqrt(ui**2+vi**2)
+    speed = (speed - np.mean(speed)) / (np.std(speed) + 1e-6)
 
-    Zp_cv =  []
-    Zs_cv =  []
-    Zps_cv =  []
+    # center, center_ = get_fp(overlaps, window, task, GRID_TEST=0)
+    # ax.plot(center.T[0], center.T[1], 'o', color='k', ms=14)
 
-    # Iterate over each fold
-    for train_index, test_index in folds.split(X_stim):
-        X_train, X_test = X_stim[train_index], X_stim[test_index]
+    # vmin, vmax = np.nanpercentile(speed, [1, 99])
+    norm = mpl.colors.Normalize(vmin=-1.5, vmax=1.5)
+
+    heatmap = ax.streamplot(xi, yi, ui, vi, density=0.75, arrowsize=2, norm=norm, color='w')
+    heatmap = ax.pcolormesh(xi, yi, speed, cmap='coolwarm', shading='gouraud', norm=norm)
+    # heatmap = ax.imshow(speed, extent=(yi.min(), yi.max(), yi.min(), yi.max()), cmap='jet', norm=norm, origin='lower', aspect='auto')
+
+    # ax.set_aspect('equal')
+    # ax.set_xlim([yi.min(), yi.max()])
+    # ax.set_ylim([yi.min(), yi.max()])
+
+    # cbar = plt.colorbar(heatmap, ax=ax)
+    # cbar.set_label('Norm. Speed')
+
+    ax.set_xlabel('A/B Overlap')
+    ax.set_ylabel('Choice Overlap')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+df = df_sample.copy()
+df = df[df.day=='last']
+df = df[df.mouse=='JawsM15']
+epoch = 'diag'
+x = df.groupby('tasks')['overlaps_%s' % epoch].agg(list).to_numpy()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+df = df_choice.copy()
+df = df[df.day=='last']
+df = df[df.mouse=='JawsM15']
+df = df[df.laser==0]
+epoch = 'diag'
+y = df.groupby('tasks')['overlaps_%s' % epoch].agg(list).to_numpy()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(np.array(x[0]).shape,  np.array(y[0]).shape)
+#+end_src
+
+#+RESULTS:
+: (96, 84) (192, 84)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(width, width))
+plot_field(np.array(x[0]), np.array(y[0])[:96], ax, 0)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./figures/overlaps/figure_38.png]]
+
+*** glm
+
+#+begin_src ipython
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+
+df = pd.concat((df_choice, df_choice_on))
+df = df[df.day=='last']
+
+formula = 'performance ~ overlaps_CHOICE_LD * laser'
+
+model = smf.glm(formula=formula, data=df, family=sm.families.Binomial())
+results = model.fit()
+
+print(results.summary())
+#+end_src
+
+#+RESULTS:
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:            performance   No. Observations:                 8064
+Model:                            GLM   Df Residuals:                     8060
+Model Family:                Binomial   Df Model:                            3
+Link Function:                  Logit   Scale:                          1.0000
+Method:                          IRLS   Log-Likelihood:                -3226.2
+Date:                Tue, 17 Jun 2025   Deviance:                       6452.4
+Time:                        00:59:34   Pearson chi2:                 8.07e+03
+No. Iterations:                     5   Pseudo R-squ. (CS):           0.003913
+Covariance Type:            nonrobust
+============================================================================================
+                               coef    std err          z      P>|z|      [0.025      0.975]
+--------------------------------------------------------------------------------------------
+Intercept                    1.7998      0.042     42.926      0.000       1.718       1.882
+overlaps_CHOICE_LD          -0.2659      0.075     -3.538      0.000      -0.413      -0.119
+laser                        0.2091      0.073      2.865      0.004       0.066       0.352
+overlaps_CHOICE_LD:laser     0.4813      0.092      5.217      0.000       0.300       0.662
+============================================================================================
+#+end_example
+
+#+begin_src ipython
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+# df = df_choice.copy()
+df = pd.concat((df_choice, df_choice_on)).reset_index(drop=True)
+df = df[df.day=='last']
+# formula = 'performance ~ overlaps_CHOICE_LD * day + (1 + overlaps_CHOICE_LD + day | mouse)'
+formula = 'performance ~ overlaps_CHOICE_LD * laser + (1 | mouse)'
+
+model = Lmer(formula=formula, data=df, family='binomial')
+results = model.fit()
+random_effects = model.ranef
+
+print(results)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~overlaps_CHOICE_LD*laser+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 8064	 Groups: {'mouse': 9.0}
+
+Log-likelihood: -3014.339 	 AIC: 6038.678
+
+Random effects:
+
+              Name    Var    Std
+mouse  (Intercept)  0.804  0.897
+
+No random effect correlations specified
+
+Fixed effects:
+
+                          Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  \
+(Intercept)                  2.052   1.456    2.647  0.304  7.782      4.291
+overlaps_CHOICE_LD          -0.119  -0.280    0.041  0.082  0.887      0.756
+laser                        0.051  -0.115    0.217  0.085  1.052      0.891
+overlaps_CHOICE_LD:laser     0.217   0.003    0.431  0.109  1.243      1.003
+
+                          OR_97.5_ci   Prob  Prob_2.5_ci  Prob_97.5_ci  \
+(Intercept)                   14.112  0.886        0.811         0.934
+overlaps_CHOICE_LD             1.042  0.470        0.431         0.510
+laser                          1.243  0.513        0.471         0.554
+overlaps_CHOICE_LD:laser       1.539  0.554        0.501         0.606
+
+                          Z-stat  P-val  Sig
+(Intercept)                6.756  0.000  ***
+overlaps_CHOICE_LD        -1.459  0.145
+laser                      0.601  0.548
+overlaps_CHOICE_LD:laser   1.990  0.047    *
+#+end_example
+
+#+begin_src ipython
+def generate_colors(N, cmap_name='viridis'):
+    cmap = plt.get_cmap(cmap_name)
+    return cmap(np.linspace(0, 1, N))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def plot_betas(results, random_effects, title):
+
+    fig, ax = plt.subplots(figsize=(1.5*width, 1.25*height))
+
+    colors = generate_colors(random_effects.shape[0], 'plasma')
+    space = np.random.normal(0, .05, random_effects.shape[0])
+
+    keys = results.Estimate.keys()
+
+    for i, key in enumerate(keys):
+        res = results.Estimate[key]
 
         try:
-            X_avg = np.nanmean(X_train, 0)
-            dpca.fit(X_avg, X_train)
-
-            Dp_cv.append(dpca.D['p'])
-            Ds_cv.append(dpca.D['s'])
-
-            X_avg = np.nanmean(X_test, 0)
-            X_test_pca = dpca.transform(X_avg)
-
-            # Store the projected test samples
-            Zp_cv.append(X_test_pca['p'])
-            Zs_cv.append(X_test_pca['s'])
-            Zps_cv.append(X_test_pca['ps'])
-
+            res += random_effects[key]
         except:
+            res += random_effects['(Intercept)']
             pass
 
-    dpca.D['p'] = np.nanmean(Dp_cv, axis=0)
-    dpca.D['s'] = np.nanmean(Ds_cv, axis=0)
+        mean_value = res.mean()
+        std_dev = res.std()
 
-    Z['p'] = np.nanmean(Zp_cv, axis=0)
-    Z['s'] = np.nanmean(Zs_cv, axis=0)
-    Z['ps'] = np.nanmean(Zps_cv, axis=0)
+        if results['P-val'][key]<0.001:
+            plt.text(i,   3, '***', ha='center', va='bottom')
+        elif results['P-val'][key]<0.01:
+            plt.text(i,   3, '**', ha='center', va='bottom')
+        elif results['P-val'][key]<0.05:
+            plt.text(i,   3, '*', ha='center', va='bottom')
+        elif results['P-val'][key]<0.1:
+            plt.text(i,   3, '.', ha='center', va='bottom')
 
-    return Z, dpca
-#+end_src
+        plt.scatter(i * np.ones(res.shape[0]) + space, res, color=colors)
+        plt.plot(i, mean_value, '_k', ms=20)
+        plt.errorbar(i * np.ones(res.shape[0]),
+                     [mean_value]*len(res),
+                     yerr=[std_dev]*len(res), fmt='-', color='k', capsize=15)
 
-#+RESULTS:
+    plt.axhline(y=0, color='black', ls='--')
 
-#+begin_src ipython
-def reshape_X(X, y, y_las):
-    X_stim = []
-    for i in range(3):
-        X0 = X[i]
-        y0 = y[i]
-        y_opto = y_las[i]
+    plt.xticks(np.arange(len(keys)), keys, fontsize=14, rotation=45)
 
-        X0 = X0[y_opto==0]
-        y0 = y0[y_opto==0]
-
-        X_stim.append(np.stack((X0[y0==0], X0[y0==2], X0[y0==1], X0[y0==3])))
-
-    X_stim = np.array(X_stim)
-
-    X_stim = np.swapaxes(X_stim, 1, 2)
-    X_stim = np.vstack(X_stim)
-    X_stim = np.swapaxes(X_stim, 1, 2)
-
-    # print(X_stim.shape)
-    X_stim = X_stim.reshape(-1, X_stim.shape[1], 2, 2 ,84)
-
-    return X_stim
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-Z_days = []
-dpca_days = []
-
-for i in range(len(options['days'])):
-    X = np.array(X_mouse[0][i])
-    y = np.array(y_mouse[0][i])
-    y_las = np.array(y_laser[0][i])
-
-    X_stim = reshape_X(X, y, y_las)
-    X_avg = X_stim.mean(0)
-    print('X_stim', X_stim.shape, 'X_avg', X_avg.shape)
-
-    dpca = dPCA.dPCA(labels='pst', n_components=1, regularizer='auto', n_trials=3)
-    dpca.protect = ['t']
-    Z = dpca.fit_transform(X_avg, X_stim)
-
-    folds = LeaveOneOut()
-    Z, dpca = crossval_dpca(X_stim, Z, dpca, folds)
-
-    Z_days.append(Z)
-    dpca_days.append(dpca)
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[37], line 6
-:       4 for i in range(len(options['days'])):
-:       5     X = np.array(X_mouse[0][i])
-: ----> 6     y = np.array(y_mouse[0][i])
-:       7     y_las = np.array(y_laser[0][i])
-:       9     X_stim = reshape_X(X, y, y_las)
-:
-: IndexError: list index out of range
-:END:
-
-#+begin_src ipython
-A = dpca.D['s'].T[0]
-B = dpca.D['p'].T[0]
-print(angle_AB(A, B))
-#+end_src
-
-#+RESULTS:
-: 89.31913185361141
-
-*** plots
-
-#+begin_src ipython
-Z = Z_days[-1]
-dpca = dpca_days[-1]
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[39], line 1
-: ----> 1 Z = Z_days[-1]
-:       2 dpca = dpca_days[-1]
-:
-: IndexError: list index out of range
-:END:
-
- #+begin_src ipython
-from src.common.plot_utils import add_vlines
-
-def plot_dPCA(Z, key):
-    size = Z[key].shape[0]
-    xtime = np.linspace(0, 14, Z[key].shape[-1])
-
-    colors=['b', 'b', 'r', 'r']
-    labels = ['AC', 'AD', 'BD', 'BC']
-    ls = ['-', '--', '-', '--']
-
-    if key=='s':
-        name = 'Sample'
-    if key=='p':
-        name = 'Pair'
-    if key=='t':
-        name = 'Time'
-
-    fig, ax = plt.subplots(1, size, figsize=[size * width, height])
-    if size==1:
-        ax = [ax]
-
-    for idx in range(2):
-        for i in range(Z[key].shape[2]):
-            for j in range(Z[key].shape[0]):
-                ax[j].plot(xtime, Z[key][j, i, idx], ls=ls[i], color=colors[i+ 2*idx], label=labels[i])
-                add_vlines(ax=ax[j])
-                ax[j].set_xlabel('Time (s)')
-                ax[j].set_ylabel('%s dPC %d' % (name, j+1))
-
-
-            if size>1:
-                ax[2].plot(Z[key][0, i, idx], Z[key][1, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
-                ax[2].set_xlabel('%s dPC 1' % name)
-                ax[2].set_ylabel('%s dPC 2' % name)
-
-    ax[0].legend(fontsize=10)
+    plt.ylabel('$\\beta$')
+    plt.title(title)
+    plt.savefig('beta_response.svg')
     plt.show()
 #+end_src
 
 #+RESULTS:
 
 #+begin_src ipython
-plot_dPCA(Z, 't')
+print(results.Estimate.keys())
+print(random_effects.keys())
+# random_effects['overlaps_CHOICE_LD:daylast'] = random_effects['daylast:overlaps_CHOICE_LD']
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-IndexError                                Traceback (most recent call last)
-Cell In[41], line 1
-----> 1 plot_dPCA(Z, 't')
-
-Cell In[40], line 4, in plot_dPCA(Z, key)
-      3 def plot_dPCA(Z, key):
-----> 4     size = Z[key].shape[0]
-      5     xtime = np.linspace(0, 14, Z[key].shape[-1])
-      7     colors=['b', 'b', 'r', 'r']
-
-IndexError: only integers, slices (`:`), ellipsis (`...`), numpy.newaxis (`None`) and integer or boolean arrays are valid indices
-#+end_example
-:END:
+: Index(['(Intercept)', 'overlaps_CHOICE_LD', 'laser',
+:        'overlaps_CHOICE_LD:laser'],
+:       dtype='object')
+: Index(['(Intercept)'], dtype='object')
 
 #+begin_src ipython
-plot_dPCA(Z, 's')
+plot_betas(results, random_effects, '')
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-IndexError                                Traceback (most recent call last)
-Cell In[42], line 1
-----> 1 plot_dPCA(Z, 's')
+[[./figures/overlaps/figure_52.png]]
 
-Cell In[40], line 4, in plot_dPCA(Z, key)
-      3 def plot_dPCA(Z, key):
-----> 4     size = Z[key].shape[0]
-      5     xtime = np.linspace(0, 14, Z[key].shape[-1])
-      7     colors=['b', 'b', 'r', 'r']
-
-IndexError: only integers, slices (`:`), ellipsis (`...`), numpy.newaxis (`None`) and integer or boolean arrays are valid indices
-#+end_example
-:END:
 
 #+begin_src ipython
-plot_dPCA(Z, 'p')
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-IndexError                                Traceback (most recent call last)
-Cell In[43], line 1
-----> 1 plot_dPCA(Z, 'p')
-
-Cell In[40], line 4, in plot_dPCA(Z, key)
-      3 def plot_dPCA(Z, key):
-----> 4     size = Z[key].shape[0]
-      5     xtime = np.linspace(0, 14, Z[key].shape[-1])
-      7     colors=['b', 'b', 'r', 'r']
-
-IndexError: only integers, slices (`:`), ellipsis (`...`), numpy.newaxis (`None`) and integer or boolean arrays are valid indices
-#+end_example
-:END:
-
-#+begin_src ipython
-for i in range(2):
-    for idx in range(2):
-        plt.plot(Z['s'][0, i, idx], Z['p'][0, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
-
-plt.xlabel('Sample dPC 1')
-plt.ylabel('Pair dPC 1')
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[44], line 3
-:       1 for i in range(2):
-:       2     for idx in range(2):
-: ----> 3         plt.plot(Z['s'][0, i, idx], Z['p'][0, i, idx], ls=ls[i], label=labels[i], color=colors[i+2*idx])
-:       5 plt.xlabel('Sample dPC 1')
-:       6 plt.ylabel('Pair dPC 1')
-:
-: IndexError: only integers, slices (`:`), ellipsis (`...`), numpy.newaxis (`None`) and integer or boolean arrays are valid indices
-:END:
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-*** Energy
-
-#+begin_src ipython
-def remove_close_entries_with_indices(nums, threshold, modulus):
-    # Create a list of tuples (value, index)
-    indexed_nums = list(enumerate(nums))
-
-    # Sort based on the values but keep the original indices
-    indexed_nums.sort(key=lambda x: x[1])
-
-    # Function to calculate circular distance
-    def circular_distance(x, y, mod):
-        return min((x - y) % mod, (y - x) % mod)
-
-    filtered_indices = []
-    filtered_nums = []
-
-    for idx, num in indexed_nums:
-        if not filtered_nums:
-            filtered_nums.append(num)
-            filtered_indices.append(idx)
-        elif all(circular_distance(num, existing_num, modulus) >= threshold for existing_num in filtered_nums):
-            filtered_nums.append(num)
-            filtered_indices.append(idx)
-
-    return filtered_indices
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import numpy as np
-from scipy.optimize import differential_evolution
-from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
+import numpy as np
 
-def find_multiple_minima_from_values(x_vals, y_vals, num_runs=100, tol=0.1, popsize=2, maxiter=1000, min_distance=35):
+# Set the random seed for reproducibility
+np.random.seed(0)
 
-    energy_function = interp1d(x_vals, y_vals, kind='cubic', fill_value="extrapolate")
-    bounds = [(x_vals.min(), x_vals.max())]
-    results = []
+# Generate synthetic data for two classes
+# Class 0 (red): centered around (-2, -2)
+class0 = np.random.randn(50, 2) * 0.8 + np.array([-2, -2])
+# Class 1 (blue): centered around (2, 2)
+class1 = np.random.randn(50, 2) * 0.8 + np.array([2, 2])
 
-    result_old = 999
-    for _ in range(num_runs):
-        result = differential_evolution(energy_function, bounds, strategy='rand1bin',
-                                        maxiter=maxiter, popsize=popsize, tol=tol,
-                                        seed=np.random.randint(0, 10000))
+# Create a new figure
+fig, ax = plt.subplots(figsize=(8, 6))
 
-        results.append((result.x[0], result.fun))
+# Plot the data points for each class
+ax.scatter(class0[:, 0], class0[:, 1], color='red', label='Class 0')
+ax.scatter(class1[:, 0], class1[:, 1], color='blue', label='Class 1')
 
-    results = np.array(results)
-    indices = remove_close_entries_with_indices(results[:, 0], min_distance, 360)
-    results = results[indices]
+# Define and plot a decision boundary. Here we use a simple linear boundary.
+# For example, suppose the decision rule is: x1 + x2 = 0 => x2 = -x1.
+x_vals = np.linspace(-5, 5, 100)
+y_vals = -x_vals
+ax.plot(x_vals, y_vals, color='black', linestyle='--', lw=2, label='Decision Boundary')
 
-    return results
-#+end_src
+# Annotate decision regions for clarity
+ax.text(-4.5, -4.5, 'odor A', fontsize=18, color='red', bbox=dict(facecolor='white', alpha=0.7))
+ax.text(2, 2.5, 'Odor B', fontsize=18, color='blue', bbox=dict(facecolor='white', alpha=0.7))
 
-#+RESULTS:
+# Add labels, title, and legend
+ax.set_xlabel('Neuron 1')
+ax.set_ylabel('Neuron 2')
+ax.set_title('Sample Encoding Axis')
+# ax.legend(fontsize=12)
 
-#+begin_src ipython
-from src.attractor.landscape import EnergyLandscape
-energy = EnergyLandscape(IF_HMM=0)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-num_bins = 64
-window = 10
-bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
-if len(options['days'])>3:
-     days = np.arange(1, 7)
-else:
-     days = options['days']
-
-print(days)
-#+end_src
-
-#+RESULTS:
-: ['first', 'last']
-
-#+begin_src ipython
-  def get_theta(a, b, GM=0, IF_NORM=0):
-
-      u, v = a, b
-
-      if GM:
-          v = b - (b @ a) * a / (a @ a)
-
-      if IF_NORM:
-          u = u / np.linalg.norm(u)
-          v = v / np.linalg.norm(v)
-
-      return np.arctan2(v, u) % (2.0 * np.pi)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-index = []
-for dpca in dpca_days:
-    print(dpca.D['s'].shape)
-    theta = get_theta(dpca.D['s'].T[0], dpca.D['p'].T[0], IF_NORM=1, GM=1)
-    index.append(np.argsort(theta, -1))
-index = np.array(index)
-print(index.shape)
-#+end_src
-
-#+RESULTS:
-: (0,)
-
-#+begin_src ipython
-epoch = np.concatenate((options['bins_STIM'], options['bins_DELAY']))
-energy_mouse, ci_mouse = [], []
-
-for idx, mouse in enumerate(options['mice']):
-    X_list = X_mouse[idx]
-
-    options['mouse'] = mouse
-    options = set_options(**options)
-
-    energy_day = []
-    ci_day = []
-
-    for i, day in enumerate(options['days']):
-        X = np.vstack(X_list[i])
-        X = X[..., options['bins_ED']]
-        # X = X[..., epoch]
-        _, phi = decode_bump(X, axis=1)
-
-        X = X_list[i][0]
-        X = X[..., options['bins_DELAY']]
-        # X = X[..., epoch]
-        _, phi = decode_bump(X, axis=1)
-
-        landscape = energy.fit(phi, bins, window=window)
-        energy_day.append(landscape)
-
-        ci = None
-        ci_day.append(ci)
-
-    energy_mouse.append(energy_day)
-    ci_mouse.append(ci_day)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-cmap = plt.get_cmap('Blues')
-colors = [cmap((i+1)/6) for i in range(7)]
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-from scipy.signal import find_peaks, find_peaks_cwt
-
-minima_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
-energie_mouse = np.zeros((9, len(days), 2), dtype='int') * np.nan
-
-for idx, mouse in enumerate(options['mice']):
-    energy_day = energy_mouse[idx]
-
-    options['mouse'] = mouse
-    options = set_options(**options)
-
-    for i, day in enumerate(options['days']):
-        locations = np.linspace(0, 360, energy_day[i].shape[0])
-
-        # minimas = find_peaks_cwt(-energy_day[i], widths=np.arange(1, 10))
-        # find_multiple_minima_from_values(x_vals, y_vals, num_runs=100, tol=0.05, popsize=2, maxiter=1000, min_distance=35):
-        results = find_multiple_minima_from_values(locations, energy_day[i], maxiter=10000, num_runs=2000, min_distance=20).T
-        minimas = results[0]
-        energies = results[1]
-        print(minimas, energies)
-
-        if len(minimas)<2:
-            minimas = [minimas[0], minimas[0]]
-            energies = [energies[0], energies[0]]
-
-        minima_mouse[idx][i] = minimas[:2]
-        energie_mouse[idx][i] = energies[:2]
-
-#+end_src
-
-#+RESULTS:
-: [ 21.7292525 360.       ] [0.00482956 0.01151678]
-: [28.30569905] [0.00513111]
-
-#+begin_src ipython
-y_loc = []
-for idx, mouse in enumerate(options['mice']):
-     id = ~np.isnan(minima_mouse[idx].T)
-     minima = minima_mouse[idx].T
-
-     # y1 = locations[minima[0][id[0]].astype('int')] * np.pi / 180.0
-     # y2 = locations[minima[1][id[1]].astype('int')] * np.pi / 180.0
-
-     y1 = minima[0][id[0]].astype('int') * np.pi / 180.0
-     y2 = minima[1][id[1]].astype('int') * np.pi / 180.0
-
-     y_mean = (np.sin(y1)+np.sin(y2)) / 2
-
-     while len(y_mean)<len(days):
-          y_mean = np.append(y_mean, np.nan)
-
-     y_loc.append(y_mean)
-
-y_loc = np.array(y_loc)
-
-plt.plot(np.arange(1, len(days)+1), np.nanmean(y_loc, 0), '-o')
-plt.plot(np.arange(1, len(days)+1), y_loc.T, '-', alpha=.2)
-
-# plt.xticks(np.arange(1, 7))
-plt.axhline(0, ls='--', color='k')
-plt.xlabel('Day')
-plt.ylabel('Y-loc (a.u.)')
+plt.tight_layout()
+plt.savefig('sample_axis.svg', dpi=300)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/dpca/figure_56.png]]
+[[./figures/overlaps/figure_62.png]]
 
 #+begin_src ipython
-from scipy.signal import find_peaks
-fig, ax = plt.subplots(1, 2, figsize= [2*width, 1*width * golden_ratio])
-ax_flat = ax.flatten()
+import matplotlib.pyplot as plt
+import numpy as np
 
-# minima_mouse = np.zeros((9, 6, 2), dtype='int') * np.nan
+# Set the random seed for reproducibility
+np.random.seed(10)
 
-for idx, mouse in enumerate(options['mice']):
-    peaks_list, minimas_list = [], []
-    energy_day = energy_mouse[idx]
+# Generate synthetic data for two classes
+# Class 0 (red): centered around (-2, -2)
+class0 = np.random.randn(50, 2) * 0.8 + np.array([-2, -2])
+# Class 1 (blue): centered around (2, 2)
+class1 = np.random.randn(50, 2) * 0.8 + np.array([2, 2])
 
-    options['mouse'] = mouse
-    options = set_options(**options)
+# Create a new figure
+fig, ax = plt.subplots(figsize=(8, 6))
 
-    ax = ax_flat[idx]
+# Plot the data points for each class
+ax.scatter(class0[:, 0], class0[:, 1], color='k', label='Class 0')
+ax.scatter(class1[:, 0], class1[:, 1], color='grey', label='Class 1')
 
-    for i, day in enumerate(options['days']):
-        locations = np.linspace(0, 360, energy_day[i].shape[0])
-        ax.plot(locations, energy_day[i] * 100 , color=colors[i])
-        ax.set_title(mouse)
+# Define and plot a decision boundary. Here we use a simple linear boundary.
+# For example, suppose the decision rule is: x1 + x2 = 0 => x2 = -x1.
+x_vals = np.linspace(-5, 5, 100)
+y_vals = -x_vals
+ax.plot(x_vals, y_vals, color='black', linestyle='--', lw=2, label='Decision Boundary')
 
-        # minimas = find_multiple_minima_from_values(locations, energy_day[i])
-        minimas = minima_mouse[idx][i]
-        energies = energie_mouse[idx][i]
-        print(minimas)
+# Annotate decision regions for clarity
+ax.text(-4.5, -4.5, 'Lick', fontsize=18, color='k', bbox=dict(facecolor='white', alpha=0.7))
+ax.text(2, 2.5, 'No Lick', fontsize=18, color='grey', bbox=dict(facecolor='white', alpha=0.7))
 
-        ax.plot(minimas, energies*100, 'o', color=colors[i])
+# Add labels, title, and legend
+ax.set_xlabel('Neuron 1')
+ax.set_ylabel('Neuron 2')
+ax.set_title('Choice Encoding Axis')
+# ax.legend(fontsize=12)
 
-        ax.set_xlabel('Pref Loc (°)')
-        ax.set_ylabel('Energy')
-        # ax.set_ylim([0, 3])
+plt.tight_layout()
+plt.savefig('choice_axis.svg', dpi=300)
+plt.show()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: [ 21.7292525 360.       ]
-: [28.30569905 28.30569905]
-[[./figures/dpca/figure_57.png]]
-:END:
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
+[[./figures/overlaps/figure_63.png]]
