@@ -215,7 +215,7 @@ from src.common.options import set_options
 path = '/storage/leon/dual_task/data/2Samples-DualTask-BehavioralData'
 
 window_start = 6.5  # seconds after stimulus
-window_end   = 7.5   # seconds after stimulus
+window_end   = 7.0   # seconds after stimulus
 window_length = window_end - window_start
 
 mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
@@ -258,7 +258,7 @@ for mouse in mice:
                 # Count licks within [6.5, 7.0) s after onset
                 n_licks = np.sum((rel_licks >= window_start) & (rel_licks < window_end))
                 # Lick rate = count / window
-                rate = n_licks # / window_length  # in Hz
+                rate = n_licks * options['n_days'] / window_length  # in Hz per day
                 avg_lick_rates.append(rate)
 
             avg_lick_rates = np.array(avg_lick_rates)
@@ -272,9 +272,7 @@ for mouse in mice:
             df['odr_perf'] = df['outcome'].apply(lambda x: 0 if ((x==2) or (x==3)) else 1)
 
             df['paired'] = df['outcome'].apply(lambda x: 0 if ((x==4) or (x==3)) else 1)
-            df['tasks'] = df['distractor'].apply(
-                lambda x: 'DPA' if x == 0 else ('DualGo' if x == 1 else 'DualNoGo')
-            )
+            df['tasks'] = df['distractor'].apply(lambda x: 'DPA' if x == 0 else ('DualGo' if x == 1 else 'DualNoGo'))
             df['licks_LD'] = avg_lick_rates
             df['day'] = day
             df_day.append(df)
@@ -353,10 +351,10 @@ print(df_mouse.keys())
 #+end_src
 
 #+RESULTS:
-: (9024, 16)
+: (9024, 17)
 : Index(['sample', 'test', 'outcome', 'pair', 'distractor', 'cue', 'odr_outcome',
-:        'odr_pair', 'laser', 'licks', 'performance', 'paired', 'tasks',
-:        'licks_LD', 'day', 'mouse'],
+:        'odr_pair', 'laser', 'licks', 'performance', 'odr_perf', 'paired',
+:        'tasks', 'licks_LD', 'day', 'mouse'],
 :       dtype='object')
 
 #+begin_src ipython
@@ -888,8 +886,203 @@ plt.show()
 [[./.ob-jupyter/99b56709717e925eb4f7b771196baa39cec13a36.png]]
 
 #+begin_src ipython
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+size = 8
+# Add a 'trial' index per mouse-task group, if not already present
+df_mouse['trial'] = df_mouse.groupby(['mouse', 'tasks', 'laser']).cumcount()
+
+df_filtered = df_mouse.copy()
+df_filtered = df_filtered[df_filtered.mouse!='ACCM04']
+df_filtered = df_filtered[df_filtered.mouse!='ACCM03']
+# df_filtered = df_filtered[(df_filtered.outcome==3) | (df_filtered.outcome==4)]
+# df_filtered = df_filtered[df_filtered.mouse!='ChRM23']
+
+# df_filtered['trial'] = df_filtered.groupby(['mouse', 'tasks']).cumcount()
+# print(df_filtered.trial)
+tasks_to_plot = ['DPA', 'DualGo', 'DualNoGo']
+
+fig, axes = plt.subplots(1, 1, figsize=(1*width, height))
+
+for i, task in enumerate(tasks_to_plot):
+    df_task = df_filtered[df_filtered['tasks'] == task]
+    # Plot mean and CI for each trial averaged across mice
+    df_off = df_task[df_task.laser==0]
+    sns.lineplot(
+        data=df_off,
+        x='day',
+        y=df_off['licks_LD'] ,
+        ax=axes,
+        estimator='mean', # default is mean
+        errorbar='se',    # newer seaborn
+        color=['r','b','g'][i],
+        marker='o',
+    )
+
+    # df_on = df_task[df_task.laser==1]
+    # sns.lineplot(
+    #     data=df_on,
+    #     x='trial',
+    #     y=circcvl(df_on['licks_LD'], windowSize=size),
+    #     # y='licks_LD',
+    #     ax=axes[i],
+    #     estimator='mean', # default is mean
+    #     errorbar='se',    # newer seaborn
+    #     color=['r','b','g'][i],
+    #     alpha=0.2,
+    # )
+
+
+    axes.set_xlabel('Day')
+    axes.set_ylabel('Late Delay Licks (Hz)')
+
+    # axes.set_ylim([0, 1])
+    axes.set_xticks(np.arange(1, 7, 1))
+
+plt.savefig('figures/bernstein/early_licks_day_condition.svg', dpi=300)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/155393eb9f7217c599b7b2cc81449b0284121a36.png]]
+
+
+#+begin_src ipython
 32*3
 #+end_src
 
 #+RESULTS:
 : 96
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+
+def get_lick_rate(trial_licks, bin_size=0.25, t_min=0, t_max=14):
+    bins = np.arange(t_min, t_max + bin_size, bin_size)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    all_rel_licks = np.hstack([l[(l >= t_min) & (l < t_max)] for l in trial_licks])
+    counts, _ = np.histogram(all_rel_licks, bins=bins)
+    lick_rate = counts / len(trial_licks) / bin_size
+    return bin_centers, lick_rate
+
+fig, ax = plt.subplots(figsize=(width, height))
+
+tasks = [
+    ('DPA', 'r'),
+    ('DualGo', 'b'),
+    ('DualNoGo', 'g')
+]
+
+for task, color in tasks:
+    df_ = df_mouse[
+        (df_mouse.tasks == task) &
+        (df_mouse.laser == 0)
+    ]
+    bin_centers, lick_rate = get_lick_rate(df_.licks)
+    ax.plot(bin_centers, lick_rate, color=color, label=task)
+
+ax.set_xlim([0, 12])
+ax.set_xlabel('Time from sample onset (s)')
+ax.set_ylabel('# Licks')
+ax.legend(fontsize=12)
+add_vlines2(ax=ax)
+
+plt.savefig('figures/bernstein/licks_hist_envelope.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/983b7fd62f4b5036eafcb617b9507299fb46d373.png]]
+
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+
+def get_lick_rate(trial_licks, bin_size=0.25, t_min=0, t_max=14):
+    bins = np.arange(t_min, t_max + bin_size, bin_size)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    all_rel_licks = np.hstack([l[(l >= t_min) & (l < t_max)] for l in trial_licks])
+    counts, _ = np.histogram(all_rel_licks, bins=bins)
+    lick_rate = counts / len(trial_licks) / bin_size
+    return bin_centers, lick_rate
+
+fig, ax = plt.subplots(figsize=(width, height))
+
+tasks = [
+    ('DPA', 'r'),
+    ('DualGo', 'b'),
+    ('DualNoGo', 'g')
+]
+
+for task, color in tasks:
+    df_ = df_mouse[
+        (df_mouse.day<=3) &
+        (df_mouse.tasks == task) &
+        (df_mouse.laser == 0)
+    ]
+    bin_centers, lick_rate = get_lick_rate(df_.licks)
+    ax.plot(bin_centers, lick_rate, color=color, label=task)
+
+ax.set_xlim([0, 12])
+ax.set_xlabel('Time from sample onset (s)')
+ax.set_ylabel('# Licks')
+ax.legend(fontsize=12)
+add_vlines2(ax=ax)
+
+plt.savefig('figures/bernstein/licks_hist_envelope_first.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/a6e34939a8b0ea5759f41c4a920e23d530b19d09.png]]
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+
+def get_lick_rate(trial_licks, bin_size=0.25, t_min=0, t_max=14):
+    bins = np.arange(t_min, t_max + bin_size, bin_size)
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+    all_rel_licks = np.hstack([l[(l >= t_min) & (l < t_max)] for l in trial_licks])
+    counts, _ = np.histogram(all_rel_licks, bins=bins)
+    lick_rate = counts / len(trial_licks) / bin_size
+    return bin_centers, lick_rate
+
+fig, ax = plt.subplots(figsize=(width, height))
+
+tasks = [
+    ('DPA', 'r'),
+    ('DualGo', 'b'),
+    ('DualNoGo', 'g')
+]
+
+for task, color in tasks:
+    df_ = df_mouse[
+        (df_mouse.day>3) &
+        (df_mouse.tasks == task) &
+        (df_mouse.laser == 0)
+    ]
+    bin_centers, lick_rate = get_lick_rate(df_.licks)
+    ax.plot(bin_centers, lick_rate, color=color, label=task)
+
+ax.set_xlim([0, 12])
+ax.set_xlabel('Time from sample onset (s)')
+ax.set_ylabel('# Licks')
+ax.legend(fontsize=12)
+add_vlines2(ax=ax)
+
+plt.savefig('figures/bernstein/licks_hist_envelope_last.svg', dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[./.ob-jupyter/e3ede9910f98e33f9a55209ebd555d6638481b89.png]]
+
+#+begin_src ipython
+
+#+end_src

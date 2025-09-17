@@ -30,6 +30,8 @@ def y_to_arr(y, **options):
         y = y.labels.dropna().to_numpy()
     elif options['features'] == 'sample':
         y = y.sample_odor.to_numpy()
+    elif options['features'] == 'test':
+        y = y.test_odor.to_numpy()
     elif options['features'] == 'distractor':
         y = y.dist_odor.to_numpy()
     elif options['features'] == 'choice':
@@ -53,7 +55,7 @@ def get_classification(model, RETURN='overlaps', **options):
     y_labels = None
     cv_B = options['cv_B']
 
-    if (options['features'] == 'sample'):# and not ('ACC' in options['mouse']):
+    if (options['features'] == 'sample') or (options['features'] == 'test'):# and not ('ACC' in options['mouse']):
         # cv_B = False
         if cv_B:
             options['trials'] = 'incorrect'
@@ -139,8 +141,8 @@ def get_classification(model, RETURN='overlaps', **options):
         y_labels = y_labels.dropna()
         # y_labels = y_labels[y_labels.tasks!='DPA']
 
-    print('y_labels', y_labels.shape, y_labels.tasks.unique())
     y = y_to_arr(y, **options) % 2
+    print('y_labels', y_labels.shape, y_labels.tasks.unique(), y.shape)
 
     if options['verbose']:
         print('X', X.shape, 'nans', np.isnan(X).mean(), 'y', y.shape, np.unique(y))
@@ -166,8 +168,17 @@ def get_classification(model, RETURN='overlaps', **options):
         model.fit(X_avg, y_avg)
 
     if 'scores' in RETURN:
-        scores, probas, coefs, _ = model.get_cv_scores(X, y, options["scoring"], cv=options['cv'], X_B=X_B, y_B=y_B, cv_B=cv_B)
+        features = options['features']
+        if (options['features']=='sample') or (options['features']=='test'):
+            features +='_odor'
 
+        if options['features'] =='distractor':
+            features = 'dist_odor'
+
+        scores, probas, coefs, _ = model.get_cv_scores(X, y_labels, options["scoring"],
+                                                       features=features,
+                                                       cv=options['cv'],
+                                                       X_B=X_B, y_B=y_B, cv_B=cv_B)
         try:
             scores = np.array(scores)
             print('scores', scores.shape, np.nanmean(scores)) # 'probas', np.array(probas).shape, 'coefs', coefs.shape)

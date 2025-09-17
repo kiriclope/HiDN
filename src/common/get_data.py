@@ -571,6 +571,12 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_S1 = y.test_odor == 0
         idx_S2 = y.test_odor == 1
 
+        if kwargs['trials'] == 'incorrect':
+            idx = y.response.str.contains("incorrect")
+            idx_S1 = (y.test_odor == 0) & idx & (y.laser == 0)
+            idx_S2 = (y.test_odor == 1) & idx & (y.laser == 0)
+            # idx_S3 = y.laser == 1
+
     elif kwargs["features"] == "distractor":
         idx_S1 = y.dist_odor == 0
         idx_S2 = y.dist_odor == 1

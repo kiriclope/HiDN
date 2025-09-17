@@ -12,6 +12,8 @@ import numpy as np
 def set_options(**kwargs):
     opts = dict()
 
+    opts['sampler'] = 0
+
     opts['cv_B'] = 0
     opts["NEW_DATA"] = 0
     opts["path"] = "/storage/leon/dual_task/"
