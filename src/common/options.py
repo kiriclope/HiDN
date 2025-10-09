@@ -11,7 +11,7 @@ import numpy as np
 
 def set_options(**kwargs):
     opts = dict()
-
+    opts['NEW_MICE'] = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
     opts['sampler'] = 0
 
     opts['cv_B'] = 0
@@ -286,6 +286,11 @@ def set_options(**kwargs):
     opts["bins_TEST"] = opts["bins"][int((t_TEST[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[1]) * frame_rate)]
 
     opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1] - opts['T_WINDOW']) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
+
+    opts["bins_TASK"] = opts["bins"][int((t_STIM[0]) * frame_rate) : int((t_TEST[1]) * frame_rate)]
+
+    opts["bins_POSTTASK"] = opts["bins"][int((t_TEST[0]) * frame_rate) :]
+
     # opts["bins_CHOICE"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 
     opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[1] * frame_rate)]

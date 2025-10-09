@@ -443,6 +443,27 @@ def get_X_y_mice(**kwargs):
         y_mice = []
         for mouse in mice:
             kwargs['mouse'] = mouse
+            if "P" in kwargs["mouse"]:
+                kwargs["n_days"] = 10  # PrL 6, ACC 5 or multi 10
+                kwargs["n_discard"] = 4
+            elif "ACC" in kwargs["mouse"]:
+                kwargs["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+            elif "17" in kwargs["mouse"]:
+                kwargs["n_days"] = 8  # PrL 6, ACC 5 or multi 10
+            elif "23" in kwargs["mouse"]:
+                kwargs["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+            elif "12" in kwargs["mouse"]:
+                kwargs["n_days"] = 5  # PrL 6, ACC 5 or multi 10
+            elif "01" in kwargs["mouse"]:
+                kwargs["n_days"] = 4  # PrL 6, ACC 5 or multi 10
+            else:
+                kwargs["n_days"] = 6  # PrL 6, ACC 5 or multi 10
+
+            if mouse in kwargs['NEW_MICE']:
+                kwargs['NEW_DATA'] = 1
+            else:
+                kwargs['NEW_DATA'] = 0
+
             X_days, y_days = get_X_y_days(**kwargs)
 
             X_mice.append(X_days)

@@ -45,8 +45,8 @@ def get_classification(model, RETURN='overlaps', **options):
     start = perf_counter()
 
     X_days, y_days = get_X_y_days(**options)
-
     y_days = y_days.reset_index()
+
     print('X_days', X_days.shape, 'y_days', y_days.shape)
     y_days['idx'] = y_days['index'].copy()
     # print(y_days.head())
@@ -147,25 +147,37 @@ def get_classification(model, RETURN='overlaps', **options):
     if options['verbose']:
         print('X', X.shape, 'nans', np.isnan(X).mean(), 'y', y.shape, np.unique(y))
 
-    X_avg = avg_epochs(X, **options).astype('float32')
-    y_avg = y.copy()
-    y_avg = y_avg % 2
+    # X_avg = avg_epochs(X, **options).astype('float32')
+    # y_avg = y.copy()
+    # y_avg = y_avg % 2
 
-    if RETURN is None:
-        return None
-    elif RETURN == 'DATA':
-        return X_avg, y_labels
-    elif RETURN == 'labels':
-        pass
-    elif 'bolasso' in RETURN:
-        coefs = model.get_bolasso_coefs(X_avg, y_avg, n_boots=options['n_boots'], penalty=options['bolasso_penalty'], pval=options['pval'], confidence=options['bolasso_pval'])
+    X_task = X[..., options['bins_' + options['epochs'][0]]]
+    y_flat = np.repeat(y, X_task.shape[-1])
+    X_flat = X_task.transpose(0, 2, 1).reshape(-1, X_task.shape[1])
+    print(X_flat.shape, y_flat.shape)
+
+    if 'bolasso' in RETURN:
+
+        coefs = model.get_bolasso_coefs(X_flat, y_flat,
+                                        n_boots=options['n_boots'],
+                                        penalty=options['bolasso_penalty'],
+                                        pval=options['pval'],
+                                        confidence=options['bolasso_pval'])
+
+        output = coefs, 0
+
     elif 'pca' in RETURN:
-        # X_delay = X[..., options['bins_DELAY']]
-        # X_reshaped = X.reshape(X_delay.shape[0], -1)  # shape (n_sample, n_features * n_time)
-        model.fit_pca(X_avg)
-        return model.components_, model.explained_variance_
+
+        model.fit_pca(X_task)
+        output = model.components_, model.explained_variance_
+
+    elif 'bootstrap' in RETURN:
+
+        coefs, bias = model.get_bootstrap_coefs(X_flat, y_flat, n_boots=options['n_boots'])
+        output = coefs, bias
+
     else:
-        model.fit(X_avg, y_avg)
+        model.fit(X_flat, y_flat)
 
     if 'scores' in RETURN:
         features = options['features']
@@ -175,13 +187,14 @@ def get_classification(model, RETURN='overlaps', **options):
         if options['features'] =='distractor':
             features = 'dist_odor'
 
-        scores, probas, coefs, _ = model.get_cv_scores(X, y_labels, options["scoring"],
+        scores, probas, coefs, _ = model.get_cv_scores(X, y_labels,
+                                                       options["scoring"],
                                                        features=features,
                                                        cv=options['cv'],
                                                        X_B=X_B, y_B=y_B, cv_B=cv_B)
         try:
             scores = np.array(scores)
-            print('scores', scores.shape, np.nanmean(scores)) # 'probas', np.array(probas).shape, 'coefs', coefs.shape)
+            print('scores', scores.shape, np.nanmean(scores))
             probas = np.array(probas)
             coefs = np.array(coefs)
         except:
@@ -249,20 +262,9 @@ def get_classification(model, RETURN='overlaps', **options):
             df['day'] = options['day']
 
             print('df', df.shape)
-            return df
+            output = df
 
 
-        end = perf_counter()
-        print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-        return scores
-
-    elif 'coefs' in RETURN:
-        coefs, bias = model.get_bootstrap_coefs(X_avg, y_avg, n_boots=options['n_boots'])
-        end = perf_counter()
-        print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-        return coefs, bias
-    elif 'bolasso' in RETURN:
-        # coefs = model.get_bolasso_coefs(X_avg, y_avg, n_boots=options['n_boots'], penalty='l2', pval=options['pval'], confidence=0.05)
-        return coefs, 0
-    else:
-        return None
+    end = perf_counter()
+    print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+    return output

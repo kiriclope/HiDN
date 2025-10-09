@@ -1,6 +1,52 @@
 #+STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session landscape :kernel dual_data :exports results :output-dir ./figures/landscape :file (lc/org-babel-tangle-figure-filename)
 
+* Imports
+
+#+begin_src ipython
+import warnings
+from sklearn.exceptions import ConvergenceWarning
+warnings.filterwarnings("ignore")
+
+import sys
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import os
+if not sys.warnoptions:
+  warnings.simplefilter("ignore")
+  os.environ["PYTHONWARNINGS"] = "ignore"
+
+import pickle as pkl
+import numpy as np
+import matplotlib.pyplot as plt
+from time import perf_counter
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from skorch import NeuralNetClassifier
+
+from sklearn.base import clone
+from sklearn.metrics import make_scorer, roc_auc_score
+from sklearn.ensemble import BaggingClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+from sklearn.decomposition import PCA
+
+from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
+
+from src.attractor.energy import run_energy, plot_energy
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.decode.bump import decode_bump, circcvl
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.preprocess.helpers import avg_epochs
+#+end_src
+
+#+RESULTS:
+
 * Notebook Settings
 
 #+begin_src ipython
@@ -18,51 +64,6 @@
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
-
-* Imports
-
-#+begin_src ipython
-  from sklearn.exceptions import ConvergenceWarning
-  warnings.filterwarnings("ignore")
-
-  import sys
-  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
-
-  import os
-  if not sys.warnoptions:
-    warnings.simplefilter("ignore")
-    os.environ["PYTHONWARNINGS"] = "ignore"
-
-  import pickle as pkl
-  import numpy as np
-  import matplotlib.pyplot as plt
-  from time import perf_counter
-
-  import torch
-  import torch.nn as nn
-  import torch.optim as optim
-  from skorch import NeuralNetClassifier
-
-  from sklearn.base import clone
-  from sklearn.metrics import make_scorer, roc_auc_score
-  from sklearn.ensemble import BaggingClassifier
-  from sklearn.preprocessing import StandardScaler, RobustScaler
-  from sklearn.pipeline import Pipeline
-  from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold, LeaveOneOut
-  from sklearn.decomposition import PCA
-
-  from mne.decoding import SlidingEstimator, cross_val_multiscore, GeneralizingEstimator, get_coef
-
-  from src.attractor.energy import run_energy, plot_energy
-  from src.common.plot_utils import add_vlines, add_vdashed
-  from src.common.options import set_options
-  from src.stats.bootstrap import my_boots_ci
-  from src.decode.bump import decode_bump, circcvl
-  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-  from src.preprocess.helpers import avg_epochs
-#+end_src
-
-#+RESULTS:
 
 * Helpers
 ** Model
@@ -390,13 +391,18 @@ def angle_AB(A, B):
 ** Plots
 
 #+begin_src ipython
-  def get_theta(a, b, GM=0, IF_NORM=0):
+  def get_theta(a, b, GM=0, IF_NORM=0, IF_MEAN=1):
 
       u, v = a, b
+      if IF_MEAN:
+          for i in range(b.shape[0]):
+              u[i] = a[i] - a[i].mean()
+              v[i] = b[i] - b[i].mean()
 
       if GM:
           for i in range(b.shape[0]):
               v[i] = b[i] - (b[i] @ a[i]) * a[i] / (a[i] @ a[i])
+
 
       if IF_NORM:
           for i in range(b.shape[0]):
@@ -708,36 +714,36 @@ def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
       'mouse': mice[1], 'laser': 0,
       'trials': 'correct', 'reload': 0, 'data_type': 'dF',
       'prescreen': None, 'pval': 0.05,
-      'preprocess': False, 'scaler_BL': 'robust',
+      'preprocess': None, 'scaler_BL': 'robust',
       'avg_noise': True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
-      'l1_ratio': 0.95,
-      'n_comp': None, 'scaler': 'standard',
+      'l1_ratio': 1.0,
+      'n_comp': None, 'scaler': None,
       'bootstrap': 1, 'n_boots': 1000,
       'n_splits': 5, 'n_repeats': 1,
       'n_jobs': 128,
       'bolasso_penalty': 'l2',
       'bolasso_pval': 0.05,
       'mne_estimator': 'generalizing',
+      'sampler': 1,
   }
 
-  kwargs['days'] = ['first', 'middle', 'last']
   kwargs['days'] = ['first', 'last']
-  # kwargs['days'] = 'all'
+  kwargs['days'] = 'all'
   options = set_options(**kwargs)
+
   print(options['days'])
   options['cv'] = 5 # LeaveOneOut()
   options['mice'] = mice
 
   IF_BOOT = 0
-  # options['hp_scoring'] = lambda estimator, X_test, y_test: np.abs(overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1))
+  # options['hp_scoring'] = lambda estimator, X_test, y_test: overlaps_scorer(estimator, X_test, y_test, IF_SIGN=1)
   options['hp_scoring'] = 'f1_weighted'
-  options['scoring'] = options['hp_scoring']
   options['scoring'] = overlaps_scorer
 #+end_src
 
 #+RESULTS:
-: ['first', 'last']
+: [1 2 3 4 5 6]
 
 * Landscape vs days
 
@@ -760,19 +766,17 @@ from src.torch.classify import get_classification
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.svm import LinearSVC
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from src.torch.stratified_subsample_kfold import ChoiceLimitedStratifiedKFold
 
 Cs = np.logspace(-3, 3, 20)
+params = {'model__C': Cs}
 
 if IF_BOOT:
     net = LogisticRegression(penalty='l2', solver='liblinear', n_jobs=None, tol=0.001, class_weight='balanced')
-    # net = LogisticRegression(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratio=0.95, max_iter=100, tol=.001)
-    # net = LinearDiscriminantAnalysis(solver="lsqr", shrinkage=1)
 else:
-    # net = LinearSVC(penalty='l1', class_weight='balanced')
-    # net = LogisticRegressionCV(penalty='l1', solver='liblinear', n_jobs=None, tol=0.001, cv=5, Cs=Cs)
-    net = LogisticRegressionCV(penalty='elasticnet', solver='saga', class_weight='balanced', n_jobs=None, l1_ratios=[0.5], Cs=Cs, cv=5)
+    net = LogisticRegressionCV(penalty='l1', solver='liblinear', n_jobs=None, cv=5, Cs=Cs, class_weight='balanced')
 
-params = {'model__C': Cs}
+options['cv'] = ChoiceLimitedStratifiedKFold(n_splits=5, stratify_col=options['features'])
 
 options['n_jobs'] = -1
 options['verbose'] = 0
@@ -783,7 +787,7 @@ options['verbose'] = 1
 #+RESULTS:
 : PCA False None
 
-     #+begin_src ipython
+    #+begin_src ipython
 # options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
 options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
 # options['mice'] = ['ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
@@ -813,10 +817,13 @@ for mouse in options['mice']:
     for day in options['days']:
         options['day'] = day
 
-        options['trials'] = 'correct'
+        options['trials'] = ''
         options['task'] = 'all'
         options['features'] = 'sample'
-        options['epochs'] = ['ED']
+        options['T_WINDOW'] = 0.0
+        options['epochs'] = ['DELAY']
+
+        options = set_options(**options)
 
         try:
             if IF_BOOT:
@@ -831,10 +838,32 @@ for mouse in options['mice']:
             else:
                 coefs_sample.append(coefs * np.nan)
 
+        options['trials'] = ''
+        options['task'] = 'all'
+        options['features'] = 'test'
+        options['epochs'] = ['TEST']
+        options['T_WINDOW'] = 0.5
+        options = set_options(**options)
+
+        try:
+            if IF_BOOT:
+                coefs, bias = get_classification(model, RETURN='coefs', **options)
+                coefs_dist.append(coefs[:, 0])
+            else:
+                coefs, bias = get_classification(model, RETURN='bolasso', **options)
+                coefs_dist.append(coefs)
+        except:
+            if IF_BOOT:
+                coefs_dist.append(coefs[:, 0] * np.nan)
+            else:
+                coefs_dist.append(coefs * np.nan)
+
         options['task'] = 'all'
         options['features'] = 'choice'
-        options['epochs'] = ['CHOICE']
+        options['T_WINDOW'] = 0.5
+        options['epochs'] = ['POSTTASK']
         options['trials'] = ''
+        options = set_options(**options)
 
         try:
             if IF_BOOT:
@@ -849,7 +878,7 @@ for mouse in options['mice']:
             else:
                 coefs_choice.append(coefs * np.nan)
 
-    coefs_save = np.stack((coefs_sample, coefs_choice, coefs_choice))
+    coefs_save = np.stack((coefs_sample, coefs_dist, coefs_choice))
     coefs_mice.append(coefs_save)
 
     print(coefs_save.shape)
@@ -857,420 +886,20 @@ for mouse in options['mice']:
     #+end_src
 
 #+RESULTS:
-#+begin_example
-Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (125, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (125, 184, 84) nans 0.0 y (125,) [0. 1.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 156
-X_fs (125, 156)
-(156,) (156,) (184,)
-samples (125,) features (184,) non zero 156
-Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (192, 15) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 184, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 170
-X_fs (192, 170)
-(170,) (170,) (184,)
-samples (192,) features (184,) non zero 170
-Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (182, 15) ['DPA' 'DualNoGo' 'DualGo']
-X (182, 184, 84) nans 0.0 y (182,) [0. 1.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 165
-X_fs (182, 165)
-(165,) (165,) (184,)
-samples (182,) features (184,) non zero 165
-Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (192, 15) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 184, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 184)
-p_val (184,)
-significant 171
-X_fs (192, 171)
-(171,) (171,) (184,)
-samples (192,) features (184,) non zero 171
-(3, 2, 184)
-Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (115, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (115, 201, 84) nans 0.0 y (115,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 178
-X_fs (115, 178)
-(178,) (178,) (201,)
-samples (115,) features (201,) non zero 178
-Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (192, 15) ['DPA' 'DualNoGo' 'DualGo']
-X (192, 201, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 176
-X_fs (192, 176)
-(176,) (176,) (201,)
-samples (192,) features (201,) non zero 176
-Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (316, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (316, 201, 84) nans 0.0 y (316,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 175
-X_fs (316, 175)
-(175,) (175,) (201,)
-samples (316,) features (201,) non zero 175
-Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (384, 15) ['DPA' 'DualNoGo' 'DualGo']
-X (384, 201, 84) nans 0.0 y (384,) [0. 1.]
-boots_coefs (1000, 201)
-p_val (201,)
-significant 173
-X_fs (384, 173)
-(173,) (173,) (201,)
-samples (384,) features (201,) non zero 173
-(3, 2, 201)
-Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (121, 15) ['DPA' 'DualGo' 'DualNoGo']
-X (121, 423, 84) nans 0.0 y (121,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 366
-X_fs (121, 366)
-(366,) (366,) (423,)
-samples (121,) features (423,) non zero 366
-Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (192, 15) ['DPA' 'DualGo' 'DualNoGo']
-X (192, 423, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 375
-X_fs (192, 375)
-(375,) (375,) (423,)
-samples (192,) features (423,) non zero 375
-Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (202, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (202, 423, 84) nans 0.0 y (202,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 371
-X_fs (202, 371)
-(371,) (371,) (423,)
-samples (202,) features (423,) non zero 371
-Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (288, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (288, 423, 84) nans 0.0 y (288,) [0. 1.]
-boots_coefs (1000, 423)
-p_val (423,)
-significant 369
-X_fs (288, 369)
-(369,) (369,) (423,)
-samples (288,) features (423,) non zero 369
-(3, 2, 423)
-Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (122, 16) ['DualGo' 'DualNoGo' 'DPA']
-X (122, 693, 84) nans 0.0 y (122,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 643
-X_fs (122, 643)
-(643,) (643,) (693,)
-samples (122,) features (693,) non zero 643
-Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (192, 16) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 693, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 596
-X_fs (192, 596)
-(596,) (596,) (693,)
-samples (192,) features (693,) non zero 596
-Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (322, 16) ['DualGo' 'DPA' 'DualNoGo']
-X (322, 693, 84) nans 0.0 y (322,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 637
-X_fs (322, 637)
-(637,) (637,) (693,)
-samples (322,) features (693,) non zero 637
-Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (384, 16) ['DPA' 'DualGo' 'DualNoGo']
-X (384, 693, 84) nans 0.0 y (384,) [0. 1.]
-boots_coefs (1000, 693)
-p_val (693,)
-significant 609
-X_fs (384, 609)
-(609,) (609,) (693,)
-samples (384,) features (693,) non zero 609
-(3, 2, 693)
-Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (147, 16) ['DualNoGo' 'DualGo' 'DPA']
-X (147, 444, 84) nans 0.0 y (147,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 399
-X_fs (147, 399)
-(399,) (399,) (444,)
-samples (147,) features (444,) non zero 399
-Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (192, 16) ['DPA' 'DualNoGo' 'DualGo']
-X (192, 444, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 398
-X_fs (192, 398)
-(398,) (398,) (444,)
-samples (192,) features (444,) non zero 398
-Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (371, 16) ['DualGo' 'DualNoGo' 'DPA']
-X (371, 444, 84) nans 0.0 y (371,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 401
-X_fs (371, 401)
-(401,) (401,) (444,)
-samples (371,) features (444,) non zero 401
-Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (384, 16) ['DPA' 'DualGo' 'DualNoGo']
-X (384, 444, 84) nans 0.0 y (384,) [0. 1.]
-boots_coefs (1000, 444)
-p_val (444,)
-significant 398
-X_fs (384, 398)
-(398,) (398,) (444,)
-samples (384,) features (444,) non zero 398
-(3, 2, 444)
-Loading files from /storage/leon/dual_task/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (149, 16) ['DualNoGo' 'DPA' 'DualGo']
-X (149, 668, 84) nans 0.0 y (149,) [0. 1.]
-boots_coefs (1000, 668)
-p_val (668,)
-significant 613
-X_fs (149, 613)
-(613,) (613,) (668,)
-samples (149,) features (668,) non zero 613
-Loading files from /storage/leon/dual_task/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (192, 16) ['DualNoGo' 'DualGo' 'DPA']
-X (192, 668, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 668)
-p_val (668,)
-significant 609
-X_fs (192, 609)
-(609,) (609,) (668,)
-samples (192,) features (668,) non zero 609
-Loading files from /storage/leon/dual_task/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (349, 16) ['DualGo' 'DPA' 'DualNoGo']
-X (349, 668, 84) nans 0.0 y (349,) [0. 1.]
-boots_coefs (1000, 668)
-p_val (668,)
-significant 611
-X_fs (349, 611)
-(611,) (611,) (668,)
-samples (349,) features (668,) non zero 611
-Loading files from /storage/leon/dual_task/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (384, 16) ['DPA' 'DualGo' 'DualNoGo']
-X (384, 668, 84) nans 0.0 y (384,) [0. 1.]
-boots_coefs (1000, 668)
-p_val (668,)
-significant 610
-X_fs (384, 610)
-(610,) (610,) (668,)
-samples (384,) features (668,) non zero 610
-(3, 2, 668)
-Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (130, 15) ['DualGo' 'DPA' 'DualNoGo']
-X (130, 232, 84) nans 0.0 y (130,) [0. 1.]
-boots_coefs (1000, 232)
-p_val (232,)
-significant 207
-X_fs (130, 207)
-(207,) (207,) (232,)
-samples (130,) features (232,) non zero 207
-Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (192, 15) ['DualGo' 'DPA' 'DualNoGo']
-X (192, 232, 84) nans 0.0 y (192,) [0. 1.]
-boots_coefs (1000, 232)
-p_val (232,)
-significant 208
-X_fs (192, 208)
-(208,) (208,) (232,)
-samples (192,) features (232,) non zero 208
-Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 14)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (213, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (213, 232, 84) nans 0.0 y (213,) [0. 1.]
-boots_coefs (1000, 232)
-p_val (232,)
-significant 210
-X_fs (213, 210)
-(210,) (210,) (232,)
-samples (213,) features (232,) non zero 210
-Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 14)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (288, 15) ['DualNoGo' 'DualGo' 'DPA']
-X (288, 232, 84) nans 0.0 y (288,) [0. 1.]
-boots_coefs (1000, 232)
-p_val (232,)
-significant 213
-X_fs (288, 213)
-(213,) (213,) (232,)
-samples (288,) features (232,) non zero 213
-(3, 2, 232)
-Loading files from /storage/leon/dual_task/data/ACCM03
-X_days (960, 361, 84) y_days (960, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (220, 16) ['DPA' 'DualGo' 'DualNoGo']
-X (220, 361, 84) nans 0.0 y (220,) [0. 1.]
-boots_coefs (1000, 361)
-p_val (361,)
-significant 335
-X_fs (220, 335)
-(335,) (335,) (361,)
-samples (220,) features (361,) non zero 335
-Loading files from /storage/leon/dual_task/data/ACCM03
-X_days (960, 361, 84) y_days (960, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (384, 16) ['DualNoGo' 'DualGo' 'DPA']
-X (384, 361, 84) nans 0.0 y (384,) [0. 1.]
-boots_coefs (1000, 361)
-p_val (361,)
-significant 318
-X_fs (384, 318)
-(318,) (318,) (361,)
-samples (384,) features (361,) non zero 318
-Loading files from /storage/leon/dual_task/data/ACCM03
-X_days (960, 361, 84) y_days (960, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (501, 16) ['DualNoGo' 'DualGo' 'DPA']
-X (501, 361, 84) nans 0.0 y (501,) [0. 1.]
-boots_coefs (1000, 361)
-p_val (361,)
-significant 338
-X_fs (501, 338)
-(338,) (338,) (361,)
-samples (501,) features (361,) non zero 338
-Loading files from /storage/leon/dual_task/data/ACCM03
-X_days (960, 361, 84) y_days (960, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (576, 16) ['DualGo' 'DualNoGo' 'DPA']
-X (576, 361, 84) nans 0.0 y (576,) [0. 1.]
-boots_coefs (1000, 361)
-p_val (361,)
-significant 320
-X_fs (576, 320)
-(320,) (320,) (361,)
-samples (576,) features (361,) non zero 320
-(3, 2, 361)
-Loading files from /storage/leon/dual_task/data/ACCM04
-X_days (960, 113, 84) y_days (960, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (209, 16) ['DualNoGo' 'DPA' 'DualGo']
-X (209, 113, 84) nans 0.0 y (209,) [0. 1.]
-boots_coefs (1000, 113)
-p_val (113,)
-significant 98
-X_fs (209, 98)
-(98,) (98,) (113,)
-samples (209,) features (113,) non zero 98
-Loading files from /storage/leon/dual_task/data/ACCM04
-X_days (960, 113, 84) y_days (960, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS first LASER 0
-y_labels (384, 16) ['DualNoGo' 'DualGo' 'DPA']
-X (384, 113, 84) nans 0.0 y (384,) [0. 1.]
-boots_coefs (1000, 113)
-p_val (113,)
-significant 100
-X_fs (384, 100)
-(100,) (100,) (113,)
-samples (384,) features (113,) non zero 100
-Loading files from /storage/leon/dual_task/data/ACCM04
-X_days (960, 113, 84) y_days (960, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (406, 16) ['DPA' 'DualNoGo' 'DualGo']
-X (406, 113, 84) nans 0.0 y (406,) [0. 1.]
-boots_coefs (1000, 113)
-p_val (113,)
-significant 106
-X_fs (406, 106)
-(106,) (106,) (113,)
-samples (406,) features (113,) non zero 106
-Loading files from /storage/leon/dual_task/data/ACCM04
-X_days (960, 113, 84) y_days (960, 15)
-DATA: FEATURES choice TASK all TRIALS  DAYS last LASER 0
-y_labels (576, 16) ['DPA' 'DualNoGo' 'DualGo']
-X (576, 113, 84) nans 0.0 y (576,) [0. 1.]
-boots_coefs (1000, 113)
-p_val (113,)
-significant 94
-X_fs (576, 94)
-(94,) (94,) (113,)
-samples (576,) features (113,) non zero 94
-(3, 2, 113)
-#+end_example
+: Loading files from /storage/leon/dual_task/data/JawsM01
+: X_days (768, 184, 84) y_days (768, 14)
+: DATA: FEATURES sample TASK all TRIALS  DAYS 1 LASER 0
+: y_labels (96, 15) ['DualNoGo' 'DualGo' 'DPA'] (96,)
+: X (96, 184, 84) nans 0.0 y (96,) [0. 1.]
+: (3456, 184) (3456,)
+
 
 #+begin_src ipython
 print(len(coefs_mice))
 #+end_src
 
 #+RESULTS:
-: 9
+: 204873c8-db6c-4221-ae58-fa658b914cb8
 
 #+begin_src ipython
 idx = 3
@@ -1278,7 +907,7 @@ print(options['mice'][idx], coefs_mice[idx].shape)
 #+end_src
 
 #+RESULTS:
-: JawsM15 (3, 2, 693)
+: ddf435c5-0862-4b73-8b26-15086b830af8
 
 #+begin_src ipython
 angle_SD_mice = []
@@ -1318,6 +947,7 @@ for j, mouse in enumerate(options['mice']):
 #+end_src
 
 #+RESULTS:
+: 7e94502a-caab-42bb-a33c-8d7b3fe92eb2
 
 #+begin_src ipython
 angle_SD_mice = np.array(angle_SD_mice)
@@ -1326,13 +956,14 @@ angle_DC_mice = np.array(angle_DC_mice)
 #+end_src
 
 #+RESULTS:
+: b884b5d7-ef67-4107-8494-ac326aa04548
 
 #+begin_src ipython
 print(angle_SD_mice.shape, options['days'])
 #+end_src
 
 #+RESULTS:
-: (9, 2) ['first', 'last']
+: 0d942ea4-7e7c-41e3-90b6-e5fa66a9f6cf
 
 #+begin_src ipython
 fig, ax = plt.subplots(1, 3, figsize= [3*width , width * golden_ratio], sharex=True)
@@ -1364,6 +995,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
+: 02a95eca-1893-46a0-912e-c13c4a1c5448
 
 #+begin_src ipython
 fig, ax = plt.subplots(1, 3, figsize= [3*width , width * golden_ratio], sharey=True)
@@ -1394,17 +1026,19 @@ plt.show()
 #+end_src
 
 #+RESULTS:
+: a3af5bb4-1daf-4f02-b1ff-8e219e4dce2a
 
 #+begin_src ipython
 print(options['days'])
 #+end_src
 
 #+RESULTS:
-: ['first', 'last']
+: 1ed5cd3e-42c8-47fc-9678-10afdbbf42f2
 
 * Reload data
 
 #+begin_src ipython
+options['l1_ratio'] = 1.0
 coefs_mice = []
 
 for mouse in options['mice']:
@@ -1416,6 +1050,9 @@ for mouse in options['mice']:
 #+RESULTS:
 
 #+begin_src ipython
+test_odor = []
+sample_odor = []
+
 options['days'] = 'all'
 
 X_mouse, y_mouse = [], []
@@ -1426,7 +1063,7 @@ for idx, mouse in enumerate(options['mice']):
     options['features'] = 'sample'
     options['verbose'] = 0
 
-    options['trials'] = 'correct'
+    # options['trials'] = 'correct'
     options['reload'] = 0
     options['laser'] = 0
 
@@ -1439,10 +1076,17 @@ for idx, mouse in enumerate(options['mice']):
 
     options = set_options(**options)
 
-    coefs = coefs_mice[idx]
-    theta = get_theta(coefs[0], coefs[-1], IF_NORM=0, GM=0)
+    coefs = coefs_mice[idx] / (np.linalg.norm(coefs_mice[idx], axis=-1, keepdims=1) + 1e-6)
+    # coefs = (coefs_mice[idx] - coefs_mice[idx].mean(-1)[..., None]) / (np.linalg.norm(coefs_mice[idx], axis=-1, keepdims=1))
+
+    theta = get_theta(coefs[-1], coefs[0], IF_NORM=0, GM=0, IF_MEAN=0)
+
     theta_mouse.append(theta)
     index = np.argsort(theta, -1)
+
+    sample_odor.append(np.stack([coefs[0, 0, index[0]], coefs[0, 1, index[1]]]))
+    test_odor.append(np.stack([coefs[1, 0, index[0]], coefs[1, 1, index[1]]]))
+
     print(theta.shape, index.shape)
 
     X_list = []
@@ -1458,10 +1102,12 @@ for idx, mouse in enumerate(options['mice']):
             X_days, y_days = get_X_y_days(**options)
             X_data, y_data = get_X_y_S1_S2(X_days, y_days, **options)
 
-            if i < 4:
-                X_dum.append(X_data[..., index[0], :])
-            else:
-                X_dum.append(X_data[..., index[0], :])
+            X_dum.append(X_data[..., index[i], :])
+
+            # if i < 1:
+            #     X_dum.append(X_data[..., index[0], :])
+            # else:
+            #     X_dum.append(X_data[..., index[1], :])
 
             y_dum.append(y_data.odor_pair.to_numpy())
             options['reload'] = 0
@@ -1474,15 +1120,479 @@ for idx, mouse in enumerate(options['mice']):
 #+end_src
 
 #+RESULTS:
-: (2, 184) (2, 184)
-: (2, 201) (2, 201)
-: (2, 423) (2, 423)
-: (2, 693) (2, 693)
-: (2, 444) (2, 444)
-: (2, 668) (2, 668)
-: (2, 232) (2, 232)
-: (2, 361) (2, 361)
-: (2, 113) (2, 113)
+: (4, 184) (4, 184)
+: (6, 201) (6, 201)
+: (5, 423) (5, 423)
+: (6, 693) (6, 693)
+: (6, 444) (6, 444)
+: (6, 668) (6, 668)
+: (5, 232) (5, 232)
+: (5, 361) (5, 361)
+: (5, 113) (5, 113)
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import binned_statistic
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+
+def naninterp(x):
+    """Interpolate NaNs in 1D array"""
+    nans = np.isnan(x)
+    if np.any(nans):
+        not_nan = ~nans
+        x[nans] = np.interp(np.flatnonzero(nans), np.flatnonzero(not_nan), x[not_nan])
+    return x
+
+n_bins = 32
+sigma = 8
+all_binned = []
+
+for i, arr in enumerate(sample_odor):
+    x = np.linspace(0, 360, arr[0].shape[0])
+
+    x = theta_mouse[i][-1] * 180 / np.pi
+    # print(i, x.shape, arr.shape)
+
+    bin_edges = np.linspace(0, 360, n_bins + 1)
+    binned_mean, _, _ = binned_statistic(x, arr[-1], statistic='mean', bins=bin_edges)
+
+    binned_mean = np.roll(binned_mean, shift=binned_mean.shape[0]//2)
+
+    all_binned.append(binned_mean)
+
+all_binned = np.array(all_binned)
+
+# Fill NaNs by interpolation, then smooth
+all_filtered = np.array([
+    circcvl(naninterp(trace.copy()), windowSize=sigma)
+    # uniform_filter1d(naninterp(trace.copy()), size=sigma, mode='mirror')
+    for trace in all_binned
+])
+
+# all_filtered = np.array([
+#     gaussian_filter1d(naninterp(trace.copy()), sigma=sigma, mode='mirror')
+#     for trace in all_binned
+# ])
+
+binned_avg = np.nanmean(all_filtered, axis=0)
+binned_sem = np.nanstd(all_filtered, axis=0) / np.sqrt(np.sum(~np.isnan(all_filtered), axis=0))
+# lower = binned_avg - 1.96 * binned_sem
+# upper = binned_avg + 1.96 * binned_sem
+
+lower = binned_avg - binned_sem
+upper = binned_avg + binned_sem
+
+xvals = np.linspace(0, 360, n_bins)
+
+plt.plot(xvals, binned_avg, label='Mean (smoothed)')
+plt.fill_between(xvals, lower, upper, color='gray', alpha=0.3, label='95% CI')
+
+plt.axhline(0, ls='--')
+plt.axvline(0, ls='--')
+plt.axvline(180, ls='--')
+
+plt.xlabel("Pref. Location (°)")
+plt.ylabel("Weights A/B")
+plt.xticks(np.linspace(0, 360, 5))
+plt.savefig('./figures/bernstein/sample_weights.svg', dpi=360)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/landscape/figure_37.png]]
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import binned_statistic
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+
+def naninterp(x):
+    """Interpolate NaNs in 1D array"""
+    nans = np.isnan(x)
+    if np.any(nans):
+        not_nan = ~nans
+        x[nans] = np.interp(np.flatnonzero(nans), np.flatnonzero(not_nan), x[not_nan])
+    return x
+
+n_bins = 32
+sigma = 8
+all_binned = []
+
+for i, arr in enumerate(test_odor):
+    x = np.linspace(0, 360, arr[0].shape[0])
+
+    x = theta_mouse[i][-1] * 180 / np.pi
+    # print(i, x.shape, arr.shape)
+
+    bin_edges = np.linspace(0, 360, n_bins + 1)
+    binned_mean, _, _ = binned_statistic(x, arr[-1], statistic='mean', bins=bin_edges)
+    all_binned.append(binned_mean)
+
+all_binned = np.array(all_binned)
+
+# Fill NaNs by interpolation, then smooth
+all_filtered = np.array([
+    # circcvl(naninterp(trace.copy()), windowSize=sigma)
+    uniform_filter1d(naninterp(trace.copy()), size=sigma, mode='mirror')
+    for trace in all_binned
+])
+
+# all_filtered = np.array([
+#     gaussian_filter1d(naninterp(trace.copy()), sigma=sigma, mode='mirror')
+#     for trace in all_binned
+# ])
+
+binned_avg = np.nanmean(all_filtered, axis=0)
+binned_sem = np.nanstd(all_filtered, axis=0) / np.sqrt(np.sum(~np.isnan(all_filtered), axis=0))
+lower = binned_avg - 1.96 * binned_sem
+upper = binned_avg + 1.96 * binned_sem
+
+lower = binned_avg - binned_sem
+upper = binned_avg +  binned_sem
+
+xvals = np.linspace(0, 360, n_bins)
+
+plt.plot(xvals, binned_avg, label='Mean (smoothed)')
+plt.fill_between(xvals, lower, upper, color='gray', alpha=0.3, label='95% CI')
+
+plt.axhline(0, ls='--')
+plt.axvline(45, ls='--')
+plt.axvline(225, ls='--')
+plt.xticks(np.linspace(0, 360, 5))
+plt.xlabel("Pref. Location (°)")
+plt.ylabel("Weights C/D")
+plt.savefig('./figures/bernstein/test_weights.svg', dpi=360)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/landscape/figure_38.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Traces
+
+#+begin_src ipython
+from scipy.stats import gaussian_kde
+from src.decode.bump import decode_bump, circcvl
+
+result = []
+pref_locs = []
+
+for i_mouse, mouse in enumerate(options['mice']):
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    X_list = np.vstack([X_mouse[i_mouse][i][j] for i in range(1) for j in range(3)])
+    y_list = np.hstack([y_mouse[i_mouse][i][j] for i in range(1) for j in range(3)])
+
+    theta_list = np.stack([theta_mouse[i_mouse][i] for i in range(1)])
+    pref_index = np.argsort(theta_list, -1)
+    pref_loc = np.take_along_axis(theta_list, pref_index, axis=-1)
+
+    # weights = np.empty_like(X_list[..., 0])
+    # for i in range(X_list.shape[0]):
+    #     if i<X_list.shape[0]//2:
+    #         kde = gaussian_kde(pref_loc[0], bw_method='scott')
+    #         density = kde(pref_loc[0])
+    #     else:
+    #         kde = gaussian_kde(pref_loc[1], bw_method='scott')
+    #         density = kde(pref_loc[1])
+
+    #     w = 1.0 / (density + 1e-6)
+    #     w *= len(w) / w.sum()
+    #     maxw = np.percentile(w, 95)
+    #     weights[i] = np.clip(w, None, maxw)
+
+    theta_list = np.stack([theta_mouse[i_mouse][i] for i in range(2)])
+    pref_index = np.argsort(theta_list, -1)
+    pref_loc = np.take_along_axis(theta_list, pref_index, axis=-1)
+    pref_locs.append(pref_loc)
+
+    X_list = (X_list - X_list.mean(0)[None]) # / X_list.std(0)[None]
+
+    res_pair = []
+    for pair in [0, 1, 2, 3]:
+
+        idx = (y_list==pair)
+
+        # weighted = X_list[idx] * weights[idx, :, None]
+        weighted = X_list[idx]
+
+        # if pair>1:
+        #     weighted = np.roll(weighted, weighted.shape[1]//2, axis=1)
+
+        mean_image = weighted.mean(0) # / (weighted.std(0)+1e-5)
+
+        res_pair.append(uniform_filter1d(mean_image, size=int(0.05 * X_list.shape[1]), axis=0, mode='wrap'))
+        # res_pair.append(gaussian_filter1d(mean_image, sigma=int(0.05 * X_list.shape[1]), axis=0, mode='mirror'))
+    result.append(np.array(res_pair))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(X_list.shape)
+#+end_src
+
+#+RESULTS:
+: (209, 113, 84)
+
+#+begin_src ipython
+options['epochs'] = ['STIM', 'TEST']
+options['T_WINDOW'] = 0.0
+options = set_options(**options)
+
+res_avg = []
+for i in range(9):
+    res_avg.append(avg_epochs(result[i], **options, axis=-1).T)
+    # res_avg.append(avg_epochs((result[i]-result[i].mean(-1)[..., None]), **options, axis=-1).T)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+mouse = 3
+
+xvals = np.linspace(0, 360, res_avg[mouse].shape[1])
+fig, ax = plt.subplots(1, 2 , figsize=(2*width, height))
+
+for i in range(2):
+    ax[i].plot(xvals, res_avg[mouse][i])
+    ax[i].axvline(45, ls='--')
+    ax[i].axvline(225, ls='--')
+    ax[i].set_xlabel("Pref. Location (°)")
+    ax[i].set_ylabel("DF/F")
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/landscape/figure_43.png]]
+
+#+begin_src ipython
+print(res_avg[0].shape, pref_loc.shape, result[mouse].shape)
+#+end_src
+
+#+RESULTS:
+: (2, 184, 4) (2, 113) (4, 693, 84)
+
+#+begin_src ipython
+fig, ax = plt.subplots(figsize=(12, height))
+vmin, vmax = np.percentile(result[mouse][0].reshape(-1), [5, 95])
+
+ax.imshow(result[mouse][0], aspect='auto', cmap='jet', vmin=vmin, vmax=vmax,
+          extent=[0, 14, 0, 2*np.pi], origin='lower')
+
+ax.set_xlabel('Time (s)')
+ax.set_ylabel('Pref. Loc. (°)')  # Or degrees if you convert
+# ax.set_xlim([2, 12])
+
+# Optionally, show yticks at a few preferred locations
+n_ticks = 8
+tick_locs = np.linspace(0, 2*np.pi, 5)
+ax.set_yticks(tick_locs)
+ax.set_yticklabels([f"{np.rad2deg(a):.0f}°" for a in tick_locs])  # if theta is in radians
+
+add_vdashed(ax)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/landscape/figure_45.png]]
+
+#+begin_src ipython
+import numpy as np
+
+def bin_and_stack_arrays(arrays, angle_arrays, bins=100):
+
+    binned = []
+    for arr, angles in zip(arrays, angle_arrays):
+        N, Mi, K = arr.shape
+        binned_arr = np.empty((N, len(bins), K))
+        for n in range(N):
+            for k in range(K):
+                # if n<N//2:
+                #     binned_arr[n, :, k] = np.interp(bins, angles[0]*180/np.pi, arr[n, :, k], left=np.nan, right=np.nan)
+                # else:
+                #     binned_arr[n, :, k] = np.interp(bins, angles[1]*180/np.pi, arr[n, :, k], left=np.nan, right=np.nan)
+
+                binned_arr[n, :, k] = np.interp(bins, np.linspace(0, 360, Mi), arr[n, :, k], left=0, right=360)
+
+        binned.append(binned_arr)
+    return np.stack(binned)  # (num_arrays, N, Nbins, K)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+bin_res = bin_and_stack_arrays(res_avg, pref_locs, np.linspace(0, 360, 128))
+avg_res = np.nanmean(bin_res, axis=0)  # average across arrays, ignoring nans
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from scipy.stats import sem
+# Suppose you want to roll all arrays together by the global mean max:
+mean_all = np.nanmean(bin_res, axis=0)  # (N, n_bins, K)
+
+# Compute y0 as in your code
+y0 = mean_all[..., :2].mean((0, -1))
+y1 = mean_all[..., 2:].mean((0, -1))
+
+max_bin = np.nanargmax(y0)
+roll_amount = 0 # max_bin   # roll so that max is at index 0
+
+print(max_bin, y0.shape)
+# Roll every array (axis=1 is n_bins)
+bin_res_rolled = np.roll(bin_res, shift=roll_amount, axis=2)  # axis=2 is n_bins
+
+# Now recalculate mean/SEM as before using bin_res_rolled
+mean_all = np.nanmean(bin_res_rolled, axis=0)
+sem_all = sem(bin_res_rolled, axis=0, nan_policy='omit')
+
+# # bin_res: (n_arrays, N, n_bins, K)
+# # We'll calculate mean and SEM across axis=0 (arrays)
+# mean_all = np.nanmean(bin_res, axis=0)   # shape (N, n_bins, K)
+# sem_all = sem(bin_res, axis=0, nan_policy='omit')  # shape (N, n_bins, K)
+
+xvals = np.linspace(0, 360, mean_all.shape[1])
+fig, ax = plt.subplots(1, 2, figsize=(2*width, height))
+
+# 1st plot: avg_res[0][:, :2].mean(-1)
+y0 = mean_all[..., :2].mean((0,-1))
+e0 = sem_all[..., :2].mean((0,-1))
+ax[0].plot(xvals, y0, label='A', color='r')
+ax[0].fill_between(xvals, y0-e0, y0+e0, alpha=0.3, color='r')
+
+y1 = mean_all[..., 2:].mean((0,-1))
+e1 = sem_all[..., 2:].mean((0,-1))
+ax[0].plot(xvals, y1, label='B', color='k')
+ax[0].fill_between(xvals, y1-e1, y1+e1, alpha=0.3, color='k')
+ax[0].axvline(180, ls='--')
+ax[0].axvline(0, ls='--')
+ax[0].set_title('Sample')
+
+# # 2nd plot: avg_res[1][:, [0, 3]].mean(-1)
+y2 = mean_all[..., [0, 3]].mean((0,-1))
+e2 = sem_all[..., [0, 3]].mean((0,-1))
+ax[1].plot(xvals, y2, label= 'C')
+ax[1].fill_between(xvals, y2-e2, y2+e2, alpha=0.3)
+
+y3 = mean_all[..., [1, 2]].mean((0,-1))
+e3 = sem_all[..., [1, 2]].mean((0,-1))
+ax[1].plot(xvals, y3, label='D')
+ax[1].fill_between(xvals, y3-e3, y3+e3, alpha=0.3)
+
+ax[1].axvline(45, ls='--')
+ax[1].axvline(225, ls='--')
+ax[1].set_title('Test')
+
+for i in range(2):
+    ax[i].set_xlabel("Pref. Location (°)")
+    ax[i].set_ylabel("DF/F")
+    ax[i].set_xticks(np.linspace(0, 360, 5))
+ax[0].legend(fontsize=12)
+ax[1].legend(fontsize=12, frameon=0)
+#ax[2].legend(fontsize=12, frameon=0)
+plt.savefig('./figures/bernstein/data_inputs.svg')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: 81 (128,)
+[[file:./figures/landscape/figure_48.png]]
+:END:
+
+#+begin_src ipython
+labels=['AC', 'AD', 'BC', 'BD']
+fig, ax = plt.subplots(1, 2, figsize=(2*width, height))
+
+for i in range(4):
+
+      if i in [0, 2]:
+            y2 = mean_all[..., i].mean(0)
+            e2 = sem_all[..., i].mean(0)
+            ax[0].plot(xvals, y2, label=labels[i])
+            ax[0].fill_between(xvals, y2-e2, y2+e2, alpha=0.3)
+
+      else:
+            y2 = mean_all[..., i].mean(0)
+            e2 = sem_all[..., i].mean(0)
+            ax[1].plot(xvals, y2, label=labels[i])
+            ax[1].fill_between(xvals, y2-e2, y2+e2, alpha=0.3)
+
+for i in range(2):
+      ax[i].set_xlabel("Pref. Location (°)")
+      ax[i].set_ylabel("DF/F")
+      ax[i].axvline(45, ls='--')
+      ax[i].axvline(225, ls='--')
+      ax[i].set_xticks(np.linspace(0, 360, 5))
+
+      ax[i].legend(fontsize=12)
+
+plt.savefig('./figures/bernstein/data_inputs_pairs.svg')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/landscape/figure_49.png]]
+
+#+begin_src ipython
+labels=['AC - AD', 'BC - BD', 'AC - BC', 'AD - BD']
+fig, ax = plt.subplots(1, 2, figsize=(2*width, height))
+
+for i in range(2):
+
+      if i in [0]:
+            y2 = mean_all[..., 0].mean(0)
+            y3 = mean_all[..., 1].mean(0)
+
+            ax[0].plot(xvals, y2-y3, label=labels[i])
+
+            y2 = mean_all[..., 0].mean(0)
+            y3 = mean_all[..., 2].mean(0)
+
+            ax[1].plot(xvals, y2-y3, label=labels[i+2])
+
+
+      else:
+            y2 = mean_all[..., 2].mean(0)
+            y3 = mean_all[..., 3].mean(0)
+
+            ax[0].plot(xvals, y2-y3, label=labels[i])
+
+            y2 = mean_all[..., 1].mean(0)
+            y3 = mean_all[..., 3].mean(0)
+
+            ax[1].plot(xvals, y2-y3, label=labels[i+2])
+
+
+
+for i in range(2):
+      ax[i].set_xlabel("Pref. Location (°)")
+      ax[i].set_ylabel("DF/F")
+      ax[i].axvline(45, ls='--')
+      ax[i].axvline(225, ls='--')
+
+      ax[i].legend(fontsize=12)
+
+plt.savefig('./figures/bernstein/data_inputs_pairs.svg')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/landscape/figure_50.png]]
 
 #+begin_src ipython
 
@@ -1493,19 +1603,13 @@ for idx, mouse in enumerate(options['mice']):
 * Energy
 
 #+begin_src ipython
-from src.attractor.landscape import EnergyLandscape
-energy = EnergyLandscape(IF_HMM=0)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
 num_bins = 64
 window = 0
 sigma = 1
-# bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
 
-bins = np.linspace(-1, 1, num_bins, endpoint=False)
+bins = np.linspace(0, 2*np.pi, num_bins, endpoint=False)
+
+# bins = np.linspace(-1, 1, num_bins, endpoint=False)
 
 if len(options['days'])>3:
      days = np.arange(1, 7)
@@ -1513,92 +1617,18 @@ else:
      days = options['days']
 
 print(days)
+#options['days'] = ['First', 'Last']
 #+end_src
 
 #+RESULTS:
 : [1 2 3 4 5 6]
 
 #+begin_src ipython
-mouse = 5
-task = 0
-pair = 0
-trial = -1
+from src.attractor.landscape import EnergyLandscape
+energy = EnergyLandscape(IF_HMM=0)
 #+end_src
 
 #+RESULTS:
-
-#+begin_src ipython
-from scipy.ndimage import gaussian_filter1d
-from scipy.stats import gaussian_kde
-
-print(options['mice'][mouse], tasks[task])
-
-X_list = np.array(X_mouse[mouse][0][task])
-y_list = np.array(y_mouse[mouse][0][task])
-print(X_list.shape, y_list.shape)
-sigma = 0.05 * X_list.shape[-2]
-
-theta = np.array(theta_mouse[mouse][0])
-index = np.argsort(theta, -1)
-pref_dir = theta[index]
-
-# kde = gaussian_kde(pref_dir, bw_method='scott')
-# density = kde(pref_dir)
-# weights = 1.0 / (density+1e-6)
-# weights *= len(weights) / weights.sum()
-# maxw = np.percentile(weights, 95)
-# weights = np.clip(weights, None, maxw)
-
-idx = y_list==pair
-
-# weighted = X_list[idx] * weights[None, :, None]
-weighted = X_list[idx]
-
-if pair>1:
-    weighted = np.roll(weighted, weighted.shape[1]//2, axis=1)
-
-if trial==-1:
-    mean_image = weighted.mean(0)
-else:
-    mean_image = weighted[trial]
-img = gaussian_filter1d(mean_image, sigma, axis=0)
-
-fig, ax = plt.subplots(figsize=(12, height))
-vmin, vmax = np.percentile(img.reshape(-1), [5, 95])
-
-ax.imshow(img, aspect='auto', cmap='jet', vmin=vmin, vmax=vmax,
-          extent=[0, 14, pref_dir[0], pref_dir[-1]], origin='lower')
-
-ax.set_xlabel('Time (s)')
-ax.set_ylabel('Pref. Loc. (°)')  # Or degrees if you convert
-
-# Optionally, show yticks at a few preferred locations
-n_ticks = 8
-tick_locs = np.linspace(0, 2*np.pi, 5)
-ax.set_yticks(tick_locs)
-ax.set_yticklabels([f"{np.rad2deg(a):.0f}°" for a in tick_locs])  # if theta is in radians
-
-
-add_vdashed(ax)
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: ChRM04 DPA
-: (20, 668, 84) (20,)
-[[./figures/landscape/figure_41.png]]
-:END:
-
-#+begin_src ipython
-plt.hist(pref_dir * 180 / np.pi, weights=None, bins=15)
-plt.xlabel('Pref. Loc (°)')
-plt.ylabel('Count')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[./figures/landscape/figure_42.png]]
 
 #+begin_src ipython
 epoch = np.concatenate((options['bins_BL'], options['bins_STIM'], options['bins_ED']))
@@ -1609,13 +1639,13 @@ for idx, mouse in enumerate(options['mice']):
 
     options['mouse'] = mouse
     options = set_options(**options)
-
+    print(options['days'])
     energy_day = []
     ci_day = []
 
     for i, day in enumerate(options['days']):
         X = np.vstack(X_list[i])
-        X = X[..., options['bins_ED']]
+        X = X[..., options['bins_DELAY']]
         # X = X[..., epoch]
         _, phi = decode_bump(X, axis=1)
 
@@ -1624,7 +1654,7 @@ for idx, mouse in enumerate(options['mice']):
         # # X = X[..., epoch]
         # _, phi = decode_bump(X, axis=1)
 
-        phi = np.sin(phi)
+        # phi = np.sin(phi)
 
         # phi = np.vstack((phi, phi1))
 
@@ -1643,13 +1673,24 @@ for idx, mouse in enumerate(options['mice']):
 #+end_src
 
 #+RESULTS:
+: [1 2 3 4]
+: [1 2 3 4 5 6]
+: [1 2 3 4 5]
+: [1 2 3 4 5 6]
+: [1 2 3 4 5 6]
+: [1 2 3 4 5 6]
+: [1 2 3 4 5]
+: [1 2 3 4 5]
+: [1 2 3 4 5]
 
 #+begin_src ipython
 cmap = plt.get_cmap('Blues')
-colors = [cmap((i+1)/6) for i in range(7)]
+colors = [cmap((i+1)/6) for i in range(6)]
+print(np.array(colors).shape)
 #+end_src
 
 #+RESULTS:
+: (6, 4)
 
 #+begin_src ipython
 import numpy as np
@@ -1754,12 +1795,12 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_48.png]]
+[[file:./figures/landscape/figure_59.png]]
 
 #+begin_src ipython
 from scipy.signal import find_peaks
-from scipy.ndimage import gaussian_filter1d
-sigma=1
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+sigma=20
 
 fig, ax = plt.subplots(3, 3, figsize= [3*width, 3*width * golden_ratio])
 ax_flat = ax.flatten()
@@ -1767,7 +1808,7 @@ ax_flat = ax.flatten()
 minima_mouse = np.zeros((9, 6, 2), dtype='int') * np.nan
 bin_centers = 0.5 * (bins[:-1] + bins[1:])   # Midpoint of each bin
 # locations = np.rad2deg(bin_centers)  # Convert degrees to radians
-locations = bin_centers  # Convert degrees to radians
+locations = bin_centers * 180 / np.pi # Convert degrees to radians
 
 for idx, mouse in enumerate(options['mice']):
     peaks_list, minimas_list = [], []
@@ -1780,7 +1821,7 @@ for idx, mouse in enumerate(options['mice']):
 
     for i, day in enumerate(options['days']):
         #locations = np.linspace(0, 360, energy_day[i].shape[0])
-        energy_filtered = gaussian_filter1d(energy_day[i], sigma)  # Adjust sigma as needed
+        energy_filtered = uniform_filter1d(energy_day[i], size=sigma)  # Adjust sigma as needed
         ax.plot(locations, energy_filtered * 100 , color=colors[i])
         # ax.plot(energy_day[i] * 100 , color=colors[i])
         ax.set_title(mouse)
@@ -1814,7 +1855,7 @@ for idx, mouse in enumerate(options['mice']):
 #+end_src
 
 #+RESULTS:
-[[./figures/landscape/figure_49.png]]
+[[file:./figures/landscape/figure_60.png]]
 
 #+begin_src ipython
 

@@ -2,7 +2,21 @@
 #+STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session performance :kernel dual_data
 
+* Imports
+
+#+begin_src ipython
+  import seaborn as sns
+  import sys
+  sys.path.insert(0, '../')
+  from src.performance.perf_tasks import run_perf_tasks
+  from src.common.fig_grid import create_grid
+  from src.common.options import set_options
+#+end_src
+
+#+RESULTS:
+
 * Notebook Settings
+
 #+begin_src ipython
     %load_ext autoreload
     %autoreload 2
@@ -14,705 +28,263 @@
 #+end_src
 
 #+RESULTS:
+:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
 : /home/leon/mambaforge/envs/dual_data/bin/python
-
-* Imports
+: <Figure size 600x370.82 with 0 Axes>
+:END:
 
 #+begin_src ipython
-  import sys
-  sys.path.insert(0, '../')
-  from src.performance.perf_tasks import run_perf_tasks
-  from src.common.fig_grid import create_grid
-  from src.common.options import set_options
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      pkl.dump(obj, open(path + "/" + name + ".pkl", "wb"))
+
+
+  def pkl_load(name, path="."):
+      return pkl.load(open(path + "/" + name + '.pkl', "rb"))
+
 #+end_src
 
 #+RESULTS:
 
 * Performance
-** Parameters
 
 #+begin_src ipython
-  mouse = 'JawsM15'
-  perf_type = 'incorrect_fa'
-  tasks = ["DPA", 'DualGo', 'DualNoGo']
-  options = set_options()
-  options['laser'] = 0
-  options['reload'] = 0
-  options['verbose'] = 1
-#+end_src
+# mice = ['JawsM15']
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# mice = ['AP02', 'AP12', 'PP09']
+# mice = ['PP09','PP17', 'RP13']
 
-#+RESULTS:
+tasks = ['DPA', "DualGo", 'DualNoGo']
+perf_type = 'correct'
 
-** Single Mouse
+perf_mice = []
+for mouse in mice:
+    perf_ = []
+    for perf_type in ['correct', 'correct_rej', 'correct_hit']:
+        print('mouse', mouse, 'perf', perf_type)
+        perf, ci = run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='all', tasks=tasks)
+        perf_.append(perf)
 
-#+begin_src ipython
-  tasks = ['DPA']
-  run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='AB', tasks=tasks, pal=options['pal'], laser=0)
-  run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='AB', tasks=tasks, pal='k', laser=1)
-  plt.ylim([0, 1])
-  plt.show()
-#+end_src
+    while np.array(perf_).shape[-1] !=6:
+        perf_ = np.append(perf_, np.nan * np.zeros((3, len(tasks), 1)), axis=-1)
 
-#+RESULTS:
-:RESULTS:
-: 0.5
-: DPA 1152 (1152, 14) (96, 14)
-: 0.5
-: DPA 1152 (1152, 14) (96, 14)
-[[./.ob-jupyter/aab758dd1b58a4ed0aba628a93208b6d1e25b796.png]]
-:END:
+    perf_mice.append(perf_)
 
-#+begin_src ipython
-  tasks = ["DualGo"]
-  run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='AB', tasks=tasks, pal=options['pal'], laser=0)
-  run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='AB', tasks=tasks, pal=['k', 'k', 'k'], laser=1)
-  plt.ylim([0, 1])
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: 0.5
-: DualGo 1152 (1152, 14) (96, 14)
-: 0.5
-: DualGo 1152 (1152, 14) (96, 14)
-[[./.ob-jupyter/8db49b001a54a9a74dbe3c11d9570e2a3125d234.png]]
-:END:
-
-#+begin_src ipython
-  tasks = ["DualNoGo"]
-  run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='AB', tasks=tasks, pal=options['pal'], laser=0)
-  run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='AB', tasks=tasks, pal=['k', 'k', 'k'], laser=1)
-  plt.ylim([0, 1])
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: DualNoGo 1152 (1152, 14) (96, 14)
-: 0.5
-: DualNoGo 1152 (1152, 14) (96, 14)
-[[./.ob-jupyter/e2cb7a13c50bd156a2a01b78ede17b69c5b2d9a1.png]]
-:END:
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  options = set_options()
-  tasks = ["DualGo"]
-  perf_A = run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='A', tasks=tasks, pal=options['pal'])
-  options['pal'][1] = options['pal'][0]
-  perf_B = run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='B', tasks=tasks, pal=options['pal'])
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: DualGo 768 (768, 11) (64, 11)
-: DualGo 768 (768, 11) (64, 11)
-[[./.ob-jupyter/a2387258eb553f4c776fba4eb027f0ddedd61ab0.png]]
-:END:
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-  # print(perf_A.shape)
-  # print(perf_B.shape)
-  # print(np.stack((perf_A, perf_B)).shape)
-  Delta_perf = perf_A - perf_B
-
-  plt.plot(np.mean(Delta_perf,0))
-  plt.show()
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/14df04d72073852ce0569b513602805ed16fb89c.png]]
-
-
-#+begin_example
-  loading files from /home/leon/dual_task/src.data/ACCM03
-  X_days (960, 361, 84) y_days (960, 6)
-  ##########################################
-  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
-  ##########################################
-  DPA 960 (960, 6) (160, 6)
-  DualGo 960 (960, 6) (160, 6)
-  DualNoGo 960 (960, 6) (160, 6)
-  loading files from /home/leon/dual_task/src.data/ACCM03
-  X_days (960, 361, 84) y_days (960, 6)
-  ##########################################
-  PREPROCESSING: SCALER robust AVG MEAN 0 AVG NOISE True UNIT VAR False
-  ##########################################
-  DPA 960 (960, 6) (160, 6)
-  DualGo 960 (960, 6) (160, 6)
-#+end_example
-
-
-#+begin_src ipython
-  # print(perf_A.shape)
-  # print(perf_B.shape)
-  # print(np.stack((perf_A, perf_B)).shape)
-  Delta_perf = perf_A - perf_B
-
-  plt.plot(np.mean(Delta_perf,0))
-  plt.show()
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/14df04d72073852ce0569b513602805ed16fb89c.png]]
-
-** All Mice
-
-#+begin_src ipython
-  mice = ['JawsM15', 'JawsM18', 'JawsM01', 'JawsM06', 'JawsM12']
-  # mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04', 'JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
-  # mice = ['AP02', 'AP12', 'PP09']
-  # mice = ['PP09','PP17', 'RP13']
-  # mice = ['ChRM04','JawsM15', 'JawsM18']
-  tasks = ['DPA', "DualGo", 'DualNoGo']
-  # tasks = ['all']
-  perf_type = 'correct'
-
-  perfs = []
-  perfs_on = []
-
-  for mouse in mice:
-      print(mouse)
-      perf = np.array(run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='all', tasks=tasks, pal=options['pal']))
-      perf_on = np.array(run_perf_tasks(mouse=mouse, perf_type=perf_type, sample='all', tasks=tasks, pal=options['pal'], laser=1))
-      plt.close('all')
-
-      print(perf.shape)
-
-      while perf.shape[-1] !=6:
-          perf = np.append(perf, np.nan * np.zeros((len(tasks), 1)), axis=-1)
-          perf_on = np.append(perf_on, np.nan * np.zeros((len(tasks), 1)), axis=-1)
-
-      # print(perf.shape)
-      perfs.append(perf)
-      perfs_on.append(perf_on)
-
-  # perfs = np.array(perfs)
-  # perfs_on = np.array(perfs_on)
-  # print(perfs.shape)
+perf_mice = np.array(perf_mice)
+print(perf_mice.shape)
 #+end_src
 
 #+RESULTS:
 #+begin_example
-JawsM15
-0.5
-DPA 1152 (1152, 14) (96, 14)
-0.5
-DualGo 1152 (1152, 14) (96, 14)
-0.5
-DualNoGo 1152 (1152, 14) (96, 14)
-0.5
-DPA 1152 (1152, 14) (96, 14)
-0.5
-DualGo 1152 (1152, 14) (96, 14)
-0.5
-DualNoGo 1152 (1152, 14) (96, 14)
-(3, 6)
-JawsM18
-0.5
-DPA 1152 (1152, 14) (96, 14)
-0.5
-DualGo 1152 (1152, 14) (96, 14)
-0.5
-DualNoGo 1152 (1152, 14) (96, 14)
-0.5
-DPA 1152 (1152, 14) (96, 14)
-0.5
-DualGo 1152 (1152, 14) (96, 14)
-0.5
-DualNoGo 1152 (1152, 14) (96, 14)
-(3, 6)
-JawsM01
-0.5
-DPA 768 (768, 12) (64, 12)
-0.5
-DualGo 768 (768, 12) (64, 12)
-0.5
-DualNoGo 768 (768, 12) (64, 12)
-0.5
-DPA 768 (768, 12) (64, 12)
-0.5
-DualGo 768 (768, 12) (64, 12)
-0.5
-DualNoGo 768 (768, 12) (64, 12)
-(3, 4)
-JawsM06
-0.5
-DPA 1152 (1152, 12) (96, 12)
-0.5
-DualGo 1152 (1152, 12) (96, 12)
-0.5
-DualNoGo 1152 (1152, 12) (96, 12)
-0.5
-DPA 1152 (1152, 12) (96, 12)
-0.5
-DualGo 1152 (1152, 12) (96, 12)
-0.5
-DualNoGo 1152 (1152, 12) (96, 12)
-(3, 6)
-JawsM12
-0.5
-DPA 960 (960, 12) (80, 12)
-0.5
-DualGo 960 (960, 12) (80, 12)
-0.5
-DualNoGo 960 (960, 12) (80, 12)
-0.5
-DPA 960 (960, 12) (80, 12)
-0.5
-DualGo 960 (960, 12) (80, 12)
-0.5
-DualNoGo 960 (960, 12) (80, 12)
-(3, 5)
+mouse JawsM01 perf correct
+mouse JawsM01 perf correct_rej
+mouse JawsM01 perf correct_hit
+mouse JawsM06 perf correct
+mouse JawsM06 perf correct_rej
+mouse JawsM06 perf correct_hit
+mouse JawsM12 perf correct
+mouse JawsM12 perf correct_rej
+mouse JawsM12 perf correct_hit
+mouse JawsM15 perf correct
+mouse JawsM15 perf correct_rej
+mouse JawsM15 perf correct_hit
+mouse JawsM18 perf correct
+mouse JawsM18 perf correct_rej
+mouse JawsM18 perf correct_hit
+mouse ChRM04 perf correct
+mouse ChRM04 perf correct_rej
+mouse ChRM04 perf correct_hit
+mouse ChRM23 perf correct
+mouse ChRM23 perf correct_rej
+mouse ChRM23 perf correct_hit
+mouse ACCM03 perf correct
+mouse ACCM03 perf correct_rej
+mouse ACCM03 perf correct_hit
+mouse ACCM04 perf correct
+mouse ACCM04 perf correct_rej
+mouse ACCM04 perf correct_hit
+(9, 3, 3, 6)
 #+end_example
 
 #+begin_src ipython
-perfs = np.array(np.nanmean(perfs,1))
-perfs_on = np.array(np.nanmean(perfs_on,1))
-print(perfs.shape)
+pkl_save(perf_mice, './data/perf_mice.pkl')
+print(perf_mice.shape)
 #+end_src
 
 #+RESULTS:
-: (5, 6)
-: /home/leon/tmp/ipykernel_303934/841099470.py:1: RuntimeWarning: Mean of empty slice
-:   perfs = np.array(np.nanmean(perfs,1))
-: /home/leon/tmp/ipykernel_303934/841099470.py:2: RuntimeWarning: Mean of empty slice
-:   perfs_on = np.array(np.nanmean(perfs_on,1))
+: (9, 3, 3, 6)
 
 #+begin_src ipython
-    from scipy import stats
+pal = ['r', 'b', 'g']
+tasks = ['DPA', 'DualGo', 'DualNoGo']
 
-    mean_perf = np.nanmean(perfs, 0)
-    sem = stats.sem(perfs, axis=0, nan_policy='omit')
-    # Number of comparisons
-    num_tests = perfs.shape[1]  # This is the number of confidence intervals you are calculating
+days = np.arange(1, 7)
+fig, ax = plt.subplots(1, 3, figsize=[3*width, height])
 
-    # Family-wise Confidence Level (for all tests)
-    family_confidence_level = 0.95
+labels = ['DPA Performance', 'Correct Rej.', 'Hits']
 
-    # Per-comparison Confidence Level for Bonferroni correction
-    bonferroni_confidence_level = 1 - (1 - family_confidence_level) / num_tests
+for i in range(3):
+   for j in range(3):
+      mean_perf = np.nanmean(perf_mice[:, i, j], axis=0)
+      sem_perf = np.nanstd(perf_mice[:, i, j], axis=0) / np.sqrt(perf_mice.shape[0])
 
-    # Calculate the t-statistic for the Bonferroni-adjusted confidence level
-    t_stat = stats.t.ppf((1 + bonferroni_confidence_level) / 2., perfs.shape[0] - 1)
+      ax[i].plot(days, mean_perf, '-o', color=pal[j], label=tasks, ms=10)
+      ax[i].fill_between(days, mean_perf - sem_perf, mean_perf + sem_perf, alpha=0.1, color=pal[j])
+      ax[i].set_ylabel('DPA Performance')
 
-    # Calculate the Bonferroni-corrected CI for each time point
-    ci_bound = sem * t_stat
-    print(mean_perf.shape, ci_bound.shape)
+      ax[i].set_ylabel(labels[i])
+
+   ax[i].plot([1, 6], [.5, .5], '--k')
+   ax[i].set_xlabel('Day')
+   ax[i].set_xticks([1, 2, 3, 4, 5, 6])
+
+   ax[i].set_ylim([0.45, 1.05])
+
+   ax[i].set_yticks([0.5, 0.75, 1.0])
+
+ax[1].set_ylim([0.25, 1.05])
+plt.savefig('./figures/perf/perf_mice.svg', dpi=300)
+plt.show()
 #+end_src
 
 #+RESULTS:
-: (6,) (6,)
+[[file:./.ob-jupyter/7cbc78b11289006e18e45d56c02970c32013082a.png]]
 
 #+begin_src ipython
-    from scipy import stats
+pal = ['r', 'b', 'g']
+tasks = ['DPA', 'DualGo', 'DualNoGo']
 
-    mean_perf_on = np.nanmean(perfs_on, 0)
-    sem = stats.sem(perfs_on, axis=0, nan_policy='omit')
-    # Number of comparisons
-    num_tests = perfs_on.shape[1]  # This is the number of confidence intervals you are calculating
+n_mice = perf_mice.shape[0]
+days = np.arange(1, 7)
+fig, ax = plt.subplots(n_mice, 3, figsize=[3*width, n_mice*height])
 
-    # Family-wise Confidence Level (for all tests)
-    family_confidence_level = 0.95
+labels = ['DPA Performance', 'Correct Rej.', 'Hits']
 
-    # Per-comparison Confidence Level for Bonferroni correction
-    bonferroni_confidence_level = 1 - (1 - family_confidence_level) / num_tests
+for k in range(n_mice):
+   for i in range(3):
+      for j in range(3):
+         mean_perf = perf_mice[k, i, j]
+         # sem_perf = np.nanstd(perf_mice[:, i, j], axis=0)
 
-    # Calculate the t-statistic for the Bonferroni-adjusted confidence level
-    t_stat = stats.t.ppf((1 + bonferroni_confidence_level) / 2., perfs_on.shape[0] - 1)
+         ax[k][i].plot(days, mean_perf, '-o', color=pal[j], label=tasks, ms=10)
+         # ax[k][i].fill_between(days, mean_perf - sem_perf, mean_perf + sem_perf, alpha=0.1, color=pal[j])
+         ax[k][i].set_ylabel('DPA Performance')
 
-    # Calculate the Bonferroni-corrected CI for each time point
-    ci_bound_on = sem * t_stat
-    print(mean_perf_on.shape, ci_bound_on.shape)
+         ax[k][i].set_ylabel(labels[i])
+
+      ax[k][i].plot([1, 6], [.5, .5], '--k')
+      ax[k][i].set_xlabel('Day')
+      ax[k][i].set_xticks([1, 2, 3, 4, 5, 6])
+
+      ax[k][i].set_ylim([0.45, 1.05])
+
+      ax[k][i].set_yticks([0.5, 0.75, 1.0])
+
+   ax[k][1].set_ylim([0.0, 1.05])
+
+plt.savefig('./figures/perf/perf_idv.svg', dpi=300)
+plt.show()
 #+end_src
 
 #+RESULTS:
-: (6,) (6,)
+[[file:./.ob-jupyter/4b1d602e1a196779edad8ae633424faf304dc758.png]]
 
 #+begin_src ipython
-  from src.common.options import set_options
-  opts = set_options()
+
 #+end_src
-
-#+RESULTS:
-
-*** perf
-
-#+begin_src ipython
-  opts['pal'] = ['r', 'b', 'g']
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  days = np.arange(1, 7)
-
-  fig, ax = plt.subplots(1, 1, figsize=[1*width, height])
-  opts['pal'] = 'k'
-  # ci_bound[:, -1] = ci_bound[:, -2]
-  for i in range(3):
-      ax.plot(days, mean_perf, '-o', color=opts['pal'], label=tasks, ms=10)
-      ax.fill_between(days,
-                       mean_perf - ci_bound/5,
-                       mean_perf + ci_bound/5,
-                       alpha=0.1, color=opts['pal'])
-
-      ax.plot(days, mean_perf_on, '-o', color=opts['pal'], label=tasks, ms=10, alpha=0.3)
-      ax.fill_between(days,
-                       mean_perf_on - ci_bound_on/5,
-                       mean_perf_on + ci_bound_on/5,
-                       alpha=0.1, color=opts['pal'])
-
-      ax.plot([1, 6], [.5, .5], '--k')
-
-      ax.set_xlabel('Day')
-
-      ax.set_ylabel('Performance')
-      # ax.set_ylim([0.5, 1])
-      # ax.set_yticks([.5, .75, 1])
-
-      ax.set_xticks([1, 2, 3, 4, 5, 6])
-  # legend = ax.legend(loc='lower right', fontsize=14, frameon=0)
-  # bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
-  # text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
-
-  # Add text above the legend
-  # ax.text(1.0, text_y_coord, 'n=%d' % perfs.shape[0],
-  #         verticalalignment='bottom',
-  #         horizontalalignment='right',
-  #         transform=ax.transAxes)
-
-  plt.savefig('../figs/perf/performance_all_mice.svg', dpi=300)
-
-  plt.show()
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/fa1909cf59693ca6a7fd15718016d32525f0a86d.png]]
-
-#+begin_src ipython
-  opts['pal'] = ['r', 'b', 'g']
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  days = np.arange(1, 7)
-
-  fig, ax = plt.subplots(1, 2, figsize=[2*width, height])
-
-  # ci_bound[:, -1] = ci_bound[:, -2]
-  for i in range(1):
-      ax[i].plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10)
-      ax[i].fill_between(days,
-                       mean_perf[i] - ci_bound[i]/5,
-                       mean_perf[i] + ci_bound[i]/5,
-                       alpha=0.1, color=opts['pal'][i])
-
-      ax[i].plot(days, mean_perf_on[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10, alpha=0.3)
-      ax[i].fill_between(days,
-                       mean_perf_on[i] - ci_bound_on[i]/5,
-                       mean_perf_on[i] + ci_bound_on[i]/5,
-                       alpha=0.1, color=opts['pal'][i])
-
-      ax[i].plot([1, 6], [.5, .5], '--k')
-
-      ax[i].set_xlabel('Day')
-
-      ax[i].set_ylabel('Performance')
-      ax[i].set_ylim([0.5, 1])
-      ax[i].set_yticks([.5, .75, 1])
-
-      ax[i].set_xticks([1, 2, 3, 4, 5, 6])
-  # legend = ax.legend(loc='lower right', fontsize=14, frameon=0)
-  # bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
-  # text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
-
-  # Add text above the legend
-  # ax.text(1.0, text_y_coord, 'n=%d' % perfs.shape[0],
-  #         verticalalignment='bottom',
-  #         horizontalalignment='right',
-  #         transform=ax.transAxes)
-
-  plt.savefig('../figs/perf/performance_all_mice.svg', dpi=300)
-
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-ValueError                                Traceback (most recent call last)
-Cell In[22], line 9
-      7 # ci_bound[:, -1] = ci_bound[:, -2]
-      8 for i in range(1):
-----> 9     ax[i].plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10)
-     10     ax[i].fill_between(days,
-     11                      mean_perf[i] - ci_bound[i]/5,
-     12                      mean_perf[i] + ci_bound[i]/5,
-     13                      alpha=0.1, color=opts['pal'][i])
-     15     ax[i].plot(days, mean_perf_on[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10, alpha=0.3)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_axes.py:1721, in Axes.plot(self, scalex, scaley, data, *args, **kwargs)
-   1478 """
-   1479 Plot y versus x as lines and/or markers.
-   1480
-   (...)
-   1718 (``'green'``) or hex strings (``'#008000'``).
-   1719 """
-   1720 kwargs = cbook.normalize_kwargs(kwargs, mlines.Line2D)
--> 1721 lines = [*self._get_lines(self, *args, data=data, **kwargs)]
-   1722 for line in lines:
-   1723     self.add_line(line)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:303, in _process_plot_var_args.__call__(self, axes, data, *args, **kwargs)
-    301     this += args[0],
-    302     args = args[1:]
---> 303 yield from self._plot_args(
-    304     axes, this, kwargs, ambiguous_fmt_datakey=ambiguous_fmt_datakey)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:499, in _process_plot_var_args._plot_args(self, axes, tup, kwargs, return_kwargs, ambiguous_fmt_datakey)
-    496     axes.yaxis.update_units(y)
-    498 if x.shape[0] != y.shape[0]:
---> 499     raise ValueError(f"x and y must have same first dimension, but "
-    500                      f"have shapes {x.shape} and {y.shape}")
-    501 if x.ndim > 2 or y.ndim > 2:
-    502     raise ValueError(f"x and y can be no greater than 2D, but have "
-    503                      f"shapes {x.shape} and {y.shape}")
-
-ValueError: x and y must have same first dimension, but have shapes (6,) and (1,)
-#+end_example
-[[./.ob-jupyter/1ee60c8ad9292c18dc30bc71412f0c5906dfeaf2.png]]
-:END:
-
-#+begin_src ipython
-  opts['pal'] = ['r', 'b', 'g']
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  days = np.arange(1, 7)
-
-  fig, ax = plt.subplots(1, 3, figsize=[3*width, height])
-
-  ci_bound[:, -1] = ci_bound[:, -2]
-  for i in range(3):
-      ax[i].plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10)
-      ax[i].fill_between(days,
-                       mean_perf[i] - ci_bound[i]/5,
-                       mean_perf[i] + ci_bound[i]/5,
-                       alpha=0.1, color=opts['pal'][i])
-
-      ax[i].plot(days, mean_perf_on[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10, alpha=0.3)
-      ax[i].fill_between(days,
-                       mean_perf_on[i] - ci_bound_on[i]/5,
-                       mean_perf_on[i] + ci_bound_on[i]/5,
-                       alpha=0.1, color=opts['pal'][i])
-
-      ax[i].plot([1, 6], [.5, .5], '--k')
-
-      ax[i].set_xlabel('Day')
-
-      ax[i].set_ylabel('Performance')
-      ax[i].set_ylim([0.5, 1])
-      ax[i].set_yticks([.5, .75, 1])
-
-      ax[i].set_xticks([1, 2, 3, 4, 5, 6])
-  # legend = ax.legend(loc='lower right', fontsize=14, frameon=0)
-  # bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
-  # text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
-
-  # Add text above the legend
-  # ax.text(1.0, text_y_coord, 'n=%d' % perfs.shape[0],
-  #         verticalalignment='bottom',
-  #         horizontalalignment='right',
-  #         transform=ax.transAxes)
-
-  plt.savefig('../figs/perf/performance_all_mice.svg', dpi=300)
-
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[23], line 7
-:       3 days = np.arange(1, 7)
-:       5 fig, ax = plt.subplots(1, 3, figsize=[3*width, height])
-: ----> 7 ci_bound[:, -1] = ci_bound[:, -2]
-:       8 for i in range(3):
-:       9     ax[i].plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10)
-:
-: IndexError: too many indices for array: array is 1-dimensional, but 2 were indexed
-[[./.ob-jupyter/15a2adc614fe72ea176a1476dbdec26433b6a2dd.png]]
-:END:
-
-*** hits
-
-#+begin_src ipython
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  days = np.arange(1, 7)
-  fig, ax = plt.subplots()
-
-  for i in range(3):
-      plt.plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i])
-      plt.fill_between(days,
-                       mean_perf[i] - ci_bound[i]/5,
-                       mean_perf[i] + ci_bound[i]/5,
-                       alpha=0.1, color=opts['pal'][i])
-
-  plt.xlabel('Day')
-
-  plt.ylabel('Hits')
-  plt.ylim([0.5, 1])
-  plt.yticks([.5, .75, 1])
-
-  plt.xticks([1, 2, 3, 4, 5, 6])
-  legend = ax.legend(loc='lower right', fontsize=14, frameon=0)
-  bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
-  text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
-  plt.plot([1, 6], [.5, .5], '--k')
-  # Add text above the legend
-  ax.text(1.0, text_y_coord, 'n=5     ',
-          verticalalignment='bottom',
-          horizontalalignment='right',
-          transform=ax.transAxes)
-
-  plt.savefig('../figs/perf/hits_all_mice.svg', dpi=300)
-
-  plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-ValueError                                Traceback (most recent call last)
-Cell In[24], line 6
-      3 fig, ax = plt.subplots()
-      5 for i in range(3):
-----> 6     plt.plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i])
-      7     plt.fill_between(days,
-      8                      mean_perf[i] - ci_bound[i]/5,
-      9                      mean_perf[i] + ci_bound[i]/5,
-     10                      alpha=0.1, color=opts['pal'][i])
-     12 plt.xlabel('Day')
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/pyplot.py:3575, in plot(scalex, scaley, data, *args, **kwargs)
-   3567 @_copy_docstring_and_deprecators(Axes.plot)
-   3568 def plot(
-   3569     *args: float | ArrayLike | str,
-   (...)
-   3573     **kwargs,
-   3574 ) -> list[Line2D]:
--> 3575     return gca().plot(
-   3576         *args,
-   3577         scalex=scalex,
-   3578         scaley=scaley,
-   3579         **({"data": data} if data is not None else {}),
-   3580         **kwargs,
-   3581     )
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_axes.py:1721, in Axes.plot(self, scalex, scaley, data, *args, **kwargs)
-   1478 """
-   1479 Plot y versus x as lines and/or markers.
-   1480
-   (...)
-   1718 (``'green'``) or hex strings (``'#008000'``).
-   1719 """
-   1720 kwargs = cbook.normalize_kwargs(kwargs, mlines.Line2D)
--> 1721 lines = [*self._get_lines(self, *args, data=data, **kwargs)]
-   1722 for line in lines:
-   1723     self.add_line(line)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:303, in _process_plot_var_args.__call__(self, axes, data, *args, **kwargs)
-    301     this += args[0],
-    302     args = args[1:]
---> 303 yield from self._plot_args(
-    304     axes, this, kwargs, ambiguous_fmt_datakey=ambiguous_fmt_datakey)
-
-File ~/mambaforge/envs/dual_data/lib/python3.11/site-packages/matplotlib/axes/_base.py:499, in _process_plot_var_args._plot_args(self, axes, tup, kwargs, return_kwargs, ambiguous_fmt_datakey)
-    496     axes.yaxis.update_units(y)
-    498 if x.shape[0] != y.shape[0]:
---> 499     raise ValueError(f"x and y must have same first dimension, but "
-    500                      f"have shapes {x.shape} and {y.shape}")
-    501 if x.ndim > 2 or y.ndim > 2:
-    502     raise ValueError(f"x and y can be no greater than 2D, but have "
-    503                      f"shapes {x.shape} and {y.shape}")
-
-ValueError: x and y must have same first dimension, but have shapes (6,) and (1,)
-#+end_example
-[[./.ob-jupyter/c23235fbf6ba6084d6d11d02b24f786b35477adb.png]]
-:END:
-
-*** fa
-
-#+begin_src ipython
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
-  days = np.arange(1, 7)
-  fig, ax = plt.subplots()
-  opts['pal'] = ['r', 'b', 'g']
-  for i in range(3):
-      plt.plot(days, mean_perf[i], '-o', color=opts['pal'][i], label=tasks[i], ms=10)
-      plt.fill_between(days,
-                       mean_perf[i] - ci_bound[i]/5,
-                       mean_perf[i] + ci_bound[i]/5,
-                       alpha=0.1, color=opts['pal'][i])
-
-  plt.xlabel('Day')
-
-  if 'fa' in perf_type:
-      plt.ylabel('False Alarms')
-      plt.ylim([0., 1])
-      plt.yticks([0, .25, .5, .75, 1])
-
-  plt.xticks([1, 2, 3, 4, 5, 6])
-  legend = ax.legend(loc='upper right', fontsize=14, frameon=0)
-  bbox = legend.get_window_extent().transformed(ax.transAxes.inverted())
-  text_y_coord = bbox.y1 + 0.1  # Add a small offset above the legend
-  plt.plot([1, 6], [.5, .5], '--k')
-  # Add text above the legend
-  ax.text(1.0, text_y_coord, 'n=9     ',
-          verticalalignment='bottom',
-          horizontalalignment='right',
-          transform=ax.transAxes)
-
-  if 'fa' in perf_type:
-      plt.savefig('../figs/perf/fa_all_mice.svg', dpi=300)
-
-  plt.show()
-#+end_src
-
-#+RESULTS:
-[[./.ob-jupyter/8d2a1db12e34134932ed6786d8d7d25a3a8c1cc1.png]]
 
 * GLM
 
 #+begin_src ipython
-  options = set_options()
+kwargs = {'mice': mice}
+options = set_options(**kwargs)
+print(options['mice'])
 #+end_src
 
 #+RESULTS:
-: c707d18a-1774-4ce4-b2eb-7d7133d28fc5
+: ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
 
 #+begin_src ipython
-  from src.common.get_data import get_X_y_mice
-  options['reload']=0
-  X, y = get_X_y_mice(**options)
+from src.common.get_data import get_X_y_mice
+options['reload'] = 1
+X, y = get_X_y_mice(**options)
 #+end_src
 
 #+RESULTS:
-: ff2ed982-aee6-4ea3-bf76-4e1d39f82f99
+#+begin_example
+/storage/leon/dual_task/data//JawsM01/SamedROI_04Days/Day01/DFF_Data01.mat
+mouse JawsM01 n_days 4 day 1 type dF all data: X (192, 184, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM01/SamedROI_04Days/Day02/DFF_Data01.mat
+mouse JawsM01 n_days 4 day 2 type dF all data: X (192, 184, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM01/SamedROI_04Days/Day03/DFF_Data01.mat
+mouse JawsM01 n_days 4 day 3 type dF all data: X (192, 184, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM01/SamedROI_04Days/Day04/DFF_Data01.mat
+mouse JawsM01 n_days 4 day 4 type dF all data: X (192, 184, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM06/SamedROI_06Days/Day01/DFF_Data01.mat
+mouse JawsM06 n_days 6 day 1 type dF all data: X (192, 201, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM06/SamedROI_06Days/Day02/DFF_Data01.mat
+mouse JawsM06 n_days 6 day 2 type dF all data: X (192, 201, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM06/SamedROI_06Days/Day03/DFF_Data01.mat
+mouse JawsM06 n_days 6 day 3 type dF all data: X (192, 201, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM06/SamedROI_06Days/Day04/DFF_Data01.mat
+mouse JawsM06 n_days 6 day 4 type dF all data: X (192, 201, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM06/SamedROI_06Days/Day05/DFF_Data01.mat
+mouse JawsM06 n_days 6 day 5 type dF all data: X (192, 201, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM06/SamedROI_06Days/Day06/DFF_Data01.mat
+mouse JawsM06 n_days 6 day 6 type dF all data: X (192, 201, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM12/SamedROI_05Days/Day01/DFF_Data01.mat
+mouse JawsM12 n_days 5 day 1 type dF all data: X (192, 423, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM12/SamedROI_05Days/Day02/DFF_Data01.mat
+mouse JawsM12 n_days 5 day 2 type dF all data: X (192, 423, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM12/SamedROI_05Days/Day03/DFF_Data01.mat
+mouse JawsM12 n_days 5 day 3 type dF all data: X (192, 423, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM12/SamedROI_05Days/Day04/DFF_Data01.mat
+mouse JawsM12 n_days 5 day 4 type dF all data: X (192, 423, 115) y (192, 13)
+/storage/leon/dual_task/data//JawsM12/SamedROI_05Days/Day05/DFF_Data01.mat
+mouse JawsM12 n_days 5 day 5 type dF all data: X (192, 423, 115) y (192, 13)
+mouse JawsM15 n_days 6 day 1 type dF all data: X (192, 693, 84) y (9, 192)
+mouse JawsM15 n_days 6 day 2 type dF all data: X (192, 693, 84) y (9, 192)
+mouse JawsM15 n_days 6 day 3 type dF all data: X (192, 693, 84) y (9, 192)
+mouse JawsM15 n_days 6 day 4 type dF all data: X (192, 693, 84) y (9, 192)
+mouse JawsM15 n_days 6 day 5 type dF all data: X (192, 693, 84) y (9, 192)
+mouse JawsM15 n_days 6 day 6 type dF all data: X (192, 693, 84) y (9, 192)
+mouse JawsM18 n_days 6 day 1 type dF all data: X (192, 444, 84) y (9, 192)
+mouse JawsM18 n_days 6 day 2 type dF all data: X (192, 444, 84) y (9, 192)
+mouse JawsM18 n_days 6 day 3 type dF all data: X (192, 444, 84) y (9, 192)
+mouse JawsM18 n_days 6 day 4 type dF all data: X (192, 444, 84) y (9, 192)
+mouse JawsM18 n_days 6 day 5 type dF all data: X (192, 444, 84) y (9, 192)
+mouse JawsM18 n_days 6 day 6 type dF all data: X (192, 444, 84) y (9, 192)
+mouse ChRM04 n_days 6 day 1 type dF all data: X (192, 668, 84) y (9, 192)
+mouse ChRM04 n_days 6 day 2 type dF all data: X (192, 668, 84) y (9, 192)
+mouse ChRM04 n_days 6 day 3 type dF all data: X (192, 668, 84) y (9, 192)
+mouse ChRM04 n_days 6 day 4 type dF all data: X (192, 668, 84) y (9, 192)
+mouse ChRM04 n_days 6 day 5 type dF all data: X (192, 668, 84) y (9, 192)
+mouse ChRM04 n_days 6 day 6 type dF all data: X (192, 668, 84) y (9, 192)
+/storage/leon/dual_task/data//ChRM23/SamedROI_05Days/Day01/DFF_Data01.mat
+mouse ChRM23 n_days 5 day 1 type dF all data: X (192, 232, 115) y (192, 13)
+/storage/leon/dual_task/data//ChRM23/SamedROI_05Days/Day02/DFF_Data01.mat
+mouse ChRM23 n_days 5 day 2 type dF all data: X (192, 232, 115) y (192, 13)
+/storage/leon/dual_task/data//ChRM23/SamedROI_05Days/Day03/DFF_Data01.mat
+mouse ChRM23 n_days 5 day 3 type dF all data: X (192, 232, 115) y (192, 13)
+/storage/leon/dual_task/data//ChRM23/SamedROI_05Days/Day04/DFF_Data01.mat
+mouse ChRM23 n_days 5 day 4 type dF all data: X (192, 232, 115) y (192, 13)
+/storage/leon/dual_task/data//ChRM23/SamedROI_05Days/Day05/DFF_Data01.mat
+mouse ChRM23 n_days 5 day 5 type dF all data: X (192, 232, 115) y (192, 13)
+mouse ACCM03 n_days 5 day 1 type dF all data: X (192, 361, 84) y (9, 192)
+mouse ACCM03 n_days 5 day 2 type dF all data: X (192, 361, 84) y (9, 192)
+mouse ACCM03 n_days 5 day 3 type dF all data: X (192, 361, 84) y (9, 192)
+mouse ACCM03 n_days 5 day 4 type dF all data: X (192, 361, 84) y (9, 192)
+mouse ACCM03 n_days 5 day 5 type dF all data: X (192, 361, 84) y (9, 192)
+mouse ACCM04 n_days 5 day 1 type dF all data: X (192, 113, 84) y (9, 192)
+mouse ACCM04 n_days 5 day 2 type dF all data: X (192, 113, 84) y (9, 192)
+mouse ACCM04 n_days 5 day 3 type dF all data: X (192, 113, 84) y (9, 192)
+mouse ACCM04 n_days 5 day 4 type dF all data: X (192, 113, 84) y (9, 192)
+mouse ACCM04 n_days 5 day 5 type dF all data: X (192, 113, 84) y (9, 192)
+#+end_example
 
 #+begin_src ipython
   print(y.keys())
@@ -721,7 +293,13 @@ ValueError: x and y must have same first dimension, but have shapes (6,) and (1,
 #+end_src
 
 #+RESULTS:
-: bc5ed88a-5293-40f7-a97c-75f74b7fb1fb
+: Index(['sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response', 'laser',
+:        'day', 'choice', 'pair', 'odr_perf', 'odr_choice', 'odr_response',
+:        'odor_pair', 'mouse', 'performance'],
+:       dtype='object')
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23'
+:  'ACCM03' 'ACCM04']
+: ['correct_hit' 'incorrect_fa' 'correct_rej' 'incorrect_miss']
 
 #+begin_src ipython
   df = y[y['laser']==0].copy()
@@ -731,219 +309,256 @@ ValueError: x and y must have same first dimension, but have shapes (6,) and (1,
 #+end_src
 
 #+RESULTS:
-: b0a5ada4-6cd1-44e0-8b0c-7304ed6e4d67
-
+: Index(['sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response', 'laser',
+:        'day', 'choice', 'pair', 'odr_perf', 'odr_choice', 'odr_response',
+:        'odor_pair', 'mouse', 'performance', 'behavior', 'learning'],
+:       dtype='object')
 
 #+begin_src ipython
-  import statsmodels.api as sm
-  import statsmodels.formula.api as smf
-  import pandas as pd
+import rpy2.robjects as robjects
+from rpy2.robjects.packages import importr
+
+# Set the .libPaths in R
+custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
+robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
+
+from pymer4.models import Lmer
 #+end_src
 
 #+RESULTS:
-: b1bc2c31-b5a3-424c-ac38-f6bcef9d95a1
+#+begin_example
+During startup - Warning messages:
+1: package ‘methods’ was built under R version 4.4.3
+2: package ‘datasets’ was built under R version 4.4.3
+3: package ‘utils’ was built under R version 4.4.3
+4: package ‘grDevices’ was built under R version 4.4.3
+5: package ‘graphics’ was built under R version 4.4.3
+6: package ‘stats’ was built under R version 4.4.3
+R[write to console]: In addition:
+R[write to console]: Warning message:
+R[write to console]: package ‘tools’ was built under R version 4.4.3
+#+end_example
 
 #+begin_src ipython
-  print(df.keys())
+formula = 'performance ~ tasks * learning  + (1 | mouse)'
+df_ = df[df.pair==0]
+
+model = Lmer(formula=formula, data=df_, family='binomial')
+results = model.fit();
+random_effects = model.ranef
+
+print(results)
 #+end_src
 
 #+RESULTS:
-: 129484c8-2fbb-4b0e-8260-5693523b65ee
+#+begin_example
+,**NOTE**: Column for 'residuals' not created in model.data, but saved in model.resid only. This is because you have rows with NaNs in your data.
+
+,**NOTE** Column for 'fits' not created in model.data, but saved in model.fits only. This is because you have rows with NaNs in your data.
+
+Linear mixed model fit by maximum likelihood  ['lmerMod']
+Formula: performance~tasks*learning+(1|mouse)
+
+Family: binomial	 Inference: parametric
+
+Number of observations: 2784	 Groups: {'mouse': 5.0}
+
+Log-likelihood: -991.858 	 AIC: 1997.716
+
+Random effects:
+
+              Name    Var   Std
+mouse  (Intercept)  0.608  0.78
+
+No random effect correlations specified
+
+Fixed effects:
+
+                        Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  \
+(Intercept)                0.347  -0.376    1.070  0.369  1.415      0.687
+tasksDualGo               -0.556  -0.884   -0.227  0.168  0.574      0.413
+tasksDualNoGo             -0.014  -0.340    0.312  0.166  0.986      0.712
+learning                   1.552   1.144    1.960  0.208  4.722      3.140
+tasksDualGo:learning       0.115  -0.441    0.671  0.284  1.122      0.643
+tasksDualNoGo:learning    -0.153  -0.718    0.413  0.289  0.858      0.488
+
+                        OR_97.5_ci   Prob  Prob_2.5_ci  Prob_97.5_ci  Z-stat  \
+(Intercept)                  2.915  0.586        0.407         0.745   0.941
+tasksDualGo                  0.797  0.365        0.292         0.443  -3.314
+tasksDualNoGo                1.367  0.497        0.416         0.577  -0.083
+learning                     7.100  0.825        0.758         0.877   7.458
+tasksDualGo:learning         1.956  0.529        0.392         0.662   0.405
+tasksDualNoGo:learning       1.511  0.462        0.328         0.602  -0.529
+
+                        P-val  Sig
+(Intercept)             0.347
+tasksDualGo             0.001  ***
+tasksDualNoGo           0.934
+learning                0.000  ***
+tasksDualGo:learning    0.685
+tasksDualNoGo:learning  0.597
+#+end_example
 
 #+begin_src ipython
-  df['response'] = df['response'].astype('category')
-  df['mouse'] = df['mouse'].astype('category')
-  # df['tasks'] = df['tasks'].astype('category')
+def generate_colors(N, cmap_name='viridis'):
+    cmap = plt.get_cmap(cmap_name)
+    return cmap(np.linspace(0, 1, N))
 #+end_src
 
 #+RESULTS:
-: e404bbfb-9808-4487-b5be-2f08fcda05a4
 
 #+begin_src ipython
-  print(df['tasks'].unique())
+def plot_betas(results, random_effects, title):
+
+    fig, ax = plt.subplots(figsize=(1.5*width, 1.5*height))
+
+    colors = generate_colors(random_effects.shape[0], 'plasma')
+    space = np.random.normal(0, .05, random_effects.shape[0])
+
+    keys = results.Estimate.keys()
+
+    for i, key in enumerate(keys):
+        res = results.Estimate[key]
+
+        try:
+            res += random_effects[key]
+        except:
+            res += random_effects['(Intercept)']
+            pass
+
+        mean_value = res.mean()
+        std_dev = res.std()
+
+        if results['P-val'][key]<0.001:
+            plt.text(i,   2, '***', ha='center', va='bottom')
+        elif results['P-val'][key]<0.01:
+            plt.text(i,   2, '**', ha='center', va='bottom')
+        elif results['P-val'][key]<0.05:
+            plt.text(i,  2 , '*', ha='center', va='bottom')
+        elif results['P-val'][key]<0.1:
+            plt.text(i,   2, '.', ha='center', va='bottom')
+
+        plt.scatter(i * np.ones(res.shape[0]) + space, res, color=colors)
+        plt.plot(i, mean_value, '_k', ms=20)
+        plt.errorbar(i * np.ones(res.shape[0]),
+                     [mean_value]*len(res),
+                     yerr=[std_dev]*len(res), fmt='-', color='k', capsize=15)
+
+    plt.axhline(y=0, color='black', ls='--')
+
+    plt.xticks(np.arange(len(keys)), keys, fontsize=14, rotation=45)
+
+    plt.ylabel('$\\beta$')
+    plt.title(title)
+    plt.savefig('beta_response.svg')
+    plt.show()
 #+end_src
 
 #+RESULTS:
-: 8979d2f6-5e24-4df7-afd9-73aa7ab0e25c
 
 #+begin_src ipython
-  from statsmodels.stats.anova import anova_lm
-  formula = 'behavior ~ tasks * tasks'
-  results = []
-  anovas = []
-  df2 = df[df['tasks']!='DualNoGo'].copy()
-  df2['tasks'] = df2['tasks'].astype('category')
-  print(df2['tasks'].unique())
-
-  df2 = df2[(df2['response']=='incorrect_fa') | (df2['response'] == 'correct_rej')].copy()
-  for i in range(5):
-      df3 = df2[df2['day']==i+1].copy()
-      model = smf.glm(formula=formula, data=df3, family=sm.families.Gaussian())
-      results.append(model.fit())
+plot_betas(results, random_effects, '')
 #+end_src
 
 #+RESULTS:
-: 9c8bf9fe-2d41-4141-9345-bf1cf78aa1d0
+[[file:./.ob-jupyter/b450b71b486fc8dc91c504e33f9286a157eba2bf.png]]
 
 #+begin_src ipython
-  colors = ['r', 'b', 'g']
-  fig, ax = plt.subplots(1, 1)
-  for j in range(5):
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+import pandas as pd
+import matplotlib.pyplot as plt
 
-      model = results[j]
-      params = model.params
-      # print(params)
-      conf = model.conf_int()
-      # print(conf)
-      for i in range(2):
-          yerr = np.array([params[i] - conf[0][i], conf[1][i] - params[i]])[:, np.newaxis]
-          ax.errorbar(x=j, y=params[i], yerr=yerr, fmt='o', color=colors[i])
 
-  plt.show()
+def plot_glm_coefs(df, formula, family=sm.families.Gaussian()):
+    # Fit GLM
+    glm = smf.glm(formula=formula, data=df, family=family)
+    result = glm.fit()
+
+    # Prepare DataFrame
+    coefs = result.params
+    conf = result.conf_int()
+    pvals = result.pvalues
+
+    coef_df = pd.DataFrame({
+        'coef': coefs,
+        'ci_lower': conf[0],
+        'ci_upper': conf[1],
+        'pval': pvals
+    })
+
+
+    coef_df['signif'] = coef_df['pval'].map(
+        lambda p: '***' if p < 0.001 else
+        '**' if p < 0.01 else
+        '*' if p < 0.05 else
+        '·' if p < 0.1 else
+        ''
+    )
+
+    coef_df = coef_df.reset_index().rename(columns={'index': 'term'})
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(1.5*width, 1.5*height))
+    sns.pointplot(x='term', y='coef', data=coef_df, join=False, ax=ax, scale=0.3)
+
+    ax.errorbar(
+        x=range(len(coef_df)),
+        y=coef_df['coef'],
+        yerr=[coef_df['coef'] - coef_df['ci_lower'], coef_df['ci_upper'] - coef_df['coef']],
+        fmt='none', c='gray',
+    )
+
+    for i, star in enumerate(coef_df['signif']):
+        if star:
+            plt.text(i, coef_df['ci_upper'].iloc[i] + 0.02, star, ha='center', color='k', fontsize=15)
+
+    plt.axhline(0, color='black', linewidth=0.7, linestyle='--')
+    plt.ylabel('Coefficient')
+    plt.xticks(rotation=45, fontsize=10)
+    plt.ylim([-.2, 1])
+    plt.tight_layout()
+    plt.show()
+
+    return result  # Optionally return the model fit for further inspection
 #+end_src
 
 #+RESULTS:
-: 2374fae7-1620-4fd5-87de-aed0091fef02
 
 #+begin_src ipython
-      model = results[3]
-      print(model.summary())
+formula = 'performance ~ tasks * learning'
+df_ = df[df.pair==0]
+result = plot_glm_coefs(df_, formula)
 #+end_src
 
 #+RESULTS:
-: 3d70c1e3-f25c-4129-b9db-bfb8d3ade389
-
+[[file:./.ob-jupyter/e5d9ebf05407640f2e4f7d5d67cf16e84dcfa4f2.png]]
 
 #+begin_src ipython
-  df2 = df[(df['response']=='incorrect_fa') | (df['response'] == 'correct_rej')].copy()
-  formula = 'behavior ~ tasks * day'
-  glm_gauss = smf.glm(formula=formula, data=df2, family=sm.families.Gaussian())
-  result = glm_gauss.fit()
-  print(result.summary())
+print(result.summary())
 #+end_src
 
 #+RESULTS:
-: 44607f4f-a53a-48c4-95be-3521d52cd792
-
-#+begin_src ipython
-  params = model.params
-  conf = model.conf_int()
-  print(conf[1])
-#+end_src
-
-#+RESULTS:
-: aa191c26-e493-47ff-a490-b978149632a6
-
-#+begin_src ipython
-  fig, ax = plt.subplots(1, 1)
-  for i in range(3):
-      ax.errorbar(x=days, y=params[i], yerr=[params[i] - conf[0][i], conf[1][i] - params[i]], fmt='o')
-
-#+end_src
-
-#+RESULTS:
-: 127b0f9e-731a-4f51-8706-9ca1752a5737
-
-#+begin_src ipython
-    formula = 'behavior ~ tasks * learning'
-    glm_gauss = smf.glm(formula=formula, data=df, family=sm.families.Gaussian())
-    result = glm_gauss.fit()
-    print(result.summary())
-#+end_src
-
-#+RESULTS:
-: 739846cd-5f6e-456c-aad6-17677575a2bd
-
-#+begin_src ipython
-    formula = 'behavior ~ tasks'
-    glm_gauss = smf.glm(formula=formula, data=df, family=sm.families.Gaussian())
-    result = glm_gauss.fit()
-    print(result.summary())
-#+end_src
-
-#+RESULTS:
-: 3fd1fee4-9e2b-4c0c-94bc-9a70ed40d6dd
-
-#+begin_src ipython
-  import statsmodels.formula.api as smf
-  import matplotlib.pyplot as plt
-  import pandas as pd
-  import numpy as np
-
-  # Assuming you have a DataFrame named df containing your data
-  # and the formula you mentioned.
-  model = smf.glm(formula='behavior ~ tasks * day', data=df).fit()
-
-  # Extract the parameters (weights) and standard errors
-  params = model.params
-  conf = model.conf_int()
-  conf['mean'] = params
-  conf.columns = ['2.5%', '97.5%', 'mean']
-
-  # Create a plot for each task
-  tasks = df['tasks'].unique()
-  days = df['day'].unique()
-  n_tasks = len(tasks)
-  n_days = len(days)
-
-  fig, ax = plt.subplots(n_tasks, 1, figsize=(8, n_tasks * 4))
-
-  if n_tasks == 1:
-      ax = [ax]  # Ensure ax is iterable when there's only one task
-
-  for i, task in enumerate(tasks):
-      task_params = conf.loc[[f'tasks[T.{task}]:day[T.{day}]' for day in days], :]
-
-      # If any main effects exist, add them too
-      if f'tasks[T.{task}]' in conf.index:
-          task_main = conf.loc[f'tasks[T.{task}]']
-          task_params.loc[:, 'mean'] += task_main['mean']
-          task_params.loc[:, '2.5%'] += task_main['2.5%']
-          task_params.loc[:, '97.5%'] += task_main['97.5%']
-      if 'Intercept' in conf.index:
-          intercept = conf.loc['Intercept']
-          task_params.loc[:, 'mean'] += intercept['mean']
-          task_params.loc[:, '2.5%'] += intercept['2.5%']
-          task_params.loc[:, '97.5%'] += intercept['97.5%']
-
-      ax[i].errorbar(x=days, y=task_params['mean'], yerr=[task_params['mean'] - task_params['2.5%'], task_params['97.5%'] - task_params['mean']], fmt='o')
-      ax[i].set_title(f'Task: {task}')
-      ax[i].set_xlabel('Day')
-      ax[i].set_ylabel('Weight')
-
-  plt.tight_layout()
-  plt.show()
-#+end_src
-
-#+RESULTS:
-: d9b1366a-7393-4ce7-8bfe-8d4844300d83
-
-* Summary
-
-#+begin_src ipython
-  mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04', 'AP02', 'AP12', 'PP09','PP17', 'RP13']
-
-  def figname(mouse):
-      return mouse + "_behavior_tasks_correct" + ".svg"
-
-  figlist = ['../figs/' + figname(mouse) for mouse in mice]
-  print(figlist)
-
-  golden_ratio = (5**.5 - 1) / 2
-  width = 4.3
-  height = width * golden_ratio * 1.4
-  figsize = [width, height]
-  matplotlib.rcParams['lines.markersize'] = 5.5
-
-  create_grid(figlist, "../figs/performance_all_mice.svg", dim=[4,3], fontsize=22)
-
-#+end_src
-
-#+RESULTS:
-: fc1d198a-739c-4fc5-9df3-ea02bf11e240
-
-#+NAME: fig:temporal_decoding
-#+CAPTION: Temporal Decoding
-#+ATTR_ORG: :width 1200
-#+ATTR_LATEX: :width 5in
-[[file:../figs/performance_all_mice.svg]]
+#+begin_example
+                 Generalized Linear Model Regression Results
+==============================================================================
+Dep. Variable:            performance   No. Observations:                 1824
+Model:                            GLM   Df Residuals:                     1818
+Model Family:                Gaussian   Df Model:                            5
+Link Function:               Identity   Scale:                         0.20759
+Method:                          IRLS   Log-Likelihood:                -1151.3
+Date:                Thu, 09 Oct 2025   Deviance:                       377.40
+Time:                        13:13:03   Pearson chi2:                     377.
+No. Iterations:                     3   Pseudo R-squ. (CS):             0.1210
+Covariance Type:            nonrobust
+==============================================================================================
+                                 coef    std err          z      P>|z|      [0.025      0.975]
+----------------------------------------------------------------------------------------------
+Intercept                      0.5268      0.025     21.193      0.000       0.478       0.576
+tasks[T.DualGo]               -0.1190      0.035     -3.387      0.001      -0.188      -0.050
+tasks[T.DualNoGo]             -0.0030      0.035     -0.085      0.933      -0.072       0.066
+learning                       0.3041      0.037      8.183      0.000       0.231       0.377
+tasks[T.DualGo]:learning       0.0565      0.053      1.076      0.282      -0.046       0.160
+tasks[T.DualNoGo]:learning    -0.0191      0.053     -0.363      0.717      -0.122       0.084
+==============================================================================================
+#+end_example
