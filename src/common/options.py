@@ -14,6 +14,8 @@ def set_options(**kwargs):
     opts['NEW_MICE'] = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
     opts['sampler'] = 0
 
+    opts['n_perm'] = 0
+
     opts['cv_B'] = 0
     opts["NEW_DATA"] = 0
     opts["path"] = "/storage/leon/dual_task/"
@@ -211,7 +213,7 @@ def set_options(**kwargs):
         opts["n_discard"] = 0
 
     if len(opts["days"])==2:
-        opts["n_first"] = 2  # 3 or 2
+        opts["n_first"] = 3  # 3 or 2
         opts["n_middle"] = 0  # 0 or 2
     else:
         opts["n_first"] = 2  # 3 or 2
@@ -287,9 +289,9 @@ def set_options(**kwargs):
 
     opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1] - opts['T_WINDOW']) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 
-    opts["bins_TASK"] = opts["bins"][int((t_STIM[0]) * frame_rate) : int((t_TEST[1]) * frame_rate)]
+    opts["bins_TASK"] = opts["bins"][int((t_STIM[0]) * frame_rate) : int((t_RWD2[0]) * frame_rate)]
 
-    opts["bins_POSTTASK"] = opts["bins"][int((t_TEST[0]) * frame_rate) :]
+    opts["bins_POSTTASK"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[0]) * frame_rate)]
 
     # opts["bins_CHOICE"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 

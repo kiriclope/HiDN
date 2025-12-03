@@ -481,8 +481,7 @@ def get_X_y_mice(**kwargs):
 
 def get_X_y_S1_S2(X, y, **kwargs):
     if kwargs['verbose']:
-        print(
-            "DATA:",
+        print("DATA:",
             "FEATURES",
             kwargs["features"],
             "TASK",
@@ -523,23 +522,18 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_tasks = y.tasks == "DualNoGo"
 
     if kwargs["features"] == "sample":
-        # idx_S1 = (y.sample_odor == 0) & (y.choice == 0)
-        # idx_S2 = (y.sample_odor == 0) & (y.choice == 1)
-        # idx_S3 = (y.sample_odor == 1) & (y.choice == 0)
-        # idx_S4 = (y.sample_odor == 1) & (y.choice == 1)
-
         idx_S1 = (y.sample_odor == 0) & (y.test_odor == 0)
         idx_S2 = (y.sample_odor == 0) & (y.test_odor == 1)
         idx_S3 = (y.sample_odor == 1) & (y.test_odor == 1)
         idx_S4 = (y.sample_odor == 1) & (y.test_odor == 0)
 
-        # if kwargs['trials'] == 'incorrect':
-        #     idx = y.response.str.contains("incorrect")
-        #     idx_S1 = (y.sample_odor == 0) & idx & (y.laser == 0)
-        #     idx_S2 = (y.sample_odor == 1) & idx & (y.laser == 0)
-        #     # idx_S3 = y.laser == 1
-        #     idx_trials = True
-        #     # idx_laser = True
+        if kwargs['trials'] == 'incorrect':
+            idx = y.response.str.contains("incorrect")
+            idx_S1 = (y.sample_odor == 0) & idx & (y.laser == 0)
+            idx_S2 = (y.sample_odor == 1) & idx & (y.laser == 0)
+            idx_S3 = y.laser == 1
+            idx_trials = True
+            idx_laser = True
 
         if kwargs["multilabel"]:
             idx_S3 = y.sample_odor == 2
@@ -550,21 +544,15 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_S2 = y.pair == 0
 
     elif kwargs["features"] == "fa":
-        # lick
         idx_S1 = y.response == "correct_rej"
-        # no lick
         idx_S2 = y.response == "incorrect_fa"
 
     elif kwargs["features"] == "decision":
         if kwargs["trials"] == "correct":
-            # lick
             idx_S1 = y.response == "correct_hit"
-            # no lick
             idx_S2 = y.response == "correct_rej"
         else:
-            # lick
             idx_S1 = y.response == "incorrect_fa"
-            # no lick
             idx_S2 = y.response == "incorrect_miss"
 
     elif kwargs["features"] == "choice":
@@ -591,12 +579,7 @@ def get_X_y_S1_S2(X, y, **kwargs):
     elif kwargs["features"] == "test":
         idx_S1 = y.test_odor == 0
         idx_S2 = y.test_odor == 1
-
-        if kwargs['trials'] == 'incorrect':
-            idx = y.response.str.contains("incorrect")
-            idx_S1 = (y.test_odor == 0) & idx & (y.laser == 0)
-            idx_S2 = (y.test_odor == 1) & idx & (y.laser == 0)
-            # idx_S3 = y.laser == 1
+        idx_trials = True
 
     elif kwargs["features"] == "distractor":
         idx_S1 = y.dist_odor == 0
@@ -625,7 +608,8 @@ def get_X_y_S1_S2(X, y, **kwargs):
 
     if isinstance(kwargs["day"], str):
         # print("multiple days, discard", kwargs["n_discard"],
-        # 'first', kwargs["n_first"], 'middle', kwargs["n_middle"])
+        #       'first', kwargs["n_first"], 'middle', kwargs["n_middle"])
+
         if kwargs["day"] == "first":
             idx_days = (y.day > kwargs["n_discard"]) & (y.day <= kwargs["n_first"] + kwargs["n_discard"])
 
@@ -646,10 +630,6 @@ def get_X_y_S1_S2(X, y, **kwargs):
     X_S3 = X[idx_S3 & idx_trials & idx_days & idx_laser & idx_tasks]
     X_S4 = X[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
 
-    # print("X_S1", X_S1.shape, "X_S2", X_S2.shape)
-    # if X_S3.shape[0] > 0:
-    #     print("X_S3", X_S3.shape, "X_S4", X_S4.shape)
-
     X_S1_S2 = np.vstack((X_S1, X_S2, X_S3, X_S4))
 
     y_S1 = y[idx_S1 & idx_trials & idx_days & idx_laser & idx_tasks]
@@ -658,5 +638,12 @@ def get_X_y_S1_S2(X, y, **kwargs):
     y_S4 = y[idx_S4 & idx_trials & idx_days & idx_laser & idx_tasks]
 
     y_S1_S2 = pd.concat((y_S1, y_S2, y_S3, y_S4))
+
+    try:
+        y_S1_S2['learning'] = y_S1_S2['day'].apply(lambda x: 'Naive' if x<=3 else 'Expert')
+    except:
+        y_S1_S2['learning'] = y_S1_S2['day'].apply(lambda x: 'Naive' if x=='first' else 'Expert')
+
+    print(kwargs["day"], y_S1_S2.day.unique(), y_S1_S2.choice.unique())
 
     return X_S1_S2, y_S1_S2

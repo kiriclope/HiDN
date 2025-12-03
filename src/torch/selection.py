@@ -13,7 +13,7 @@ class safeSelector(BaseEstimator, TransformerMixin):
         elif 'Fwe' in method:
             self.selector = SelectFwe(f_classif, alpha=alpha)
         elif 'kbest' in method:
-            self.selector = SelectKBest(f_classif, k=alpha)
+            self.selector = SelectKBest(f_classif, k=alpha * 100)
         elif 'perc' in method:
             self.selector = SelectPercentile(f_classif, percentile=alpha * 100)
         elif 'var' in method:

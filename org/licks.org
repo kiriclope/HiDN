@@ -1,34 +1,12 @@
 STARTUP: fold
 #+PROPERTY: header-args:ipython :results both :exports both :async yes :session licks :kernel dual_data
 
-* Notebook Settings
-
-#+begin_src ipython
-%load_ext autoreload
-%autoreload 2
-%reload_ext autoreload
-
-%run /home/leon/dual_task/dual_data/notebooks/setup.py
-%matplotlib inline
-%config InlineBackend.figure_format = 'png'
-
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-: The autoreload extension is already loaded. To reload it, use:
-:   %reload_ext autoreload
-: Python exe
-: /home/leon/mambaforge/envs/dual_data/bin/python
-: <Figure size 600x370.82 with 0 Axes>
-:END:
-
 * Imports
 
 #+begin_src ipython
   import sys
   sys.path.insert(0, '/home/leon/dual_task/dual_data/')
-
+  import seaborn as sns
   import pickle as pkl
   import numpy as np
   import matplotlib.pyplot as plt
@@ -73,6 +51,25 @@ def find_mat_files(folder_path):
 #+end_src
 
 #+RESULTS:
+
+* Notebook Settings
+
+#+begin_src ipython
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%matplotlib inline
+%config InlineBackend.figure_format = 'png'
+
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual_data/bin/python
 
 * Utils
 
@@ -130,29 +127,8 @@ def licks_raster(trial_licks, stimulus_onsets=None, ax=None, color='k', tick_hei
 
 #+RESULTS:
 
-#+begin_src ipython
-import matplotlib.pyplot as plt
 
-def licks_raster_all(trial_type, trial_licks, stimulus_onsets=None, ax=None, color='k'):
 
-    # trial_licks: list of arrays, as before
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    for trial_idx, licks_in_trial in enumerate(trial_licks):
-        if trial_type.iloc[trial_idx]=='DPA':
-            ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 0.5, color='r')
-        if trial_type.iloc[trial_idx]=='DualGo':
-            ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 0.5, color='b')
-        if trial_type.iloc[trial_idx]=='DualNoGo':
-            ax.vlines(licks_in_trial, trial_idx + 0., trial_idx + 0.5, color='g')
-
-    add_vlines2(ax=ax)
-    ax.set_xlabel('Time from sample onset (s)')
-    ax.set_ylabel('Trial #')
-    ax.set_ylim(0.5, len(trial_licks) + 0.5)
-    ax.set_xlim(0, 14)
-    #+end_src
 
 #+RESULTS:
 
@@ -218,6 +194,10 @@ window_start = 6.5  # seconds after stimulus
 window_end   = 7.0   # seconds after stimulus
 window_length = window_end - window_start
 
+window_start2 = 4.5  # seconds after stimulus
+window_end2  = 5.5   # seconds after
+window_length2 = window_end2 - window_start2
+
 mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
 
 options = set_options()
@@ -263,6 +243,18 @@ for mouse in mice:
 
             avg_lick_rates = np.array(avg_lick_rates)
 
+            avg_lick_rates2 = []
+            for i, licks_in_trial in enumerate(trial_licks):
+                # Rel. to onset:
+                rel_licks = licks_in_trial # - stimulus_onsets[i]
+                # Count licks within [6.5, 7.0) s after onset
+                n_licks = np.sum((rel_licks >= window_start2) & (rel_licks < window_end2))
+                # Lick rate = count / window
+                rate = n_licks * options['n_days'] / window_length2  # in Hz per day
+                avg_lick_rates2.append(rate)
+
+            avg_lick_rates2 = np.array(avg_lick_rates2)
+
             trials = data['AllTrials'][0][0][-1]
             col_names = ['sample', 'test', 'outcome', 'pair', 'distractor', 'cue', 'odr_outcome', 'odr_pair', 'laser']
             df = pd.DataFrame(trials, columns=col_names)
@@ -273,7 +265,10 @@ for mouse in mice:
 
             df['paired'] = df['outcome'].apply(lambda x: 0 if ((x==4) or (x==3)) else 1)
             df['tasks'] = df['distractor'].apply(lambda x: 'DPA' if x == 0 else ('DualGo' if x == 1 else 'DualNoGo'))
+
             df['licks_LD'] = avg_lick_rates
+            df['licks_MD'] = avg_lick_rates2
+
             df['day'] = day
             df_day.append(df)
         except:
@@ -351,10 +346,10 @@ print(df_mouse.keys())
 #+end_src
 
 #+RESULTS:
-: (9024, 17)
+: (9024, 18)
 : Index(['sample', 'test', 'outcome', 'pair', 'distractor', 'cue', 'odr_outcome',
 :        'odr_pair', 'laser', 'licks', 'performance', 'odr_perf', 'paired',
-:        'tasks', 'licks_LD', 'day', 'mouse'],
+:        'tasks', 'licks_LD', 'licks_MD', 'day', 'mouse'],
 :       dtype='object')
 
 #+begin_src ipython
@@ -380,16 +375,16 @@ Dep. Variable:            performance   No. Observations:                 3648
 Model:                            GLM   Df Residuals:                     3646
 Model Family:                Binomial   Df Model:                            1
 Link Function:                  Logit   Scale:                          1.0000
-Method:                          IRLS   Log-Likelihood:                -1954.7
-Date:                Mon, 30 Jun 2025   Deviance:                       3909.5
-Time:                        11:59:15   Pearson chi2:                 3.65e+03
-No. Iterations:                     4   Pseudo R-squ. (CS):           0.006168
+Method:                          IRLS   Log-Likelihood:                -1964.2
+Date:                Fri, 10 Oct 2025   Deviance:                       3928.4
+Time:                        11:56:58   Pearson chi2:                 3.65e+03
+No. Iterations:                     4   Pseudo R-squ. (CS):          0.0009956
 Covariance Type:            nonrobust
 ==============================================================================
                  coef    std err          z      P>|z|      [0.025      0.975]
 ------------------------------------------------------------------------------
-Intercept      1.3444      0.049     27.316      0.000       1.248       1.441
-licks_LD      -0.0871      0.018     -4.830      0.000      -0.122      -0.052
+Intercept      1.2249      0.040     30.440      0.000       1.146       1.304
+licks_LD      -0.0254      0.013     -1.958      0.050      -0.051    2.81e-05
 ==============================================================================
 #+end_example
 
@@ -407,26 +402,25 @@ from pymer4.models import Lmer
 #+RESULTS:
 #+begin_example
 During startup - Warning messages:
-1: package ‘methods’ was built under R version 4.4.2
-2: package ‘datasets’ was built under R version 4.4.2
-3: package ‘utils’ was built under R version 4.4.2
-4: package ‘grDevices’ was built under R version 4.4.2
-5: package ‘graphics’ was built under R version 4.4.2
-6: package ‘stats’ was built under R version 4.4.2
+1: package ‘methods’ was built under R version 4.4.3
+2: package ‘datasets’ was built under R version 4.4.3
+3: package ‘utils’ was built under R version 4.4.3
+4: package ‘grDevices’ was built under R version 4.4.3
+5: package ‘graphics’ was built under R version 4.4.3
+6: package ‘stats’ was built under R version 4.4.3
 R[write to console]: In addition:
 R[write to console]: Warning message:
-R[write to console]: package ‘tools’ was built under R version 4.4.2
+R[write to console]: package ‘tools’ was built under R version 4.4.3
 #+end_example
-
 
 #+begin_src ipython
 df_ = df_mouse.reset_index(drop=True).drop(columns='licks')
 
 # df_ = df_[df_.tasks!='DualGo']
-# df_ = df_[df_.laser==0]
+df_ = df_[df_.laser==0]
 df_ = df_[(df_.outcome==3) | (df_.outcome==4)]
 
-formula = 'performance ~ laser + licks_LD * day + (1 + day | mouse)'
+formula = 'performance ~ licks_LD * day + (1 + day | mouse)'
 
 model = Lmer(formula=formula, data=df_, family='binomial')
 results = model.fit()
@@ -438,38 +432,36 @@ print(results)
 #+RESULTS:
 #+begin_example
 Linear mixed model fit by maximum likelihood  ['lmerMod']
-Formula: performance~laser+licks_LD*day+(1+day|mouse)
+Formula: performance~licks_LD*day+(1+day|mouse)
 
 Family: binomial	 Inference: parametric
 
-Number of observations: 4512	 Groups: {'mouse': 9.0}
+Number of observations: 2736	 Groups: {'mouse': 9.0}
 
-Log-likelihood: -2252.791 	 AIC: 4521.583
+Log-likelihood: -1428.164 	 AIC: 2870.327
 
 Random effects:
 
               Name    Var    Std
-mouse  (Intercept)  0.521  0.722
-mouse          day  0.098  0.313
+mouse  (Intercept)  0.876  0.936
+mouse          day  0.146  0.382
 
                IV1  IV2   Corr
-mouse  (Intercept)  day -0.702
+mouse  (Intercept)  day -0.821
 
 Fixed effects:
 
               Estimate  2.5_ci  97.5_ci     SE     OR  OR_2.5_ci  OR_97.5_ci  \
-(Intercept)     -0.894  -1.407   -0.382  0.262  0.409      0.245       0.683
-laser            0.104  -0.062    0.270  0.085  1.110      0.940       1.310
-licks_LD        -0.939  -1.200   -0.677  0.133  0.391      0.301       0.508
-day              0.628   0.413    0.843  0.110  1.874      1.511       2.323
-licks_LD:day     0.141   0.062    0.220  0.040  1.151      1.063       1.246
+(Intercept)     -1.094  -1.751   -0.437  0.335  0.335      0.174       0.646
+licks_LD        -0.118  -0.169   -0.067  0.026  0.889      0.845       0.936
+day              0.671   0.408    0.934  0.134  1.957      1.504       2.546
+licks_LD:day     0.017   0.002    0.031  0.008  1.017      1.002       1.032
 
                Prob  Prob_2.5_ci  Prob_97.5_ci  Z-stat  P-val  Sig
-(Intercept)   0.290        0.197         0.406  -3.419  0.001  ***
-laser         0.526        0.485         0.567   1.231  0.218
-licks_LD      0.281        0.231         0.337  -7.034  0.000  ***
-day           0.652        0.602         0.699   5.726  0.000  ***
-licks_LD:day  0.535        0.515         0.555   3.482  0.000  ***
+(Intercept)   0.251        0.148         0.393  -3.263  0.001   **
+licks_LD      0.471        0.458         0.483  -4.517  0.000  ***
+day           0.662        0.601         0.718   5.001  0.000  ***
+licks_LD:day  0.504        0.500         0.508   2.189  0.029    *
 #+end_example
 
 #+begin_src ipython
@@ -552,13 +544,17 @@ def plot_betas(results, random_effects, title, width=width, height=height):
 
 #+begin_src ipython
 plot_betas(results, random_effects, '', height=1.25*height)
-plt.xticks(np.arange(5),['Intercept', 'Laser', 'Early Licks', 'Day', 'Early Licks * Day'], rotation=45, fontsize=14)
+plt.xticks(np.arange(4),['Intercept', 'Late Delay Licks', 'Day', 'Late Delay Licks * Day'], rotation=45, fontsize=14)
+# plt.yticks([-3, 0, -3])
+plt.ylim([-3, 3])
+
 plt.savefig('figures/licks/glm_cr_licks_day.svg', dpi=300)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/0ebb50ef6cafe7f8928fd0c3cbd74ac6c1af28f9.png]]
+
+* Raster
 
 #+begin_src ipython
 fig, ax = plt.subplots(1, 3, figsize=(3*width, 2* height))
@@ -587,13 +583,49 @@ plt.show()
 [[./.ob-jupyter/a0ee91928d565e8327601381d0b2c6106366dc7f.png]]
 
 #+begin_src ipython
+import matplotlib.pyplot as plt
+palette = sns.color_palette("muted")
+pal = [palette[3], palette[0], palette[2],]
+
+def licks_raster_all(trial_type, trial_licks, stimulus_onsets=None, ax=None, color='k'):
+
+    # trial_licks: list of arrays, as before
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    for trial_idx, licks_in_trial in enumerate(trial_licks):
+        if trial_type.iloc[trial_idx]=='DPA':
+            ax.vlines(licks_in_trial, trial_idx , trial_idx + 10, color=pal[0], lw=1)
+        if trial_type.iloc[trial_idx]=='DualGo':
+            ax.vlines(licks_in_trial, trial_idx , trial_idx + 10, color=pal[1], lw=1)
+        if trial_type.iloc[trial_idx]=='DualNoGo':
+            ax.vlines(licks_in_trial, trial_idx , trial_idx + 10, color=pal[2], lw=1)
+
+    add_vlines2(ax=ax)
+    ax.set_xlabel('Time from Sample Onset (s)')
+    ax.set_ylabel('Trial #')
+    ax.set_ylim(0, len(trial_licks))
+    ax.set_yticks(np.linspace(0, len(trial_licks), 4))
+
+    ax.set_xlim(0, 12)
+    #+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
 mouse = 'JawsM15'
 df_ = df_mouse[(df_mouse.mouse==mouse) & (df_mouse.laser==0)]
-licks_raster_all(df_.tasks, df_.licks, ax=None, color='r')
+print(df_.shape)
+licks_raster_all(df_.tasks, df_.licks, ax=None)
+plt.savefig('figures/licks/licks_raster_all.png', dpi=300)
+
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/b348658fd32bd7bf8150fe48fe0674bda5544630.png]]
+:RESULTS:
+: (576, 18)
+[[file:./.ob-jupyter/3ed0ba80bad3225a883a86e50f26fc3993e7aabf.png]]
+:END:
 
 #+begin_src ipython
 fig, ax = plt.subplots(1, 3, figsize=(3*width, height))
@@ -666,7 +698,7 @@ plt.show()
 [[./.ob-jupyter/268b407ebe26ea670b2240b6afe7941a4da2e998.png]]
 
 #+begin_src ipython
-import seaborn as sns
+
 import matplotlib.pyplot as plt
 
 size = 8
@@ -742,7 +774,6 @@ plt.show()
 [[./.ob-jupyter/50a705bb632bb41104cd84ad9bb09a9bf2bbda13.png]]
 
 #+begin_src ipython
-import seaborn as sns
 import matplotlib.pyplot as plt
 
 size = 8
@@ -819,7 +850,6 @@ plt.show()
 [[./.ob-jupyter/e4e6f06735cc5928507da31c8a19f65be96e0450.png]]
 
 #+begin_src ipython
-import seaborn as sns
 import matplotlib.pyplot as plt
 
 size = 96
@@ -886,21 +916,13 @@ plt.show()
 [[./.ob-jupyter/99b56709717e925eb4f7b771196baa39cec13a36.png]]
 
 #+begin_src ipython
-import seaborn as sns
 import matplotlib.pyplot as plt
 
-size = 8
-# Add a 'trial' index per mouse-task group, if not already present
 df_mouse['trial'] = df_mouse.groupby(['mouse', 'tasks', 'laser']).cumcount()
-
 df_filtered = df_mouse.copy()
-df_filtered = df_filtered[df_filtered.mouse!='ACCM04']
-df_filtered = df_filtered[df_filtered.mouse!='ACCM03']
-# df_filtered = df_filtered[(df_filtered.outcome==3) | (df_filtered.outcome==4)]
-# df_filtered = df_filtered[df_filtered.mouse!='ChRM23']
 
-# df_filtered['trial'] = df_filtered.groupby(['mouse', 'tasks']).cumcount()
-# print(df_filtered.trial)
+# df_filtered = df_filtered[(df_filtered.outcome==3) | (df_filtered.outcome==4)]
+
 tasks_to_plot = ['DPA', 'DualGo', 'DualNoGo']
 
 fig, axes = plt.subplots(1, 1, figsize=(1*width, height))
@@ -918,26 +940,14 @@ for i, task in enumerate(tasks_to_plot):
         errorbar='se',    # newer seaborn
         color=['r','b','g'][i],
         marker='o',
+        markeredgecolor='none'
     )
-
-    # df_on = df_task[df_task.laser==1]
-    # sns.lineplot(
-    #     data=df_on,
-    #     x='trial',
-    #     y=circcvl(df_on['licks_LD'], windowSize=size),
-    #     # y='licks_LD',
-    #     ax=axes[i],
-    #     estimator='mean', # default is mean
-    #     errorbar='se',    # newer seaborn
-    #     color=['r','b','g'][i],
-    #     alpha=0.2,
-    # )
-
 
     axes.set_xlabel('Day')
     axes.set_ylabel('Late Delay Licks (Hz)')
 
-    # axes.set_ylim([0, 1])
+    axes.set_ylim([0, 7])
+    axes.set_yticks(np.linspace(1, 7, 4))
     axes.set_xticks(np.arange(1, 7, 1))
 
 plt.savefig('figures/bernstein/early_licks_day_condition.svg', dpi=300)
@@ -947,8 +957,40 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./.ob-jupyter/155393eb9f7217c599b7b2cc81449b0284121a36.png]]
+[[file:./.ob-jupyter/0c87b9587f63301c5a904173b743320785d3fb1a.png]]
 
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+
+df_mouse['trial'] = df_mouse.groupby(['mouse', 'tasks', 'laser']).cumcount()
+df_filtered = df_mouse.copy()
+
+fig, axes = plt.subplots(1, 1, figsize=(1*width, height))
+
+df_off = df_filtered[df_filtered.laser==0]
+df_off = df_off[(df_off.outcome==3) | (df_off.outcome==4)]
+sns.lineplot(data=df_off, x='day', y=df_off['licks_LD'] , ax=axes, estimator='mean', marker='o', markeredgecolor='none', label='Pre Test')
+
+df_off = df_filtered[df_filtered.laser==0]
+df_off = df_off[df_off.tasks=='DualNoGo']
+sns.lineplot(data=df_off, x='day', y=df_off['licks_MD'] , ax=axes, estimator='mean', marker='o', markeredgecolor='none', label='Pre Cue')
+
+axes.set_xlabel('Day')
+axes.set_ylabel('Licks (Hz)')
+axes.legend(fontsize=12, frameon=0)
+# axes.set_ylim([0, 7])
+# axes.set_yticks(np.linspace(1, 7, 4))
+axes.set_xticks(np.arange(1, 7, 1))
+
+plt.savefig('figures/bernstein/pre_licks_day_condition.svg', dpi=300)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/1f88e031158634e528d9021a60b285adf587ae07.png]]
 
 #+begin_src ipython
 32*3

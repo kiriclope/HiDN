@@ -75,9 +75,7 @@ class ClassificationCV:
         if kwargs["n_splits"] == -1:
             self.cv = LeaveOneOut()
         else:
-            self.cv = RepeatedStratifiedKFold(
-                n_splits=kwargs["n_splits"], n_repeats=kwargs["n_repeats"]
-            )
+            self.cv = RepeatedStratifiedKFold(n_splits=kwargs["n_splits"], n_repeats=kwargs["n_repeats"])
 
         self.params = params
         self.n_jobs = kwargs["n_jobs"]
@@ -231,6 +229,7 @@ class ClassificationCV:
     def get_cv_scores(self, X, y, scoring, cv=None, X_test=None, y_test=None, IF_GEN=0, IF_COMPO=0):
         if cv is None:
             cv = self.cv
+
         if X_test is None:
             X_test = X
             y_test = y

@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session overlaps :kernel dual_data :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session pca :kernel dual_data :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -218,15 +218,15 @@ from pymer4.models import Lmer
 #+RESULTS:
 #+begin_example
 During startup - Warning messages:
-1: package ‘methods’ was built under R version 4.4.2
-2: package ‘datasets’ was built under R version 4.4.2
-3: package ‘utils’ was built under R version 4.4.2
-4: package ‘grDevices’ was built under R version 4.4.2
-5: package ‘graphics’ was built under R version 4.4.2
-6: package ‘stats’ was built under R version 4.4.2
+1: package ‘methods’ was built under R version 4.4.3
+2: package ‘datasets’ was built under R version 4.4.3
+3: package ‘utils’ was built under R version 4.4.3
+4: package ‘grDevices’ was built under R version 4.4.3
+5: package ‘graphics’ was built under R version 4.4.3
+6: package ‘stats’ was built under R version 4.4.3
 R[write to console]: In addition:
 R[write to console]: Warning message:
-R[write to console]: package ‘tools’ was built under R version 4.4.2
+R[write to console]: package ‘tools’ was built under R version 4.4.3
 #+end_example
 
 #+begin_src ipython
@@ -453,10 +453,11 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
 
   # mice = ['JawsM15']
 
-  tasks = ['DPA', 'DualGo', 'DualNoGo']
+  tasks = ['Dual'] # all
 
   kwargs = {
       'mice': mice,
+      'tasks': tasks,
       'mouse': mice[0], 'laser': 0,
       'trials': 'correct', 'reload': 0, 'data_type': 'dF',
       'prescreen': None, 'pval': 0.05,
@@ -464,8 +465,8 @@ def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
       'avg_noise':True, 'unit_var_BL': True,
       'random_state': None, 'T_WINDOW': 0.0,
       'l1_ratio': 0.95,
-      'n_comp': 16,
-      'scaler': 'standard',
+      'n_comp': 3, 'pca': 'pca',
+      'scaler': None,
       'bootstrap': 1, 'n_boots': 128,
       'n_splits': 5, 'n_repeats': 10,
       'class_weight': 0,
@@ -499,41 +500,60 @@ def decode_axis(model, **options):
     new_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
     options['NEW_DATA'] = 0
 
+    pc_list = []
+    X_list = []
+    y_list = []
     dfs = []
     for mouse in options['mice']:
         df_mouse = []
         options['mouse'] = mouse
         options = set_options(**options)
         days = options['days']
+        print(days)
 
         if mouse in new_mice:
-            options['reload'] = 0
             options['NEW_DATA'] = 1
         else:
-            options['reload'] = 0
             options['NEW_DATA'] = 0
 
-        for task in ['all']:
+        X_, y_, pc_ = [], [], []
+
+        for task in options['tasks']:
             options['task'] = task
 
-            for day in ['first']:
+            for day in days:
                 options['day'] = day
 
                 #try:
                 if 0==0:
-                    components, exp_var = get_classification(model, RETURN='pca', **options)
+                    X_pca, y_pca, components, exp_var = get_classification(model, RETURN='pca', **options)
                     options['reload'] = 0
-                    print(components.shape, exp_var.shape)
-                    df_mouse.append(pd.DataFrame(exp_var, columns=['explained_variance']).reset_index())
+
+                    X_.append(X_pca)
+                    y_.append(y_pca)
+                    pc_.append(components)
+
+                    print(X_pca.shape, y_pca.shape, components.shape, exp_var.shape)
+                    df = pd.DataFrame(exp_var, columns=['explained_variance']).reset_index()
+                    df['day'] = day
+
+                    df_mouse.append(df)
+
                 # except Exception as e:
                 # print("An error occurred:", e)
                 # pass
+        X_list.append(X_)
+        pc_list.append(pc_)
+
+        y_ = pd.concat(y_)
+        y_['mouse'] = mouse
+        y_list.append(y_)
 
         df_mouse = pd.concat(df_mouse)
         df_mouse['mouse'] = mouse
         dfs.append(df_mouse)
 
-    return pd.concat(dfs)
+    return X_list, pd.concat(y_list), pc_list, pd.concat(dfs)
     #+end_src
 
 #+RESULTS:
@@ -568,7 +588,7 @@ from src.classificationCV import ClassificationCV
 #+RESULTS:
 
 #+begin_src ipython
-options['n_jobs'] = -1
+options['n_jobs'] = 64
 options['reload'] = 0
 
 options['T_WINDOW'] = 0.0
@@ -582,102 +602,164 @@ print(model.pipe)
 #+end_src
 
 #+RESULTS:
-: PCA False 16
-: PCA 16
-: Pipeline(steps=[('scaler', StandardScaler()), ('pca', PCA(n_components=16)),
-:                 ('model', None)])
+: PCA pca 3
+: PCA 3
+: Pipeline(steps=[('pca', PCA(n_components=3))])
 
 #+begin_src ipython
-options['features'] = 'sample'
-options['epochs'] = ['DELAY']
-df = decode_axis(model, **options)
+options['epochs'] = ['TASK']
+X_pca, y_pca, pc, df = decode_axis(model, **options)
  #+end_src
 
 #+RESULTS:
 #+begin_example
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 13)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (125, 14) ['DualNoGo' 'DualGo' 'DPA']
-X (125, 184, 84) nans 0.0 y (125,) [0. 1.]
-(16, 184) (16,)
+X_days (768, 184, 84) y_days (768, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (141, 184, 84) y_labels (141, 16) ['DualNoGo' 'DualGo'] (141,)
+Elapsed (with compilation) = 0h 0m 0s
+(141, 84, 3) (141, 16) (3, 184) (3,)
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4] [1. 0.]
+Training set: X (60, 184, 84) y_labels (60, 16) ['DualGo' 'DualNoGo'] (60,)
+Elapsed (with compilation) = 0h 0m 0s
+(60, 84, 3) (60, 16) (3, 184) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 13)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (115, 14) ['DualNoGo' 'DualGo' 'DPA']
-X (115, 201, 84) nans 0.0 y (115,) [0. 1.]
-(16, 201) (16,)
+X_days (1152, 201, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (123, 201, 84) y_labels (123, 16) ['DualNoGo' 'DualGo'] (123,)
+Elapsed (with compilation) = 0h 0m 0s
+(123, 84, 3) (123, 16) (3, 201) (3,)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4 5 6] [1. 0.]
+Training set: X (164, 201, 84) y_labels (164, 16) ['DualGo' 'DualNoGo'] (164,)
+Elapsed (with compilation) = 0h 0m 0s
+(164, 84, 3) (164, 16) (3, 201) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 13)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (121, 14) ['DPA' 'DualGo' 'DualNoGo']
-X (121, 423, 84) nans 0.0 y (121,) [0. 1.]
-(16, 423) (16,)
+X_days (960, 423, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (120, 423, 84) y_labels (120, 16) ['DualGo' 'DualNoGo'] (120,)
+Elapsed (with compilation) = 0h 0m 1s
+(120, 84, 3) (120, 16) (3, 423) (3,)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4 5] [1. 0.]
+Training set: X (91, 423, 84) y_labels (91, 16) ['DualGo' 'DualNoGo'] (91,)
+Elapsed (with compilation) = 0h 0m 2s
+(91, 84, 3) (91, 16) (3, 423) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM15
 X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (122, 16) ['DualGo' 'DualNoGo' 'DPA']
-X (122, 693, 84) nans 0.0 y (122,) [0. 1.]
-(16, 693) (16,)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (125, 693, 84) y_labels (125, 17) ['DualGo' 'DualNoGo'] (125,)
+Elapsed (with compilation) = 0h 0m 1s
+(125, 84, 3) (125, 17) (3, 693) (3,)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4. 5. 6.] [1. 0.]
+Training set: X (160, 693, 84) y_labels (160, 17) ['DualGo' 'DualNoGo'] (160,)
+Elapsed (with compilation) = 0h 0m 0s
+(160, 84, 3) (160, 17) (3, 693) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM18
 X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (147, 16) ['DualNoGo' 'DualGo' 'DPA']
-X (147, 444, 84) nans 0.0 y (147,) [0. 1.]
-(16, 444) (16,)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (155, 444, 84) y_labels (155, 17) ['DualNoGo' 'DualGo'] (155,)
+Elapsed (with compilation) = 0h 0m 1s
+(155, 84, 3) (155, 17) (3, 444) (3,)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4. 5. 6.] [1. 0.]
+Training set: X (188, 444, 84) y_labels (188, 17) ['DualNoGo' 'DualGo'] (188,)
+Elapsed (with compilation) = 0h 0m 2s
+(188, 84, 3) (188, 17) (3, 444) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/ChRM04
 X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (149, 16) ['DualNoGo' 'DPA' 'DualGo']
-X (149, 668, 84) nans 0.0 y (149,) [0. 1.]
-(16, 668) (16,)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (154, 668, 84) y_labels (154, 17) ['DualNoGo' 'DualGo'] (154,)
+Elapsed (with compilation) = 0h 0m 1s
+(154, 84, 3) (154, 17) (3, 668) (3,)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4. 5. 6.] [1. 0.]
+Training set: X (176, 668, 84) y_labels (176, 17) ['DualNoGo' 'DualGo'] (176,)
+Elapsed (with compilation) = 0h 0m 0s
+(176, 84, 3) (176, 17) (3, 668) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 13)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (130, 14) ['DualGo' 'DPA' 'DualNoGo']
-X (130, 232, 84) nans 0.0 y (130,) [0. 1.]
-(16, 232) (16,)
+X_days (960, 232, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (135, 232, 84) y_labels (135, 16) ['DualGo' 'DualNoGo'] (135,)
+Elapsed (with compilation) = 0h 0m 0s
+(135, 84, 3) (135, 16) (3, 232) (3,)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4 5] [1. 0.]
+Training set: X (97, 232, 84) y_labels (97, 16) ['DualNoGo' 'DualGo'] (97,)
+Elapsed (with compilation) = 0h 0m 0s
+(97, 84, 3) (97, 16) (3, 232) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/ACCM03
 X_days (960, 361, 84) y_days (960, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (220, 16) ['DPA' 'DualGo' 'DualNoGo']
-X (220, 361, 84) nans 0.0 y (220,) [0. 1.]
-(16, 361) (16,)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (239, 361, 84) y_labels (239, 17) ['DualGo' 'DualNoGo'] (239,)
+Elapsed (with compilation) = 0h 0m 0s
+(239, 84, 3) (239, 17) (3, 361) (3,)
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 15)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4. 5.] [1. 0.]
+Training set: X (227, 361, 84) y_labels (227, 17) ['DualGo' 'DualNoGo'] (227,)
+Elapsed (with compilation) = 0h 0m 1s
+(227, 84, 3) (227, 17) (3, 361) (3,)
+['first', 'last']
 Loading files from /storage/leon/dual_task/data/ACCM04
 X_days (960, 113, 84) y_days (960, 15)
-DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (209, 16) ['DualNoGo' 'DPA' 'DualGo']
-X (209, 113, 84) nans 0.0 y (209,) [0. 1.]
-(16, 113) (16,)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (224, 113, 84) y_labels (224, 17) ['DualNoGo' 'DualGo'] (224,)
+Elapsed (with compilation) = 0h 0m 0s
+(224, 84, 3) (224, 17) (3, 113) (3,)
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 15)
+DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
+last [4. 5.] [1. 0.]
+Training set: X (190, 113, 84) y_labels (190, 17) ['DualGo' 'DualNoGo'] (190,)
+Elapsed (with compilation) = 0h 0m 0s
+(190, 84, 3) (190, 17) (3, 113) (3,)
 #+end_example
 
 #+begin_src ipython
-print(df[df.mouse=='JawsM15'])
+
 #+end_src
 
 #+RESULTS:
-#+begin_example
- n   index  explained_variance    mouse
-0       0           98.541893  JawsM15
-1       1           31.642260  JawsM15
-2       2           24.575338  JawsM15
-3       3           22.603245  JawsM15
-4       4           18.848274  JawsM15
-5       5           15.765272  JawsM15
-6       6           15.368903  JawsM15
-7       7           14.510834  JawsM15
-8       8           12.181429  JawsM15
-9       9           11.502284  JawsM15
-10     10           10.926422  JawsM15
-11     11           10.445864  JawsM15
-12     12           10.418303  JawsM15
-13     13            9.947380  JawsM15
-14     14            9.644477  JawsM15
-15     15            9.264197  JawsM15
-#+end_example
 
 #+begin_src ipython
-sns.lineplot(data=df, x='index', y='explained_variance')
+sns.lineplot(data=df[(df.day=='last')], x='index', y='explained_variance', hue='mouse', legend=None, alpha=0.2)
+sns.lineplot(data=df[(df.day=='last')], x='index', y='explained_variance', color='k')
+
 plt.xlabel('PC #')
 plt.ylabel('Explained Variance')
 plt.savefig('figures/pca/explained_variance.svg', dpi=300)
@@ -685,7 +767,231 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/overlaps/figure_24.png]]
+[[file:./figures/overlaps/figure_24.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Plots
+
+#+begin_src ipython
+n_comp = 3
+i_mouse = 5
+i_day = 1
+learning = ['Naive', 'Expert']
+
+print(options['mice'][i_mouse])
+X = np.array(X_pca[i_mouse][i_day][:]).swapaxes(1, -1)
+print('X', X.shape)
+
+try:
+    pcs = np.array(pc[i_mouse][i_day]).swapaxes(1, -1)
+    print('pcs', pcs.shape)
+except:
+    pass
+
+y = y_pca[y_pca.mouse==options['mice'][i_mouse]]
+y = y[y.learning==learning[i_day]]
+print(y.shape)
+
+print(y.learning.unique())
+#+end_src
+
+#+RESULTS:
+: ChRM04
+: X (176, 3, 84)
+: pcs (3, 668)
+: (176, 18)
+: ['Expert']
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+# color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['AC', 'AD', 'BD', 'BC']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(4):
+    mask = (y.odor_pair==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k])
+
+ax[-1].legend(fontsize=14, frameon=0)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_27.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+task = 'DualGo'
+
+for i in range(4):
+    mask = (y.odor_pair==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k])
+
+ax[-1].legend(fontsize=14, frameon=0)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_28.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+task = 'DualNoGo'
+for i in range(4):
+    mask = (y.odor_pair==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k])
+
+ax[-1].legend(fontsize=14, frameon=0)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_29.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+
+for i in range(4):
+    # X_avg = (X[(y.odor_pair==i) & (y.tasks==task)].mean(0))[:, :66]
+
+    X_avg = X[(y.odor_pair==i) & (y.tasks==task)]
+    idx = np.random.randint(X_avg.shape[0])
+    X_avg = X_avg[idx, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_30.png]]
+
+
+#+begin_src ipython
+from scipy.ndimage import uniform_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+theta = np.arctan2(pcs[1], pcs[0])
+idx = np.argsort(theta)
+for k in range(3):
+    ax[k].plot(theta[idx] * 180 / np.pi, gaussian_filter1d(pcs[k][idx], sigma=0.1*pcs.shape[1]))
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_31.png]]
+
+#+begin_src ipython
+from scipy.ndimage import uniform_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+theta = np.arctan2(pcs[1], pcs[0])
+idx = np.argsort(theta)
+
+ax[0].plot(gaussian_filter1d(pcs[0][idx], sigma=0.05*pcs.shape[1]), gaussian_filter1d(pcs[1][idx], sigma=0.05*pcs.shape[1]))
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].plot(gaussian_filter1d(pcs[0][idx], sigma=0.05*pcs.shape[1]), gaussian_filter1d(pcs[2][idx], sigma=0.05*pcs.shape[1]))
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+ax[2].plot(gaussian_filter1d(pcs[1][idx], sigma=0.05*pcs.shape[1]), gaussian_filter1d(pcs[2][idx], sigma=0.05*pcs.shape[1]))
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_32.png]]
+
+#+begin_src ipython
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(gaussian_filter1d(pcs[0][idx], sigma=0.05*pcs.shape[1]),
+           gaussian_filter1d(pcs[1][idx], sigma=0.05*pcs.shape[1]),
+           gaussian_filter1d(pcs[2][idx], sigma=0.05*pcs.shape[1]),
+           rasterized=1)
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_33.png]]
+
 
 #+begin_src ipython
 
