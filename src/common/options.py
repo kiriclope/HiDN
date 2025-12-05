@@ -285,11 +285,15 @@ def set_options(**kwargs):
 
     opts["bins_LD"] = opts["bins"][int((t_LD[0] + opts['T_WINDOW']) * frame_rate) : int(t_LD[1] * frame_rate)]
 
+    opts["bins_POST_GNG"] = opts["bins"][int((t_LD[0] + 0.5) * frame_rate) : int(t_RWD2[0] * frame_rate)]
+
     opts["bins_TEST"] = opts["bins"][int((t_TEST[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[1]) * frame_rate)]
 
     opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1] - opts['T_WINDOW']) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 
-    opts["bins_TASK"] = opts["bins"][int((t_STIM[0]) * frame_rate) : int((t_RWD2[0]) * frame_rate)]
+    # opts["bins_TASK"] = opts["bins"][: int((t_RWD2[1]) * frame_rate)]
+    opts["bins_TASK"] = opts["bins"][int((t_ED[0]) * frame_rate) : int((t_RWD2[0]) * frame_rate)]
+    opts["bins_POST_DELAY"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[1]) * frame_rate)]
 
     opts["bins_POSTTASK"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[0]) * frame_rate)]
 

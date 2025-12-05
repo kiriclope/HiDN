@@ -1,7 +1,14 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session pca :kernel dual_data :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session pca :kernel torch :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
+
+#+begin_src ipython
+import matplotlib.pyplot
+#+end_src
+
+#+RESULTS:
+
 
 #+begin_src ipython
 %load_ext autoreload
@@ -9,15 +16,14 @@
 %reload_ext autoreload
 
 %run /home/leon/dual_task/dual_data/notebooks/setup.py
-%matplotlib inline
-%config InlineBackend.figure_format = 'png'
+# %config InlineBackend.figure_format = 'png'
 #+end_src
 
 #+RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
-: /home/leon/mambaforge/envs/dual_data/bin/python
+: /home/leon/mambaforge/envs/torch/bin/python
 
 * Imports
 
@@ -186,308 +192,43 @@ def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
 
 #+RESULTS:
 
-* Plots
-
-#+begin_src ipython
-def significance_marker(p):
-    if p < 0.001:
-        return '***'
-    elif p < 0.01:
-        return '**'
-    elif p < 0.05:
-        return '*'
-    elif p <.1:
-        return '.'
-    else:
-        return ''
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import rpy2.robjects as robjects
-from rpy2.robjects.packages import importr
-
-# Set the .libPaths in R
-custom_r_libpath = '~/R/x86_64-pc-linux-gnu-library/4.3/'
-robjects.r('.libPaths("{0}")'.format(custom_r_libpath))
-
-from pymer4.models import Lmer
-#+end_src
-
-#+RESULTS:
-#+begin_example
-During startup - Warning messages:
-1: package ‘methods’ was built under R version 4.4.3
-2: package ‘datasets’ was built under R version 4.4.3
-3: package ‘utils’ was built under R version 4.4.3
-4: package ‘grDevices’ was built under R version 4.4.3
-5: package ‘graphics’ was built under R version 4.4.3
-6: package ‘stats’ was built under R version 4.4.3
-R[write to console]: In addition:
-R[write to console]: Warning message:
-R[write to console]: package ‘tools’ was built under R version 4.4.3
-#+end_example
-
-#+begin_src ipython
-def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
-    if day=='all':
-        df_ = df.copy()
-    else:
-        df_ = df[df.day == day].copy()
-
-    if colors is None:
-        colors = ['r', 'b', 'g']
-
-    if if_proba:
-        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-
-        if cis is not None:
-            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
-            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
-
-    else:
-        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-
-        if cis is not None:
-            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
-            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
-
-    time_points = np.linspace(0, 14, size)
-
-    for i, task in enumerate(mean_overlaps.index):
-        if label is None:
-            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls, **kwargs)
-            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
-        else:
-            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls, **kwargs)
-
-        if cis is not None:
-            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
-
-    ax.set_xlabel('Time (s)')
-    # ax.set_ylabel('%s Overlap' % title)
-    add_vlines(ax)
-    ax.axhline(y0, ls='--', color='k')
-    ax.legend(fontsize=10)
-
-def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
-    stacked = np.stack(x)
-    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-def plot_overlaps_traj(df, df2, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
-    if day=='all':
-        df_ = df.copy()
-        df2_ = df2.copy()
-    else:
-        df_ = df[df.day == day].copy()
-        df2_ = df[df.day == day].copy()
-
-    if colors is None:
-        colors = ['r', 'b', 'g']
-
-    if if_proba:
-        mean_overlaps = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-        mean_overlaps2 = df2_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-
-        if cis is not None:
-            lower_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
-            upper_cis = df_.groupby('tasks')['sign_overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
-
-    else:
-        mean_overlaps = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-        mean_overlaps2 = df2_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: np.nanmean(np.stack(x), axis=0))
-
-        if cis is not None:
-            lower_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 0))
-            upper_cis = df_.groupby('tasks')['overlaps_%s' % epoch].apply(lambda x: bootstrap_ci_per_task(x, 1000, 1))
-
-    time_points = np.linspace(0, 14, size)
-
-    for i, task in enumerate(mean_overlaps.index):
-        if label is None:
-            ax.plot(time_points, mean_overlaps[task], label=f"{task}", color=colors[i], ls=ls, **kwargs)
-            # ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
-        else:
-            ax.plot(time_points, mean_overlaps[task], label=label, color=colors[i], ls=ls, **kwargs)
-
-        if cis is not None:
-            ax.fill_between(time_points, lower_cis[task], upper_cis[task], color=colors[i], alpha=0.1)
-
-    ax.set_xlabel('Time (s)')
-    # ax.set_ylabel('%s Overlap' % title)
-    add_vlines(ax)
-    ax.axhline(y0, ls='--', color='k')
-    ax.legend(fontsize=10)
-
-def bootstrap_ci_per_task(x, n_bootstrap, ci_idx):
-    stacked = np.stack(x)
-    return np.array([bootstrap_ci(stacked[:, i], n_bootstrap)[ci_idx] for i in range(stacked.shape[1])])
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-def bootstrap_ci(data, n_bootstrap=1000, ci=95):
-    bootstrapped_means = np.array([np.mean(np.random.choice(data, size=len(data))) for _ in range(n_bootstrap)])
-    lower_bound = np.percentile(bootstrapped_means, (100-ci)/2)
-    upper_bound = np.percentile(bootstrapped_means, 100 - (100-ci)/2)
-    return lower_bound, upper_bound
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-def plot_mat(X, ax, vmin=-1, vmax=1, palette='bwr'):
-  im = ax.imshow(
-    X,
-    interpolation=None,
-    origin="lower",
-    cmap=palette,
-    extent=[0, 14, 0, 14],
-    vmin=vmin,
-    vmax=vmax,
-  )
-
-  add_vdashed(ax)
-  ax.set_xlim([2, 12])
-  ax.set_xticks([2, 4, 6, 8, 10, 12])
-  ax.set_ylim([2, 12])
-  ax.set_yticks([2, 4, 6, 8, 10, 12])
-
-  ax.set_xlabel("Testing Time (s)")
-  ax.set_ylabel("Training Time (s)")
-  return im
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-import matplotlib.pyplot as plt
-
-def add_vdashed(ax=None, mouse=""):
-    # Define time intervals
-    t_STIM = [2, 3]
-    t_DIST = [4.5, 5.5]
-    t_CUE = [6.5, 7]
-    t_TEST = [9, 10]
-
-    # Add vertical dashed lines and text labels for each interval
-    if ax is not None:
-        # Draw vertical lines
-        for t in [t_STIM, t_DIST, t_TEST]:
-            ax.axvline(x=t[0], linestyle='--', color='k', lw=2)
-            ax.axvline(x=t[1], linestyle='--', color='k', lw=2)
-
-            ax.axhline(y=t[0], linestyle='--', color='k', lw=2)
-            ax.axhline(y=t[1], linestyle='--', color='k', lw=2)
-
-        # Add text labels at the middle of each interval
-        ax.text((t_STIM[0] + t_STIM[1]) / 2, 12.5, 'STIM', color='black',
-                horizontalalignment='center', verticalalignment='center', fontsize=16)
-        ax.text((t_DIST[0] + t_DIST[1]) / 2, 12.5, 'DIST', color='black',
-                horizontalalignment='center', verticalalignment='center', fontsize=16)
-        # ax.text((t_CUE[0] + t_CUE[1]) / 2, 12.5, 'CUE', color='black',
-        #         horizontalalignment='center', verticalalignment='center', fontsize=16)
-        ax.text((t_TEST[0] + t_TEST[1]) / 2, 12.5, 'TEST', color='black',
-                horizontalalignment='center', verticalalignment='center', fontsize=16)
-
-        ax.text(12.5, (t_STIM[0] + t_STIM[1]) / 2, 'STIM', color='black',
-                horizontalalignment='center', verticalalignment='center', rotation='vertical',fontsize=16)
-        ax.text(12.5, (t_DIST[0] + t_DIST[1]) / 2, 'DIST', color='black',
-                horizontalalignment='center', verticalalignment='center', rotation='vertical',fontsize=16)
-        # ax.text(12.5, (t_CUE[0] + t_CUE[1]) / 2, 'CUE', color='black',
-        #         horizontalalignment='center', verticalalignment='center', rotation='vertical', fontsize=16)
-        ax.text(12.5, (t_TEST[0] + t_TEST[1]) / 2, 'TEST', color='black',
-                horizontalalignment='center', verticalalignment='center', rotation='vertical', fontsize=16)
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-def plot_overlaps_mat(df, day, vmin=-1, vmax=1, title=''):
-    df_ = df[df.day == day].copy()
-    colors = ['r', 'b', 'g']
-    time_points = np.linspace(0, 14, 84)
-
-    fig, ax = plt.subplots(1, 3, figsize=(15, 5))
-    # fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
-
-    for i, task in enumerate(df_.tasks.unique()):
-        df_task = df_[df_.tasks==task]
-        overlaps = df_task
-        overlaps = np.array(df_task['overlaps'].tolist())
-
-        mean_o = np.nanmean(overlaps, axis=0)
-
-        im = plot_mat(mean_o.reshape(84, 84), ax[i], vmin, vmax)
-
-    cax = inset_axes(ax[-1], width="5%", height="100%", loc='center right',
-                     bbox_to_anchor=(0.12, 0, 1, 1), bbox_transform=ax[-1].transAxes, borderpad=0)
-
-    # Add colorbar to the new axis
-    cbar = fig.colorbar(im, cax=cax)
-    cbar.set_label("%s Overlaps" % title)
-
-    plt.subplots_adjust(right=0.85)  # Adjust figure to allocate space
-
-#+end_src
-
-#+RESULTS:
-
 * Parameters
 
 #+begin_src ipython
-  DEVICE = 'cuda:0'
-  old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-  Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
 
-  mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
-  # mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+# mice = ['JawsM15', 'JawsM18', 'ChRM04']
 
-  # mice = ['JawsM15']
+tasks = ['DPA'] # all
 
-  tasks = ['Dual'] # all
+kwargs = {
+   'mice': mice,
+   'tasks': tasks,
+   'mouse': mice[0], 'laser': 0,
+   'trials': '', 'reload': 1, 'data_type': 'dF',
+   'prescreen': None, 'pval': 0.05,
+   'preprocess': False, 'scaler_BL': 'robust',
+   'avg_noise':True, 'unit_var_BL': True,
+   'random_state': None, 'T_WINDOW': 0.0,
+   'l1_ratio': 0.95,
+   'n_comp': 5, 'pca': 'pca',
+   'scaler': None,
+   'bootstrap': 1, 'n_boots': 128,
+   'n_splits': 5, 'n_repeats': 10,
+   'class_weight': 0,
+   'multilabel': 0,
+   'mne_estimator':'generalizing', # sliding or generalizing
+   'n_jobs': 64,
+}
 
-  kwargs = {
-      'mice': mice,
-      'tasks': tasks,
-      'mouse': mice[0], 'laser': 0,
-      'trials': 'correct', 'reload': 0, 'data_type': 'dF',
-      'prescreen': None, 'pval': 0.05,
-      'preprocess': False, 'scaler_BL': 'robust',
-      'avg_noise':True, 'unit_var_BL': True,
-      'random_state': None, 'T_WINDOW': 0.0,
-      'l1_ratio': 0.95,
-      'n_comp': 3, 'pca': 'pca',
-      'scaler': None,
-      'bootstrap': 1, 'n_boots': 128,
-      'n_splits': 5, 'n_repeats': 10,
-      'class_weight': 0,
-      'multilabel': 0,
-      'mne_estimator':'generalizing', # sliding or generalizing
-      'n_jobs': 64,
-  }
-
-  # kwargs['days'] = ['first', 'middle', 'last']
-  kwargs['days'] = ['first', 'last']
-  # kwargs['days'] = 'all'
-  options = set_options(**kwargs)
-
-  safe_roc_auc = make_scorer(safe_roc_auc_score, needs_proba=True)
-  safe_f1 = make_scorer(safe_f1_score, needs_proba=True)
-
-  dum = 'overlaps_loocv_correct_l1'
-  # dum = 'overlaps_loocv_laser_only'
-  # dum = 'overlaps_loocv_laser_all_l2'
-  options['cv_B'] = False
-  # dum = 'overlaps_all_loocv'
+# kwargs['days'] = ['first', 'middle', 'last']
+kwargs['days'] = ['first', 'last']
+# kwargs['days'] = 'all'
+options = set_options(**kwargs)
+options['cv_B'] = False
 #+end_src
 
 #+RESULTS:
@@ -507,6 +248,11 @@ def decode_axis(model, **options):
     for mouse in options['mice']:
         df_mouse = []
         options['mouse'] = mouse
+
+        if mouse == 'all':
+            options['mice'] = mice
+            print(options['mice'])
+
         options = set_options(**options)
         days = options['days']
         print(days)
@@ -524,24 +270,21 @@ def decode_axis(model, **options):
             for day in days:
                 options['day'] = day
 
-                #try:
-                if 0==0:
-                    X_pca, y_pca, components, exp_var = get_classification(model, RETURN='pca', **options)
-                    options['reload'] = 0
 
-                    X_.append(X_pca)
-                    y_.append(y_pca)
-                    pc_.append(components)
+                X_pca, y_pca, components, exp_var = get_classification(model, RETURN='pca', **options)
+                options['reload'] = 0
 
-                    print(X_pca.shape, y_pca.shape, components.shape, exp_var.shape)
-                    df = pd.DataFrame(exp_var, columns=['explained_variance']).reset_index()
-                    df['day'] = day
+                X_.append(X_pca)
+                y_.append(y_pca)
+                pc_.append(components)
 
-                    df_mouse.append(df)
+                print(X_pca.shape, y_pca.shape, components.shape, exp_var.shape)
+                df = pd.DataFrame(exp_var, columns=['explained_variance']).reset_index()
+                df['day'] = day
 
-                # except Exception as e:
-                # print("An error occurred:", e)
-                # pass
+                df_mouse.append(df)
+
+
         X_list.append(X_)
         pc_list.append(pc_)
 
@@ -589,11 +332,6 @@ from src.classificationCV import ClassificationCV
 
 #+begin_src ipython
 options['n_jobs'] = 64
-options['reload'] = 0
-
-options['T_WINDOW'] = 0.0
-
-options['cv'] = LeaveOneOut()
 options['verbose'] = 1
 net = None
 params = {}
@@ -602,172 +340,37 @@ print(model.pipe)
 #+end_src
 
 #+RESULTS:
-: PCA pca 3
-: PCA 3
-: Pipeline(steps=[('pca', PCA(n_components=3))])
+: PCA pca 5
+: PCA 5
+: Pipeline(steps=[('pca', PCA(n_components=5))])
 
 #+begin_src ipython
 options['epochs'] = ['TASK']
-X_pca, y_pca, pc, df = decode_axis(model, **options)
+X_pca, y_pca, w_pca, df = decode_axis(model, **options)
  #+end_src
 
 #+RESULTS:
-#+begin_example
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1 2 3] [1. 0.]
-Training set: X (141, 184, 84) y_labels (141, 16) ['DualNoGo' 'DualGo'] (141,)
-Elapsed (with compilation) = 0h 0m 0s
-(141, 84, 3) (141, 16) (3, 184) (3,)
-Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4] [1. 0.]
-Training set: X (60, 184, 84) y_labels (60, 16) ['DualGo' 'DualNoGo'] (60,)
-Elapsed (with compilation) = 0h 0m 0s
-(60, 84, 3) (60, 16) (3, 184) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1 2 3] [1. 0.]
-Training set: X (123, 201, 84) y_labels (123, 16) ['DualNoGo' 'DualGo'] (123,)
-Elapsed (with compilation) = 0h 0m 0s
-(123, 84, 3) (123, 16) (3, 201) (3,)
-Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4 5 6] [1. 0.]
-Training set: X (164, 201, 84) y_labels (164, 16) ['DualGo' 'DualNoGo'] (164,)
-Elapsed (with compilation) = 0h 0m 0s
-(164, 84, 3) (164, 16) (3, 201) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1 2 3] [1. 0.]
-Training set: X (120, 423, 84) y_labels (120, 16) ['DualGo' 'DualNoGo'] (120,)
-Elapsed (with compilation) = 0h 0m 1s
-(120, 84, 3) (120, 16) (3, 423) (3,)
-Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4 5] [1. 0.]
-Training set: X (91, 423, 84) y_labels (91, 16) ['DualGo' 'DualNoGo'] (91,)
-Elapsed (with compilation) = 0h 0m 2s
-(91, 84, 3) (91, 16) (3, 423) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1. 2. 3.] [1. 0.]
-Training set: X (125, 693, 84) y_labels (125, 17) ['DualGo' 'DualNoGo'] (125,)
-Elapsed (with compilation) = 0h 0m 1s
-(125, 84, 3) (125, 17) (3, 693) (3,)
-Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4. 5. 6.] [1. 0.]
-Training set: X (160, 693, 84) y_labels (160, 17) ['DualGo' 'DualNoGo'] (160,)
-Elapsed (with compilation) = 0h 0m 0s
-(160, 84, 3) (160, 17) (3, 693) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1. 2. 3.] [1. 0.]
-Training set: X (155, 444, 84) y_labels (155, 17) ['DualNoGo' 'DualGo'] (155,)
-Elapsed (with compilation) = 0h 0m 1s
-(155, 84, 3) (155, 17) (3, 444) (3,)
-Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4. 5. 6.] [1. 0.]
-Training set: X (188, 444, 84) y_labels (188, 17) ['DualNoGo' 'DualGo'] (188,)
-Elapsed (with compilation) = 0h 0m 2s
-(188, 84, 3) (188, 17) (3, 444) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1. 2. 3.] [1. 0.]
-Training set: X (154, 668, 84) y_labels (154, 17) ['DualNoGo' 'DualGo'] (154,)
-Elapsed (with compilation) = 0h 0m 1s
-(154, 84, 3) (154, 17) (3, 668) (3,)
-Loading files from /storage/leon/dual_task/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4. 5. 6.] [1. 0.]
-Training set: X (176, 668, 84) y_labels (176, 17) ['DualNoGo' 'DualGo'] (176,)
-Elapsed (with compilation) = 0h 0m 0s
-(176, 84, 3) (176, 17) (3, 668) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1 2 3] [1. 0.]
-Training set: X (135, 232, 84) y_labels (135, 16) ['DualGo' 'DualNoGo'] (135,)
-Elapsed (with compilation) = 0h 0m 0s
-(135, 84, 3) (135, 16) (3, 232) (3,)
-Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 14)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4 5] [1. 0.]
-Training set: X (97, 232, 84) y_labels (97, 16) ['DualNoGo' 'DualGo'] (97,)
-Elapsed (with compilation) = 0h 0m 0s
-(97, 84, 3) (97, 16) (3, 232) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/ACCM03
-X_days (960, 361, 84) y_days (960, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1. 2. 3.] [1. 0.]
-Training set: X (239, 361, 84) y_labels (239, 17) ['DualGo' 'DualNoGo'] (239,)
-Elapsed (with compilation) = 0h 0m 0s
-(239, 84, 3) (239, 17) (3, 361) (3,)
-Loading files from /storage/leon/dual_task/data/ACCM03
-X_days (960, 361, 84) y_days (960, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4. 5.] [1. 0.]
-Training set: X (227, 361, 84) y_labels (227, 17) ['DualGo' 'DualNoGo'] (227,)
-Elapsed (with compilation) = 0h 0m 1s
-(227, 84, 3) (227, 17) (3, 361) (3,)
-['first', 'last']
-Loading files from /storage/leon/dual_task/data/ACCM04
-X_days (960, 113, 84) y_days (960, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS first LASER 0
-first [1. 2. 3.] [1. 0.]
-Training set: X (224, 113, 84) y_labels (224, 17) ['DualNoGo' 'DualGo'] (224,)
-Elapsed (with compilation) = 0h 0m 0s
-(224, 84, 3) (224, 17) (3, 113) (3,)
-Loading files from /storage/leon/dual_task/data/ACCM04
-X_days (960, 113, 84) y_days (960, 15)
-DATA: FEATURES sample TASK Dual TRIALS correct DAYS last LASER 0
-last [4. 5.] [1. 0.]
-Training set: X (190, 113, 84) y_labels (190, 17) ['DualGo' 'DualNoGo'] (190,)
-Elapsed (with compilation) = 0h 0m 0s
-(190, 84, 3) (190, 17) (3, 113) (3,)
-#+end_example
+
 
 #+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1)
 
-#+end_src
+sns.lineplot(data=df[(df.day=='first')], x='index', y='explained_variance', hue='mouse', legend=None, alpha=0.2, ax=ax[0])
+sns.lineplot(data=df[(df.day=='first')], x='index', y='explained_variance', color='k', ax=ax[0])
 
-#+RESULTS:
+sns.lineplot(data=df[(df.day=='last')], x='index', y='explained_variance', hue='mouse', legend=None, alpha=0.2, ax=ax[1])
+sns.lineplot(data=df[(df.day=='last')], x='index', y='explained_variance', color='k', ax=ax[1])
 
-#+begin_src ipython
-sns.lineplot(data=df[(df.day=='last')], x='index', y='explained_variance', hue='mouse', legend=None, alpha=0.2)
-sns.lineplot(data=df[(df.day=='last')], x='index', y='explained_variance', color='k')
+for k in range(2):
+    ax[k].set_xlabel('PC #')
+    ax[k].set_ylabel('Explained Variance')
+    ax[k].set_xticks(np.arange(0, options['n_comp']), np.arange(1, options['n_comp']+1))
 
-plt.xlabel('PC #')
-plt.ylabel('Explained Variance')
-plt.savefig('figures/pca/explained_variance.svg', dpi=300)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_24.png]]
+[[file:./figures/overlaps/figure_16.png]]
 
 #+begin_src ipython
 
@@ -776,42 +379,82 @@ plt.show()
 #+RESULTS:
 
 * Plots
+** Data
 
 #+begin_src ipython
 n_comp = 3
-i_mouse = 5
-i_day = 1
 learning = ['Naive', 'Expert']
 
-print(options['mice'][i_mouse])
-X = np.array(X_pca[i_mouse][i_day][:]).swapaxes(1, -1)
-print('X', X.shape)
+X_mouse, y_mouse, pc_mouse = [], [], []
 
-try:
-    pcs = np.array(pc[i_mouse][i_day]).swapaxes(1, -1)
-    print('pcs', pcs.shape)
-except:
-    pass
+for i_day in range(len(options['days'])):
 
-y = y_pca[y_pca.mouse==options['mice'][i_mouse]]
-y = y[y.learning==learning[i_day]]
-print(y.shape)
+    X_, y_, pc_ = [], [], []
+    for i_mouse in range(len(options['mice'])):
 
-print(y.learning.unique())
+
+        if len(options['days']) == 2:
+            y = y_pca[y_pca.mouse==options['mice'][i_mouse]]
+            y = y[y.learning==learning[i_day]]
+        else:
+            y = y_pca[y_pca.mouse==options['mice'][i_mouse]]
+            y = y[y.day==(i_day+1)]
+
+        X = -np.array(X_pca[i_mouse][i_day][:]).swapaxes(1, -1)
+        pcs = -np.array(w_pca[i_mouse][i_day] ).swapaxes(1, -1) * 100
+
+        X_.append(X)
+        y_.append(y)
+        pc_.append(pcs)
+
+        print(options['mice'][i_mouse], 'day', options['days'][i_day], 'X', X.shape, 'y', y.shape, 'pcs', pcs.shape)
+
+    X_mouse.append(X_)
+    y_mouse.append(y_)
+    pc_mouse.append(pc_)
 #+end_src
 
 #+RESULTS:
-: ChRM04
-: X (176, 3, 84)
-: pcs (3, 668)
-: (176, 18)
-: ['Expert']
+#+begin_example
+JawsM01 day first X (96, 5, 84) y (96, 18) pcs (5, 184)
+JawsM06 day first X (96, 5, 84) y (96, 18) pcs (5, 201)
+JawsM12 day first X (96, 5, 84) y (96, 18) pcs (5, 423)
+JawsM15 day first X (96, 5, 84) y (96, 18) pcs (5, 693)
+JawsM18 day first X (96, 5, 84) y (96, 18) pcs (5, 444)
+ChRM04 day first X (96, 5, 84) y (96, 18) pcs (5, 668)
+ChRM23 day first X (96, 5, 84) y (96, 18) pcs (5, 232)
+JawsM01 day last X (32, 5, 84) y (32, 18) pcs (5, 184)
+JawsM06 day last X (96, 5, 84) y (96, 18) pcs (5, 201)
+JawsM12 day last X (64, 5, 84) y (64, 18) pcs (5, 423)
+JawsM15 day last X (96, 5, 84) y (96, 18) pcs (5, 693)
+JawsM18 day last X (96, 5, 84) y (96, 18) pcs (5, 444)
+ChRM04 day last X (96, 5, 84) y (96, 18) pcs (5, 668)
+ChRM23 day last X (64, 5, 84) y (64, 18) pcs (5, 232)
+#+end_example
+
+** Single mouse
 
 #+begin_src ipython
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+i_mouse = 1
+i_day = 1
+z_lim = 10
+
+X = X_mouse[i_day][i_mouse]
+y = y_mouse[i_day][i_mouse]
+pcs = pc_mouse[i_day][i_mouse]
+
+print(options['mice'][i_mouse], 'day', options['days'][i_day], 'X', X.shape, 'y', y.shape, 'pcs', pcs.shape)
+#+end_src
+
+#+RESULTS:
+: JawsM18 day last X (96, 5, 84) y (96, 18) pcs (5, 444)
+
+*** Trajectories
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
 color = ['#332288', '#88CCEE', '#117733', '#44AA99']
-# color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
 
 pair = ['AC', 'AD', 'BD', 'BC']
 task = 'DPA'
@@ -831,19 +474,116 @@ for i in range(4):
         ax[k].axhline(0, ls='--', color='k')
         ax[k].set_xlabel('Time')
         ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k])
+        add_vlines(ax[k], if_dpa=1)
 
-ax[-1].legend(fontsize=14, frameon=0)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_27.png]]
+[[file:./figures/overlaps/figure_20.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['A', 'B']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.sample_odor==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_21.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['unpair', 'pair']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.pair==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_22.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['nolick', 'lick']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.choice==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_23.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
 
 task = 'DualGo'
+pair = ['AC', 'AD', 'BD', 'BC']
 
 for i in range(4):
     mask = (y.odor_pair==i) & (y.tasks==task)
@@ -860,13 +600,13 @@ for i in range(4):
         ax[k].set_xlabel('Time')
         ax[k].set_ylabel('PC %d' % (k+1))
         add_vlines(ax[k])
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
 
-ax[-1].legend(fontsize=14, frameon=0)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_28.png]]
+[[file:./figures/overlaps/figure_24.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
@@ -887,25 +627,27 @@ for i in range(4):
         ax[k].set_xlabel('Time')
         ax[k].set_ylabel('PC %d' % (k+1))
         add_vlines(ax[k])
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
 
-ax[-1].legend(fontsize=14, frameon=0)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_29.png]]
+[[file:./figures/overlaps/figure_25.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
 
 pair = ['AC', 'AD', 'BD', 'BC']
+task = 'DPA'
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
 for i in range(4):
-    # X_avg = (X[(y.odor_pair==i) & (y.tasks==task)].mean(0))[:, :66]
+    X_avg = (X[(y.odor_pair==i) & (y.tasks==task)].mean(0))[:, :66]
 
-    X_avg = X[(y.odor_pair==i) & (y.tasks==task)]
-    idx = np.random.randint(X_avg.shape[0])
-    X_avg = X_avg[idx, :66]
+    # X_avg = X[(y.odor_pair==i) & (y.tasks==task)]
+    # idx = np.random.randint(X_avg.shape[0])
+    # X_avg = X_avg[idx, :66]
 
     ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
     ax[0].set_xlabel('PC 1')
@@ -919,63 +661,117 @@ for i in range(4):
     ax[2].set_xlabel('PC 2')
     ax[2].set_ylabel('PC 3')
 
+for k in range(3):
+    ax[k].legend(fontsize=12, frameon=0, loc='best')
 
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_26.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+*** Embeddings
+
+#+begin_src ipython
+import cmocean
+cmap=cmocean.cm.phase
+
+theta = np.arctan2(pcs[2], pcs[0]) * 180 / np.pi
+idx = np.argsort(theta)
+
+theta_norm = (theta+ 360) % (360)
+
+counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
+
+bin_centers = 0.5*(bins[:-1] + bins[1:])
+colors = [cmap(center/(360)) for center in bin_centers]
+
+for patch, color in zip(patches, colors):
+    patch.set_facecolor(color)
+
+plt.xlabel('Neuron Loc (°)')
+plt.ylabel('Density')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_28.png]]
+
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+size = 0.05
+
+for k in range(n_comp):
+    sc = ax[k].scatter(theta[idx], pcs[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap)
+    ax[k].plot(theta[idx], gaussian_filter1d(pcs[k][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+ax[1].set_ylim([-z_lim/2, z_lim/2])
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_29.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
+
+ax[0].scatter(pcs[0][idx], pcs[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[0].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].scatter(pcs[0][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[1].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+sc = ax[2].scatter(pcs[1][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[2].plot(gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
 plt.show()
 #+end_src
 
 #+RESULTS:
 [[file:./figures/overlaps/figure_30.png]]
 
-
-#+begin_src ipython
-from scipy.ndimage import uniform_filter1d, gaussian_filter1d
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
-
-theta = np.arctan2(pcs[1], pcs[0])
-idx = np.argsort(theta)
-for k in range(3):
-    ax[k].plot(theta[idx] * 180 / np.pi, gaussian_filter1d(pcs[k][idx], sigma=0.1*pcs.shape[1]))
-    ax[k].set_ylabel('Weights PC %d' % (k+1))
-    ax[k].set_xlabel('Neuron Loc (°)')
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_31.png]]
-
-#+begin_src ipython
-from scipy.ndimage import uniform_filter1d, gaussian_filter1d
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
-
-theta = np.arctan2(pcs[1], pcs[0])
-idx = np.argsort(theta)
-
-ax[0].plot(gaussian_filter1d(pcs[0][idx], sigma=0.05*pcs.shape[1]), gaussian_filter1d(pcs[1][idx], sigma=0.05*pcs.shape[1]))
-ax[0].set_xlabel('PC 1')
-ax[0].set_ylabel('PC 2')
-
-ax[1].plot(gaussian_filter1d(pcs[0][idx], sigma=0.05*pcs.shape[1]), gaussian_filter1d(pcs[2][idx], sigma=0.05*pcs.shape[1]))
-ax[1].set_xlabel('PC 1')
-ax[1].set_ylabel('PC 3')
-
-ax[2].plot(gaussian_filter1d(pcs[1][idx], sigma=0.05*pcs.shape[1]), gaussian_filter1d(pcs[2][idx], sigma=0.05*pcs.shape[1]))
-ax[2].set_xlabel('PC 2')
-ax[2].set_ylabel('PC 3')
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_32.png]]
-
 #+begin_src ipython
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
-ax.scatter(gaussian_filter1d(pcs[0][idx], sigma=0.05*pcs.shape[1]),
-           gaussian_filter1d(pcs[1][idx], sigma=0.05*pcs.shape[1]),
-           gaussian_filter1d(pcs[2][idx], sigma=0.05*pcs.shape[1]),
-           rasterized=1)
+
+ax.plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'),
+           gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'),
+           gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'),
+           rasterized=1, color='k')
+
+
+sc = ax.scatter(pcs[0][idx],
+                pcs[1][idx],
+                pcs[2][idx],
+                c=theta_norm[idx], cmap=cmap,
+                rasterized=1, alpha=0.5)
 
 ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
 ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
@@ -984,14 +780,709 @@ ax.set_xlabel('PC 1', fontsize=12)
 ax.set_ylabel('PC 2', fontsize=12)
 ax.set_zlabel('PC 3', fontsize=12)
 
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim/10, z_lim/10])
+ax.set_zlim([-z_lim, z_lim])
+
 ax.grid(False)
 
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_33.png]]
+[[file:./figures/overlaps/figure_31.png]]
 
+
+
+#+RESULTS:
+
+* All mice
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/Dclassify')
+from src.classificationCV import ClassificationCV
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['n_jobs'] = 64
+options['verbose'] = 1
+net = None
+params = {}
+model = ClassificationCV(net, params, **options)
+print(model.pipe)
+#+end_src
+
+#+RESULTS:
+: PCA pca 5
+: PCA 5
+: Pipeline(steps=[('pca', PCA(n_components=5))])
+
+#+begin_src ipython
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
+from scipy.signal import detrend
+
+options['trials']='correct'
+options['reload'] = 0
+options['laser'] = -1
+
+options['days'] = ['first', 'last']
+options['day'] = 'last'
+
+options['task'] = 'DPA'
+
+options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+
+X_mouse = []
+for mouse in options['mice']:
+
+    options['mouse'] = mouse
+    X_days, y_days = get_X_y_days(**options)
+    y_days = y_days.reset_index()
+
+    print('X_days', X_days.shape, 'y_days', y_days.shape)
+    y_days['idx'] = y_days['index'].copy()
+
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    y_labels = y.copy()
+
+    X_avg = []
+    for i in range(4):
+        idx = (y_labels.odor_pair==i) # & (~y_labels.response.str.contains("incorrect"))
+
+        if idx.mean()>0:
+            X_avg.append(np.mean(X[idx], 0))
+
+    X_avg = np.array(X_avg)
+    X_mean = np.mean(X, 0)[np.newaxis]
+    X_avg -= X_mean
+
+    X_mouse.append(X_avg)
+    print(X_avg.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 14)
+DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
+last [4] [1. 0.]
+(4, 184, 84)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
+last [4 5 6] [1. 0.]
+(4, 201, 84)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 14)
+DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
+last [4 5] [1. 0.]
+(4, 423, 84)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
+last [4. 5. 6.] [1. 0.]
+(4, 693, 84)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
+last [4. 5. 6.] [1. 0.]
+(4, 444, 84)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
+last [4. 5. 6.] [1. 0.]
+(4, 668, 84)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 14)
+DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
+last [4 5] [1. 0.]
+(4, 232, 84)
+#+end_example
+
+#+begin_src ipython
+X_mouse = np.hstack(X_mouse)
+print(X_mouse.shape)
+#+end_src
+
+#+RESULTS:
+: (4, 2845, 84)
+
+#+begin_src ipython
+options['epochs'] = ['POST_GNG']
+X_flat = X_mouse[..., options['bins_' + options['epochs'][0]]].transpose(0, 2, 1).reshape(-1, X_mouse.shape[1])
+model.fit_pca(X_flat)
+
+X_flat = X_mouse.transpose(0, 2, 1).reshape(-1, X_mouse.shape[1])
+X_pca = -model.transform_pca(X_flat).reshape(X_mouse.shape[0], X_mouse.shape[-1], -1)
+print(X_pca.shape)
+#+end_src
+
+#+RESULTS:
+: (4, 84, 5)
+
+#+begin_src ipython
+plt.plot(model.explained_variance_)
+plt.xlabel('PC #')
+plt.ylabel('Explained Variance')
+plt.xticks(np.arange(0, options['n_comp']), np.arange(1, options['n_comp']+1))
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_37.png]]
+
+** Trajectories
+
+#+begin_src ipython
+n_comp= 3
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(4):
+    X_avg = X_pca[i].T          # Subselect rows
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_38.png]]
+
+#+begin_src ipython
+n_comp= 3
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['A', 'B']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+X_sample = [(X_pca[0].T + X_pca[1].T)/2 , (X_pca[2].T + X_pca[3].T)/2]
+
+for i in [0, 1]:
+    X_avg = X_sample[i]
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_39.png]]
+
+#+begin_src ipython
+n_comp= 3
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['pair', 'unpair']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+X_pair = [(X_pca[0].T + X_pca[2].T)/2 , (X_pca[1].T + X_pca[3].T)/2]
+
+for i in [0, 1]:
+    X_avg = X_pair[i]
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_40.png]]
+
+#+begin_src ipython
+n_comp= 3
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['C', 'D']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+X_test = [(X_pca[0].T + X_pca[3].T)/2 , (X_pca[1].T + X_pca[2].T)/2]
+
+for i in range(2):
+    X_avg = X_test[i]
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_41.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+task = 'DPA'
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    X_avg = X_pca[i].T[:, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_42.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Embeddings
+
+#+begin_src ipython
+z_lim = 5
+pcs = model.components_ * 100
+print(pcs.shape)
+#+end_src
+
+#+RESULTS:
+: (5, 2845)
+
+#+begin_src ipython
+import cmocean
+cmap=cmocean.cm.phase
+
+theta = np.arctan2(pcs[0], pcs[1]) * 180 / np.pi
+idx = np.argsort(theta)
+
+theta_norm = (theta+ 360) % (360)
+
+counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
+
+bin_centers = 0.5*(bins[:-1] + bins[1:])
+colors = [cmap(center/(360)) for center in bin_centers]
+
+for patch, color in zip(patches, colors):
+    patch.set_facecolor(color)
+
+plt.xlabel('Neuron Loc (°)')
+plt.ylabel('Density')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_45.png]]
+
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+size = 0.1
+
+for k in range(n_comp):
+    sc = ax[k].scatter(theta[idx], pcs[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap)
+    ax[k].plot(theta[idx], gaussian_filter1d(pcs[k][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+ax[-1].set_ylim([-z_lim/10, z_lim/10])
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_46.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
+
+ax[0].scatter(pcs[0][idx], pcs[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[0].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].scatter(pcs[0][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[1].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+sc = ax[2].scatter(pcs[1][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[2].plot(gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_47.png]]
+
+#+begin_src ipython
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'),
+           gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'),
+           gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'),
+           rasterized=1, color='k')
+
+
+sc = ax.scatter(pcs[0][idx],
+                pcs[1][idx],
+                pcs[2][idx],
+                c=theta_norm[idx], cmap=cmap,
+                rasterized=1, alpha=0.5)
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim, z_lim])
+ax.set_zlim([-z_lim/10, z_lim/10])
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_48.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* adeaf
+
+#+begin_src ipython
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
+
+options['reload'] = 0
+options['epochs'] = ['all']
+options['days'] = 'all'
+
+X_mouse = []
+X_all = []
+y_all = []
+
+options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+
+for mouse in options['mice']:
+    options['mouse'] = mouse
+    options = set_options(**options)
+
+    X_day = []
+    for day in options['days'][3:]:
+
+        options['day'] = day
+
+        X_days, y_days = get_X_y_days(**options)
+        y_days = y_days.reset_index()
+        y_days['idx'] = y_days['index'].copy()
+
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        y_labels = y.copy()
+
+        if options['epochs'][0] == 'all':
+            X_task = X.copy()
+        else:
+            X_task = X[..., options['bins_' + options['epochs'][0]]]
+
+        X_avg = []
+        for i in range(4):
+            if options['task']!='all':
+                idx = (y_labels.odor_pair==i)
+
+                if idx.mean()>0:
+                    X_avg.append(np.mean(X_task[idx], 0))
+                else:
+                    for k in range(len(y_labels.tasks.unique())):
+                        task = y_labels.tasks.unique()[k]
+                        idx = (y_labels.odor_pair==i) & (y_labels.tasks==task)
+
+                        if 'Dual' in y_labels.tasks.unique()[k]:
+                            idx = (y_labels.odor_pair==i) & (y_labels.tasks==task)
+
+                        if idx.mean()>0:
+                            X_avg.append(np.mean(X_task[idx], 0))
+
+        X_avg = np.array(X_avg)
+        X_mean = np.mean(X_task, 0)[np.newaxis]
+        X_avg -= X_mean
+
+        X_day.append(X_avg)
+
+    X_mouse.append(np.nanmean(X_day, 0))
+#+end_src
+* CCA
+
+#+begin_src ipython
+from mvlearn.embed import MCCA
+mcca = MCCA(n_components=3, regs='oas')
+
+X= np.array(X_mouse[0])
+
+X_reshaped = np.transpose(X, (0,1,3,2))
+X_reshaped = X_reshaped.reshape(X.shape[0], X.shape[1]*X.shape[3], X.shape[2])
+
+X_cca = mcca.fit_transform(X_reshaped)
+X_reshaped = X_cca.reshape(X.shape[0], X.shape[1], X.shape[3], 3)
+X_reshaped = np.transpose(X_reshaped, (0, 1, 3, 2))
+
+pcs = np.array(mcca.loadings_)
+#+end_src
+
+#+RESULTS:
+: (7, 5, 3)
+
+#+begin_src ipython
+i_mouse = 3
+z_lim = 10
+
+X = X_reshaped[i_mouse]
+y = y_mouse[0][i_mouse]
+
+print(options['mice'][i_mouse], 'day', options['days'][i_day], 'X', X.shape, 'y', y.shape, 'pcs', pcs.shape)
+#+end_src
+
+#+RESULTS:
+: JawsM15 day last X (96, 3, 84) y (96, 18) pcs (7, 5, 3)
+
+*** Trajectories
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(4):
+    mask = (y.odor_pair==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_34.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['A', 'B']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.sample_odor==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_35.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['unpair', 'pair']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.pair==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_36.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['nolick', 'lick']
+task = 'DPA'
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.choice==i) & (y.tasks==task)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_37.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+task = 'DPA'
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    X_avg = (X[(y.odor_pair==i) & (y.tasks==task)].mean(0))[:, :66]
+
+    # X_avg = X[(y.odor_pair==i) & (y.tasks==task)]
+    # idx = np.random.randint(X_avg.shape[0])
+    # X_avg = X_avg[idx, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_38.png]]
 
 #+begin_src ipython
 

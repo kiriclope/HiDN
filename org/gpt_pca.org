@@ -1,0 +1,585 @@
+:PROPERTIES:
+:GPTEL_MODEL: gpt-4.1
+:GPTEL_BACKEND: ChatGPT
+:GPTEL_SYSTEM: You are a large language model living in Emacs and a helpful assistant. Respond concisely.
+:GPTEL_BOUNDS: ((response (658 3332) (3581 5759) (5766 7241) (7288 9308) (9319 10772) (10796 12260) (12305 13724) (13757 14702) (14730 15920) (15955 18992) (19092 20369) (20377 21533) (21590 23342) (23505 25604)))
+:END:
+
+*** I do trial average pca on some neural data X (trials x neurons x time) where I have 4 different conditions. I have 10 mice with quite different number of neurons. How can I improve PCA for small number of neurons? How can I plot a mouse average of the trajectories?
+
+**PCA with small neuron numbers:*
+PCA performance depends on both the number of samples (trials) and variables (neurons). With few neurons, your components may not capture meaningful structure and results may be noisier. Here are some strategies:
+
+*** 1. *Pooling Across Mice?*
+If your goal is population-level structure, you might:
+- Pool neurons across mice (concatenate them), then PCA on all neurons. /But/ you lose mouse-specific information and have to deal with neuron sampling variability.
+- Subsample equal neuron numbers per mouse, or use only common neuron subpopulations.
+
+*** 2. *Regularized or Sparse PCA*
+These methods can help when variables are few/noisy:
+- *Sparse PCA*: Encourages components to use only a few neurons, enhancing interpretability.
+- *Probabilistic PCA:* Imposes a probabilistic model; can improve robustness.
+- *Factor Analysis:* Similar, but explicitly models noise.
+
+*** 3. *Averaging Across Trials / Bootstrapping*
+- /Average trials within each condition per mouse/ for a denoised input (which it seems you already do).
+- /Bootstrap neurons/ if possible, to estimate variability.
+
+** Plotting Mouse-Averaged Trajectories
+
+1. *Run PCA Per Mouse:*
+   Each mouse: (Conditions × Time × Neurons) → Compute PCA, project condition-mean activity onto first few PCs.
+
+2. *Align PCs Across Mice:*
+   PCs are not in the same space for each mouse. To average trajectories:
+   - *Procrustes alignment* or *Canonical Correlation Analysis (CCA):* Align each mouse’s PC space to a reference (e.g., the first mouse or all-mice pooled PCA).
+   - Or, project each mouse’s data onto a *common PCA space* computed on the pooled (across-mouse) average.
+
+3. *Plotting:*
+   - For each condition: For each mouse, extract the trajectory over time in (say) PC1-PC2 space.
+   - Average the trajectories across mice (after alignment).
+   - Plot mean ± s.e.m. trajectories for each condition.
+
+*Pseudocode:*
+#+begin_src python
+# Option 1: Common PCA basis (recommended for comparison)
+all_mice_avg = concatenate(mouse_trajectories)  # avg across trials, per cond, mouse
+pca = PCA()
+pca.fit(all_mice_avg)  # fit to all mice
+
+proj_per_mouse = [pca.transform(mouse_avg) for mouse_avg in mouse_trajectories]
+avg_traj = np.mean(proj_per_mouse, axis=0)  # mean across mice
+sem_traj = scipy.stats.sem(proj_per_mouse, axis=0)
+
+# plot avg_traj ± sem_traj for each condition
+#+end_src
+
+*** *Summary*
+- Use regularized/sparse PCA for small neuron cases.
+- Align or project mouse activity into common PC space before averaging/plotting.
+- Plot mean ± error across mice for each condition’s trajectory in PC1-PC2(-PC3) space.
+
+Let me know if you need Python/Matlab code examples!
+
+*** I pool all the neurons together. I have nice trajectories. The third PC is ramping up but should not can i take care of that some how
+I tried detrend but it removes a lot of the qualities of the dynamics. may be I can remove a shuffle or sth
+
+A third PC showing an artifactual ramp commonly happens in neural population analyses, often due to:
+- slow drift, baseline fluctuations, or pooled recording artifacts
+- mouse/recording/session averaging effects
+- non-stationarities not related to your conditions
+
+*Detrending* sometimes helps, but as you note, it can harm real dynamics if applied naively.
+
+Here are some better approaches:
+---
+
+*** 1. Control by Shuffling
+- *Trial Shuffle:* Shuffle trial/condition labels and re-do PCA. Artifactual ramps will persist; true dynamics will disappear.
+- *Time Shift Shuffle:* Circularly shift activity traces per neuron independently, redo PCA. If ramp remains, it's not condition-specific.
+*If ramp is present in shuffles, and not in the main data, it's likely meaningful.*
+
+*** 2. Remove Ramping Component Explicitly
+If you believe the 3rd PC is "global drift" (the same across all neurons and conditions):
+- Project original data onto first 2 PCs only (ignore PC3).
+- OR: After PCA, subtract mean activity (per trial or global) at each timepoint.
+- OR: Do "residualizing": regress out the ramping PC from the data, then rerun PCA.
+
+*** 3. Test for Condition-specificity
+Does the ramp appear only in pooled data, or separately per condition?
+- If visible in all conditions, may be artifactual.
+- If contrasts with conditions, could be meaningful.
+
+*** 4. Visualize Loadings and Time Series
+- Plot the PC3 /loadings/ (per neuron): if uniformly positive across neurons, likely global drift.
+- Plot PC3 /scores/ (the trajectories): does it follow the mean activity or show trial-averaged structure?
+
+*** 5. Use Demixed/Targeted PCA
+- /Demixed PCA (dPCA)*, /jPCA/, or Targeted PCA to isolate time-locked/condition-locked patterns from global drift or various confounds.
+
+---
+
+*Summary:*
+- Test by shuffling (controls)
+- Consider excluding the ramping PC from trajectory plots
+- If it's a global artifact, methods that factor out mean or ramping signals, or dPCA, are more principled than detrending
+- Interpret carefully: sometimes "ramp" PCs reflect real slow processes (e.g., attention, arousal)
+
+If you share a plot or code snippet I can advise more specifically!
+
+***
+Great that pooling gives nice trajectories! If the third PC shows a "ramp" (monotonic increase) that you believe is an artifact (e.g., global drift, photobleaching, movement, etc.), there are a few ways to address this:
+
+*** 1. /Preprocess to Remove Global Trends/
+
+- *Demean or Detrend Each Neuron:*
+  Remove slow drifts by subtracting either the mean or a low-order polynomial (e.g., fit and subtract a linear trend) from each neuron’s activity timecourse before PCA.
+    #+begin_src python
+    from scipy.signal import detrend
+    X_detrended = detrend(X, axis=2)  # if time is axis 2
+    #+end_src
+- *High-pass filter* the data along the time axis to remove slow ramps or drifts.
+
+*** 2. /Check Trial Averaging/
+- Sometimes trial averaging can introduce ramps if there is misalignment or trial-to-trial drift. Ensure data are well-aligned.
+
+*** 3. /Identify and Remove the Ramping PC/
+- If the 3rd PC is a ramp, /you can simply ignore it in downstream analysis or plotting/ (use only PC1 and PC2).
+- Alternatively, /regress out/ the ramping PC from your data and repeat PCA on the residuals.
+
+*** 4. /Interpret Carefully/
+- Sometimes a ramp in a PC reflects a feature of your experiment (e.g., anticipation, arousal, task dynamics). Double-check whether the ramp is truly artifactual.
+
+*** *Summary*
+- Detrend each neuron before PCA
+- Consider high-pass filtering
+- Optionally: omit or regress out ramping PC
+
+If you want code to regress out a PC or detrend, let me know!
+
+*** are they some param to tune for detrend
+
+Yes, there are a couple of parameters and choices you can tune when detrending neural data:
+
+---
+*** 1. *Type of Detrending*
+- *Linear Detrend:* Removes linear trends (default for =scipy.signal.detrend=). Good for slow, straight drifts.
+- *Polynomial Detrend:* Removes nonlinear trends (e.g., quadratic, cubic).
+  - Use =numpy.polyfit()= with higher-order polynomials, e.g., order=2, order=3.
+
+---
+*** 2. *High-Pass Filtering*
+- Instead of detrend, you can apply a high-pass filter to cut off frequencies below a chosen threshold.
+  - *Cutoff frequency:* Determines which slow trends are removed. Pick based on your experiment timing.
+
+---
+*** 3. *Window Size* (if using sliding or moving-average detrending)
+- If using a moving-average or other local detrending, the window length (in samples or seconds) is a parameter to tune.
+
+---
+*** 4. *Axis*
+- Specify which dimension is time (e.g., =axis=2= in your data shape (trials × neurons × time)).
+
+---
+
+** *Practical Example*
+*Linear detrend (scipy)*:
+
+#+begin_src python
+from scipy.signal import detrend
+X_detrended = detrend(X, axis=2, type='linear')  # or type='constant' (demean only)
+#+end_src
+
+*Polynomial detrend:*
+#+begin_src python
+import numpy as np
+def poly_detrend(x, order=2):
+    t = np.arange(x.shape[-1])
+    coeffs = np.polyfit(t, x, order)
+    trend = np.polyval(coeffs, t)
+    return x - trend
+# Apply per neuron
+X_poly_detrended = np.stack([poly_detrend(neuron, order=2) for neuron in X.reshape(-1, X.shape[-1])])
+#+end_src
+
+*High-pass filter (example):*
+#+begin_src python
+from scipy.signal import butter, filtfilt
+b, a = butter(N=2, Wn=0.01, btype='high', analog=False)
+X_filt = filtfilt(b, a, X, axis=2)
+#+end_src
+- Here, =Wn= (normalized cutoff) is a key parameter.
+
+---
+
+*Tune these by:*
+- Plotting raw and detrended traces to check if artifacts (ramps) are gone, but signal is preserved.
+- Testing different polynomial orders, filter cutoffs, or window sizes.
+
+Let me know if you need recommendations for your timescales or neuro data specifics!
+
+***
+
+This is a common neural data challenge. Here are concise tips to improve PCA with a small number of neurons across mice:
+
+1. *Combine Neurons Across Mice (if appropriate):*
+   If neuron identities aren’t critical, you can concatenate neurons from all mice (after z-scoring per neuron) to increase feature space.
+
+2. *Dimensionality Reduction Per Mouse:*
+   Run PCA per mouse, then align subspaces using Canonical Correlation Analysis (CCA) or Procrustes analysis to compare across mice.
+
+3. *Regularization:*
+   Use regularized PCA (e.g., probabilistic PCA or Factor Analysis) to prevent overfitting in high noise/small feature settings.
+
+4. *Condition averaging:*
+   Instead of trial averaging before PCA, consider PCA on single trials, then average PC projections per condition.
+
+5. *Subsampling or Bootstrapping:*
+   Use resampling strategies to estimate PCA stability and reduce bias from few neurons.
+
+6. *Use All Timepoints:*
+   Concatenate timepoints or perform tensor decomposition (e.g., CP/PARAFAC or TCA) to leverage temporal structure and boost apparent dimensionality.
+
+7. *Interpret With Caution:*
+   For very few neurons, treat PCA results as qualitative, not quantitative.
+
+*References:*
+- Elsayed & Cunningham (2017, Neuron), "Structure in neural population recordings: beyond covariances"
+- Kobak et al. (2016, eLife), "Demixed principal component analysis"
+
+If you provide more specifics, I can tailor advice further!
+
+
+*** How do I run CCA
+
+**Canonical Correlation Analysis (CCA)* finds shared low-dimensional structure between two multivariate datasets. In your neural data context, you might use it to align PCA-reduced neural activity from different mice.
+
+*Basic Steps to Run CCA (in Python with scikit-learn):*
+
+1. *Prepare your data:*
+   - Each mouse gives data matrix: =(samples, features)=
+   - PCA reduce each to same number of dimensions (optional, but typical with high-d data).
+
+2. *Fit CCA:*
+   #+begin_src python
+   from sklearn.cross_decomposition import CCA
+
+   # Assume X_mouse1 and X_mouse2 are (samples, features)
+   # Optionally, preprocess with PCA to reduce noise
+
+   cca = CCA(n_components=desired_dim)
+   X_c, Y_c = cca.fit_transform(X_mouse1, X_mouse2)
+   #+end_src
+
+3. *Interpret:*
+   - =X_c=, =Y_c= are projections of each mouse's data onto shared CCA axes.
+   - CC axes are aligned to maximize trial-to-trial covariance (to match/compare patterns across mice).
+
+*Practical tips:*
+- Z-score (mean 0, std 1) the inputs before CCA.
+- Use same number/order of conditions/trials.
+- Often, CCA is applied to trial-averaged data (per condition).
+- For more than two mice, align to a reference or use multi-set CCA (see [mne.decoding.CCA](https://mne.tools/stable/generated/mne.decoding.CCA.html), =mvlearn= multiple-set CCA).
+
+*Further reading:*
+- Kobak et al., /Demixed PCA and CCA for neural data/ (eLife, 2016)
+
+Let me know if you want MATLAB or R code, or more detailed example!
+
+*** can I run CCA on more than 2 subjects
+
+Yes, you can run CCA (Canonical Correlation Analysis) on more than two subjects using multi-set (or multi-view) CCA. Classical CCA is for two datasets, but multi-set CCA generalizes it to align shared latent spaces across multiple subjects.
+
+*How to do it:*
+- *Python:* Use [=mvlearn=](https://mvlearn.github.io/stable/generated/mvlearn.embed.MultiCCA.html) or [=hyppo=](https://hyppo.neurodata.io/tutorials/cca.html) for multi-set CCA.
+   Example:
+   #+begin_src python
+   from mvlearn.embed import MultiCCA
+
+   # X1, X2, ..., Xn are your trial-averaged datasets from n subjects
+   # Each is samples x features (e.g., conditions x neurons)
+   mcca = MultiCCA(n_components=desired_dim)
+   shared_projections = mcca.fit_transform([X1, X2, X3, ...])
+   #+end_src
+
+- *Matlab:* Multi-set CCA implementations are available, e.g., [here](https://github.com/gallantlab/pymcca) (pymcca is Python, but algorithm described).
+
+- *Reference:*
+   - Kettenring, J. R. (1971). Canonical analysis of several sets of variables. Biometrika, 58(3), 433–451.
+   - Bilenko & Gallant (2016, /Journal of Neurophysiology/): "Pycortex: an interactive surface visualizer for fMRI".
+
+*General Tips:*
+- Ensure all datasets have the same number/order of samples (e.g., matched trial-averaged conditions).
+- Pre-process (z-score, reduce dimensions with PCA if needed).
+
+Let me know if you want a more detailed example or alternative methods!
+
+*** can I get embeddings too?
+
+Yes! When you run CCA or multi-set CCA, the output gives you *embeddings*: each subject’s data projected into a shared low-dimensional space. These are the =X_c, Y_c= in scikit-learn’s CCA or the returned arrays from =fit_transform= in =mvlearn=’s =MultiCCA=.
+
+- For multi-set CCA (Python example):
+  #+begin_src python
+  from mvlearn.embed import MultiCCA
+
+  mcca = MultiCCA(n_components=3)
+  embeddings = mcca.fit_transform([X1, X2, X3])  # List of arrays (one per subject)
+
+  # embeddings[0] = subject 1’s projection (n_samples, n_components)
+  # embeddings[1] = subject 2’s projection, etc.
+  #+end_src
+
+- These =embeddings= are the aligned, low-D representations:
+  - Each row is a sample (e.g., condition/trial),
+  - Each column is a shared axis across subjects.
+
+You can plot them, cluster, compute distances, or use for decoding/visualization.
+
+*In summary:* Yes, multi-set CCA gives you per-subject low-D embeddings in a shared space!
+
+*** no I mean components
+
+Yes, you can get the *components* (canonical weights or loadings) for each subject in CCA or multi-set CCA.
+
+- In *two-set CCA* (e.g., =sklearn.cross_decomposition.CCA=):
+  After fitting,
+  - =cca.x_weights_= and =cca.y_weights_= are the canonical components for dataset X and Y, respectively. These are linear weights (features × components) mapping original features to shared canonical axes.
+
+- In *multi-set CCA* (e.g., =mvlearn.embed.MultiCCA=):
+  After fitting,
+  - =mcca.weights_= is a list of weight matrices, one per subject.
+    Each (features × components) matrix gives you the canonical components for that subject.
+
+*Example (Python):*
+#+begin_src python
+from mvlearn.embed import MultiCCA
+
+mcca = MultiCCA(n_components=3)
+_ = mcca.fit([X1, X2, X3])
+weights = mcca.weights_  # List: weights[0] are subject 1's canonical components, etc.
+#+end_src
+
+*Interpretation:*
+- Each subject’s original features can be projected onto the shared space by multiplying with their respective weight matrix.
+- The components tell you which neurons (or features) drive each canonical axis in each subject.
+
+Let me know if you need concrete code to inspect or visualize these components!
+
+*** show me a complete pipeline
+
+Certainly! Here’s a complete Python pipeline for multi-set CCA on trial-averaged neural data across multiple mice with different neuron numbers, using =mvlearn=. The example assumes you have =n_subjects=, each with a (n_conditions, n_neurons_this_mouse) trial-averaged, z-scored data matrix.
+
+#+begin_src python
+# 1. Install required package
+# pip install mvlearn
+
+import numpy as np
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+from mvlearn.embed import MultiCCA
+
+# Example: Suppose you have 3 mice
+# Each data matrix: (n_conditions, n_neurons) -- may differ in neuron count
+X1 = np.random.randn(4, 18)  # 4 conditions, 18 neurons
+X2 = np.random.randn(4, 24)  # 4 conditions, 24 neurons
+X3 = np.random.randn(4, 15)  # 4 conditions, 15 neurons
+
+datasets = [X1, X2, X3]
+
+# 2. Z-score each subject’s data (feature-wise)
+datasets = [StandardScaler().fit_transform(X) for X in datasets]
+
+# 3. (Optional) Reduce each subject’s dimensionality with PCA to denoise
+# This makes the CCA more robust, especially with many neurons
+n_pca = 10
+pca_datasets = []
+pca_models = []
+for X in datasets:
+    pca = PCA(n_components=min(n_pca, X.shape[1]))
+    X_pca = pca.fit_transform(X)
+    pca_datasets.append(X_pca)
+    pca_models.append(pca)
+
+# 4. Fit Multi-set CCA and get embeddings
+n_cca_components = 3
+mcca = MultiCCA(n_components=n_cca_components)
+embeddings = mcca.fit_transform(pca_datasets)  # List: embeddings[i] is (n_conditions, n_cca_components)
+
+# 5. Get canonical components (weights) per subject
+weights_per_subject = mcca.weights_  # List of arrays: (pca_features, n_cca_components) per dataset
+
+# 6. Project back to original neuron space (optional)
+# weights_original = pca.components_.T @ mcca.weights_[i]
+# for i, (pca, weight) in enumerate(zip(pca_models, weights_per_subject)):
+#     orig_space_weights = pca.components_.T @ weight
+#     # orig_space_weights shape: (original_neurons, n_cca_components)
+#     print(f"Subject {i+1} weights in original neuron space:\n", orig_space_weights)
+
+# 7. Plot or analyze embeddings
+import matplotlib.pyplot as plt
+colors = ['r', 'g', 'b', 'k']  # per condition
+for i, emb in enumerate(embeddings):
+    plt.figure()
+    plt.title(f"Subject {i+1} (in shared CCA space)")
+    plt.scatter(emb[:, 0], emb[:, 1], c=colors)
+    for j, txt in enumerate(['cond1', 'cond2', 'cond3', 'cond4']):
+        plt.annotate(txt, (emb[j, 0], emb[j, 1]))
+    plt.xlabel('CCA 1')
+    plt.ylabel('CCA 2')
+    plt.show()
+#+end_src
+
+*Summary:*
+- Input: trial-averaged, condition-matched data from each mouse (z-scored).
+- (Optional) Reduce each with PCA for denoising.
+- Align in a shared space with multi-set CCA.
+- Get per-mouse canonical components (=.weights_=).
+- Use embeddings for comparison, clustering, or visualization.
+
+*Tips:*
+- Replace random data with your real trial-averaged (conditions × neurons) data matrices.
+- For more subjects/conditions, adjust accordingly!
+
+Let me know if you need a pipeline for single-trial data or have additional requirements!
+
+*** when you standardize you standardize the condition averaged data (n_cond * n_time, n_neuron)
+
+Great question. Yes, *when you standardize for CCA/PCA on trial-averaged data*, you usually standardize the feature (=neuron=) dimension.
+
+If your data matrix per subject is arranged as:
+- *(n_conditions, n_neurons)*
+  (Or if you include time: *(n_conditions * n_timepoints, n_neurons)* )
+
+then you typically do:
+
+- *Standardize along the neuron axis (features):*
+  - *For each neuron:* Subtract the mean and divide by the standard deviation, computed across all conditions (or condition × time points).
+  - This centers/scales each neuron’s response profile across conditions (or conditions × time).
+
+*In code:*
+#+begin_src python
+from sklearn.preprocessing import StandardScaler
+
+# data shape: (n_conditions * n_time, n_neurons)
+scaler = StandardScaler()
+X_standardized = scaler.fit_transform(X)  # Standardizes each column (neuron)
+#+end_src
+
+*Why?*
+- This removes differences in firing rate scale and centers all neurons, making each equally weighted in PCA/CCA.
+- It’s especially important with neurons from different mice, as baseline rates and modulation can vary widely.
+
+*Summary:*
+Yes, standardize your (n_conditions × n_time, n_neurons) data by features (=neuron= axis, /columns/).
+
+Let me know if you want an explicit function for this or have multi-trial data!
+
+***
+
+Yes, in this pipeline, you standardize the *trial-averaged data* (i.e., the [n_conditions, n_neurons] matrix for each subject), feature-wise (across conditions, for each neuron).
+
+Specifically:
+- For each mouse, after averaging across trials for each condition, you have neurons × conditions matrix.
+- You z-score each neuron's values across conditions (mean 0, std 1), so each neuron's activity has comparable scale across conditions.
+
+*Why?*
+- This removes mean offsets and scales differences between neurons, making the CCA focus on condition-related variance, not absolute firing rates or variability across neurons.
+
+*Python snippet (for each subject):*
+#+begin_src python
+from sklearn.preprocessing import StandardScaler
+X_avg = ... # (n_conditions, n_neurons) for subject
+X_zscored = StandardScaler().fit_transform(X_avg)  # standardizes each neuron's values across conditions
+#+end_src
+
+*Alternative:*
+If you have reason to preserve absolute firing differences, you could skip z-scoring—but for CCA and PCA, standardization is typically best practice.
+
+/Summary:/
+Yes—standardize the condition-averaged data, feature-wise, for each subject.
+
+*** Is this worth it since they are only 4 conditions
+
+Great question! With only 4 conditions, z-scoring (standardization) per neuron can be less reliable because the estimated mean and standard deviation are based on very few data points. This can lead to unstable or noisy scaling, especially if some neurons have little variance across conditions.
+
+*Considerations:*
+- *If you have a small number of conditions (e.g., 4):*
+  - Z-scoring may introduce noise or extreme scaling if a neuron's activity is similar or "flat" across all conditions.
+  - However, if your neurons show clear differences across conditions, z-scoring can still help to normalize feature scales (and avoid domination by a few high-variance neurons).
+- *Alternatives:*
+  - /No standardization:/ You can skip z-scoring if all your features (neurons) are already on a comparable firing-rate or signal scale.
+  - /Global normalization:/ Scale all neuron activities in each mouse by their overall variance across conditions, rather than z-scoring each neuron.
+  - /Regularization:/ Apply shrinkage or add a small constant to the standard deviation to avoid division by very small numbers.
+
+*Bottom line:*
+Z-scoring with so few samples per neuron should be used with caution, and you may want to compare results with and without standardization. If you observe strong artifacts or instability after z-scoring in this setting, try skipping it or use a more conservative normalization.
+
+*Rule of thumb:*
+- If many neurons are flat across conditions, avoid z-scoring.
+- If neurons are clearly modulated by condition, z-scoring is more justifiable—even with 4 conditions.
+- When in doubt, try both with and without, and check for stability in your downstream CCA embeddings/components.
+
+Let me know if you want practical diagnostic tips!
+
+***
+
+
+
+** AVG PCA
+*** I do trial average pca on some neural data X (trials x neurons x time) where I have 4 different conditions.
+
+How should I center the data
+
+Centering is crucial for PCA. With neural data shaped as (trials × neurons × time) and 4 conditions, the centering depends on your analysis goal:
+
+*** 1. Classic trial-averaged PCA (per condition)
+For each condition:
+- Compute the average response for each neuron and time bin across trials in that condition:
+  =mean_response[condition][neuron, time]=
+- Center *across conditions*: subtract the /grand mean/ (mean over all conditions) from each condition's average, for each neuron and time point:
+  #+begin_src python
+  grand_mean = mean(mean_response[condition] for condition in conditions)
+  for condition in conditions:
+      centered_data[condition] = mean_response[condition] - grand_mean
+  #+end_src
+- Stack centered averages (conditions × neurons × time) and reshape for PCA (e.g., conditions × (neurons × time)).
+
+*** 2. All-trials PCA ("single trial PCA")
+If you want to look at variance across all trials:
+- Subtract the mean per neuron-time bin *across all trials/conditions*:
+  =mean_X = np.mean(X, axis=0)=
+  =X_centered = X - mean_X=
+- (Some variants center per neuron over all trials and time: =X = X - X.mean(axis=0, keepdims=True)= or per neuron per time.)
+
+*** 3. Be explicit about what you center!
+- *Trial-averaged PCA*: Center averages, *not* each trial.
+- *Single-trial PCA*: Center all data.
+- Most commonly, for condition averages: *subtract grand mean (over conditions) for each neuron/time* to focus PCA on differences /between/ the averages.
+
+*** In summary:
+*For trial-averaged PCA per condition*:
+→ For each neuron and time, subtract the mean across conditions from each condition's mean.
+
+*Code sketch:*
+#+begin_src python
+# X: shape (trials, neurons, time)
+# labels: shape (trials,), giving condition (0..3) for each trial
+mean_per_condition = np.stack([
+    X[labels == c].mean(axis=0)  # (neurons, time)
+    for c in range(4)
+])
+grand_mean = mean_per_condition.mean(axis=0)
+centered = mean_per_condition - grand_mean  # (conditions, neurons, time)
+#+end_src
+Then reshape for PCA.
+
+*Let me know if you want specific code or want to discuss other centering choices!*
+
+***
+
+I get the trajectories and the components. when ordering the components based on the prefered location theta = arctan2(pc2, pc1) I get a nice circular symmetry when smoothing the components in the PC1 PC2 plane. but the original cloud lacks this info. Is there something about the components that i can add so that it is more obvious
+
+Great question! What you're observing is that after smoothing and re-ordering your data by θ = arctan2(PC2, PC1), a circular structure emerges in PC space, but scatter plots of the original PCA scores don't make this obvious.
+
+Here are some approaches to highlight or recover this circular structure in your original data or visualizations:
+
+*1. Color-code by θ:*
+For each trial or condition, compute θ = arctan2(PC2, PC1) for its trial-averaged point in PC space. Then, plot your data in the PC1-PC2 plane and color-code each point (or trajectory) by θ (e.g., using a cyclic colormap like HSV). This directly displays the relation of location on the circle.
+
+*2. Order conditions in plots by θ:*
+If you plot time courses or markers for conditions, arrange them in order of their computed θ, emphasizing the continuity around the circle.
+
+*3. Animate through θ or time:*
+Show the trajectories in PC space as an animation over θ (or over time if θ evolves with time).
+
+*4. Vector fields:*
+If your data consists of trajectories, plot "direction of movement" vectors (from [PC1(t), PC2(t)] to [PC1(t+1), PC2(t+1)]) to visualize rotation or flow in the plane.
+
+*5. Plot mean or centroid per condition:*
+Plot only the mean/labeled point for each condition in PC space, color-coded by θ, to reinforce the circular geometry.
+
+*6. Use polar plots:*
+Re-express your PC1 and PC2 data in polar coordinates (radius and θ), and plot radius as a function of θ or condition.
+
+*7. Overlay contours or density:*
+Make smoothed density plots or contour plots in PC space color-coded by θ or condition.

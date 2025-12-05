@@ -10,13 +10,13 @@ import datetime as dt
 import numbers
 import copy
 import numpy as np
-from mne.fixes import BaseEstimator, _get_check_scoring, is_classifier
+# from mne.fixes import BaseEstimator, _get_check_scoring, is_classifier
 from mne.parallel import parallel_func
 from mne.utils import verbose, warn
 from sklearn.model_selection import LeaveOneOut
 
 
-class LinearModel(BaseEstimator):
+class LinearModel():
     """Compute and store patterns from linear models.
 
     The linear model coefficients (filters) are used to extract discriminant

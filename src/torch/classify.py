@@ -1,10 +1,10 @@
 import numpy as np
 import pandas as pd
 from time import perf_counter
-from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
 from src.preprocess.helpers import avg_epochs
 from sklearn.model_selection import LeaveOneOut
-
+from sklearn.preprocessing import StandardScaler
 
 def map_values(row):
     if np.isnan(row['dist_odor']):
@@ -39,7 +39,11 @@ def y_to_arr(y, **options):
 def get_classification(model, RETURN='overlaps', **options):
     start = perf_counter()
 
-    X_days, y_days = get_X_y_days(**options)
+    if options['mouse']=='all':
+        X_days, y_days = get_X_y_mice(**options)
+    else:
+        X_days, y_days = get_X_y_days(**options)
+
     y_days = y_days.reset_index()
 
     print('X_days', X_days.shape, 'y_days', y_days.shape)
@@ -148,13 +152,13 @@ def get_classification(model, RETURN='overlaps', **options):
                     idx = (y_labels.odor_pair==i) & (y_labels.tasks==task)
 
                     if 'Dual' in y_labels.tasks.unique()[k]:
-                        idx = (y_labels.odor_pair==i) & (y_labels.tasks==task) & (y_labels.odr_perf==1)
+                        idx = (y_labels.odor_pair==i) & (y_labels.tasks==task) # & (y_labels.odr_perf==1)
 
                     if idx.mean()>0:
                         X_avg.append(np.mean(X_task[idx], 0))
 
         X_avg = np.array(X_avg)
-        X_mean = np.mean(X_avg, 0)[np.newaxis]
+        X_mean = np.mean(X_task, 0)[np.newaxis]
         X_avg -= X_mean
 
         X_flat = X_avg.transpose(0, 2, 1).reshape(-1, X_avg.shape[1])
