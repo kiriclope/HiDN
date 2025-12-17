@@ -140,26 +140,41 @@ def get_classification(model, RETURN='overlaps', **options):
 
         # Condition averaged pca
         # X_pca = []
+
         X_avg = []
         for i in range(4):
-            if options['task']!='all':
-                idx = (y_labels.odor_pair==i)
-                if idx.mean()>0:
-                    X_avg.append(np.mean(X_task[idx], 0))
-            else:
-                for k in range(len(y_labels.tasks.unique())):
-                    task = y_labels.tasks.unique()[k]
-                    idx = (y_labels.odor_pair==i) & (y_labels.tasks==task)
+            idx = (y_labels.odor_pair==i)
 
-                    if 'Dual' in y_labels.tasks.unique()[k]:
-                        idx = (y_labels.odor_pair==i) & (y_labels.tasks==task) # & (y_labels.odr_perf==1)
+            if options['trials'] == 'correct':
+                correct = ~y_labels.response.str.contains("incorrect")
+                idx  = (y_labels.odor_pair==i) & correct
 
-                    if idx.mean()>0:
-                        X_avg.append(np.mean(X_task[idx], 0))
+            X_avg.append(np.mean(X_task[idx], 0))
+            # for k in range(len(y_labels.tasks.unique())):
+            #     task = y_labels.tasks.unique()[k]
+            #     if options['trials'] == 'correct':
+            #         correct = ~y_labels.response.str.contains("incorrect")
+            #     else:
+            #         correct = True
+
+            #     idx = (y_labels.odor_pair==i) & (y_labels.tasks==task) & correct
+
+            #     if 'Dual' in task:
+            #         if options['trials'] == 'correct':
+            #             idx = (y_labels.odor_pair==i) & (y_labels.tasks==task) & (y_labels.odr_perf==1) & correct
+            #         else:
+            #             idx = (y_labels.odor_pair==i) & (y_labels.tasks==task)
+
+            #     if idx.mean()>0:
+            #         X_avg.append(np.mean(X_task[idx], 0))
 
         X_avg = np.array(X_avg)
+
         X_mean = np.mean(X_task, 0)[np.newaxis]
         X_avg -= X_mean
+
+        X_std = np.std(X_task, 0)[np.newaxis]
+        X_avg /= X_std
 
         X_flat = X_avg.transpose(0, 2, 1).reshape(-1, X_avg.shape[1])
         X_pca = model.fit_pca(X_flat)
@@ -167,6 +182,9 @@ def get_classification(model, RETURN='overlaps', **options):
         X_test = X.copy()
         X_mean = np.mean(X_test, 0)[np.newaxis]
         X_test -= X_mean
+
+        X_std = np.std(X_test, 0)[np.newaxis]
+        X_test /= X_std
 
         X_flat = X_test.transpose(0, 2, 1).reshape(-1, X.shape[1])
         X_pca = model.transform_pca(X_flat).reshape(X.shape[0], X.shape[-1], -1)

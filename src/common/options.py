@@ -14,6 +14,20 @@ def set_options(**kwargs):
     opts['NEW_MICE'] = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
     opts['sampler'] = 0
 
+    opts['n_neurons'] = [184, 201, 423, 693, 444, 668, 232, 361, 113]
+
+    opts['summary'] = [
+        {"mouse": "JawsM01", "trial": 768, "neuron": 184, "day": 4},
+        {"mouse": "JawsM06", "trial": 1152, "neuron": 201, "day": 6},
+        {"mouse": "JawsM12", "trial": 960, "neuron": 423, "day": 5},
+        {"mouse": "JawsM15", "trial": 1152, "neuron": 693, "day": 6},
+        {"mouse": "JawsM18", "trial": 1152, "neuron": 444, "day": 6},
+        {"mouse": "ChRM04", "trial": 1152, "neuron": 668, "day": 6},
+        {"mouse": "ChRM23", "trial": 960, "neuron": 232, "day": 5},
+        {"mouse": "ACCM03", "trial": 960, "neuron": 361, "day": 5},
+        {"mouse": "ACCM04", "trial": 960, "neuron": 113, "day": 5},
+    ]
+
     opts['n_perm'] = 0
 
     opts['cv_B'] = 0
@@ -315,5 +329,12 @@ def set_options(**kwargs):
         "Dual": palette[1],
         "all": palette[4],
     }
+
+    new_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'ChRM23']
+
+    if opts['mouse'] in new_mice:
+        opts['NEW_DATA'] = 1
+    else:
+        opts['NEW_DATA'] = 0
 
     return opts

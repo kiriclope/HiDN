@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session dpca :kernel dual_data :exports results :output-dir ./figures/dpca :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session dpca :kernel torch :exports results :output-dir ./figures/dpca :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -14,13 +14,10 @@
 #+end_src
 
 #+RESULTS:
-:RESULTS:
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
-: /home/leon/mambaforge/envs/dual_data/bin/python
-: <Figure size 600x370.82 with 0 Axes>
-:END:
+: /home/leon/mambaforge/envs/torch/bin/python
 
 * Imports
 
@@ -335,6 +332,238 @@ y_dfs = pd.concat(y_dfs)
 #+end_src
 
 #+RESULTS:
+#+begin_src ipython
+import numpy as np
+
+class StandardScaler:
+    def __init__(self, axis=0, if_scale=1):
+        self.axis = axis
+        self.center_ = None
+        self.scale_ = None
+        self.if_scale_ = if_scale
+
+    def fit(self, X):
+        self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
+        self.scale_ = np.nanstd(X, axis=self.axis, keepdims=True)
+        # Prevent division by zero
+        self.scale_ = np.where(self.scale_ == 0, 1, self.scale_)
+        return self
+
+    def transform(self, X):
+        if self.if_scale_:
+            return (X - self.center_) / self.scale_
+        return (X - self.center_)
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+#+end_src
+
+#+RESULTS:
+
+
+* Pair * time
+
+#+begin_src ipython
+i_mouse = 0
+i_day=0
+print(options['mice'][i_mouse])
+print(np.vstack(X_mouse[i_mouse][i_day]).shape)
+#+end_src
+
+#+RESULTS:
+: JawsM15
+: (96, 693, 84)
+
+#+begin_src ipython
+from collections import defaultdict
+
+Z_day = []
+EV_day = []
+
+scaler = StandardScaler(axis=0)
+
+for i_day, day in enumerate(['first', 'last']):
+    X = np.vstack(X_mouse[i_mouse][i_day])
+    mouse = options['mice'][i_mouse]
+    y = y_dfs[(y_dfs.mouse==mouse) & (y_dfs.DAY == day) & (y_dfs.tasks=='DPA')]
+
+    print(X.shape, y.shape, y.day.unique())
+    X = scaler.fit_transform(X)
+
+    idx_off = (y.laser==0)
+
+    #  n_trials, n_neurons, Z1, Z2, ..., n_time, lets do odor pair * choice
+    X_dpca = np.zeros((2, 2, int(X.shape[0]/2), X.shape[-2],  X.shape[-1]))
+    print('X_dpca', X_dpca.shape)
+
+    for i in range(2):
+        for j in range(2):
+            dum = X[(y.sample_odor==i) & (y.test_odor==j)]
+            mean_dum = np.mean(dum, axis=0)[np.newaxis]
+
+            X_dpca[i, j, :dum.shape[0]] = dum
+            X_dpca[i, j, dum.shape[0]:] = mean_dum
+
+    X_dpca = np.transpose(X_dpca, (2, 3, 0, 1, 4))
+    X_dpca_avg = np.nanmean(X_dpca, axis=0)
+    print(X_dpca.shape, X_dpca_avg.shape)
+
+    dpca = dPCA.dPCA(labels='pct', n_components=2, regularizer='auto')
+    dpca.protect = ['t']
+
+    axes = (1, 2)
+    X_dpca -= np.mean(X_dpca_avg, axis=axes, keepdims=True)
+
+    X_dpca_avg -= np.mean(X_dpca_avg, axis=axes, keepdims=True)
+
+    Z = dpca.fit_transform(X_dpca_avg, X_dpca)
+    EV = dpca.explained_variance_ratio_
+
+    print(Z['p'].shape)
+
+    Z_day.append(Z)
+    EV_day.append(EV)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+(96, 693, 84) (96, 17) [1. 2. 3.]
+X_dpca (2, 2, 48, 693, 84)
+(48, 693, 2, 2, 84) (693, 2, 2, 84)
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.0017286737396774677
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+(2, 2, 2, 84)
+(96, 693, 84) (96, 17) [4. 5. 6.]
+X_dpca (2, 2, 48, 693, 84)
+(48, 693, 2, 2, 84) (693, 2, 2, 84)
+Start optimizing regularization.
+Starting trial  1 / 3
+Starting trial  2 / 3
+Starting trial  3 / 3
+Optimized regularization, optimal lambda =  0.001234766956912477
+Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
+(2, 2, 2, 84)
+#+end_example
+
+#+begin_src ipython
+Z_all = defaultdict(list)
+for d in Z_day:
+    for k, v in d.items():
+        Z_all[k].append(v)
+
+print(np.array(Z_all['p']).shape)
+#+end_src
+
+#+RESULTS:
+: (2, 2, 2, 2, 84)
+
+#+begin_src ipython
+EV_all = defaultdict(list)
+for d in EV_day:
+    for k, v in d.items():
+        print(k, np.round(v[0]*100))
+        EV_all[k].append(v)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+p 0.0
+c 0.0
+t 0.0
+pc 0.0
+pt 0.0
+ct 0.0
+pct 0.0
+p 0.0
+c 0.0
+t 0.0
+pc 0.0
+pt 0.0
+ct 0.0
+pct 0.0
+#+end_example
+
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+
+ls = ['-', '--']
+label = ['AD', 'AC', 'BC', 'BD']
+pc = ['Sample', 'Choice', 'Choice * Time']
+xtime = np.linspace(0, 14, 84)
+
+fig, ax = plt.subplots(1, 3, figsize=[3* width, height])
+
+n_comp = 0
+pair = 0
+
+for i in range(2):
+        for j in range(2):
+                ax[0].plot(xtime, Z['p'][n_comp][i][j], ls = ls[i], label=label[i+j*2])
+                ax[1].plot(xtime, Z['c'][n_comp][i][j], ls = ls[i], label=label[i+j*2])
+                ax[2].plot(xtime, Z['ct'][n_comp][i][j], ls = ls[i], label=label[i+j*2])
+
+for k in range(3):
+        add_vlines(ax[k])
+        ax[k].set_xlim([0, 12])
+        ax[k].axhline(0, ls=':')
+        ax[k].set_xlabel('Time (s)')
+        ax[k].set_ylabel('%s' %pc[k])
+
+ax[0].legend(fontsize=14, frameon=0)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/dpca/figure_17.png]]
+
+
+#+begin_src ipython
+from src.common.plot_utils import add_vlines
+
+ls = ['-', '--']
+color = ['r', 'b']
+label = ['lick', 'nolick']
+pc = ['Sample', 'Choice', 'Choice * Time']
+xtime = np.linspace(0, 14, 84)
+
+fig, ax = plt.subplots(1, 3, figsize=[3* width, height])
+
+n_comp = 0
+pair = 0
+for i in range(2):
+        for j in range(2):
+                ax[0].plot(xtime, (Z_day[j]['p'][n_comp][pair][i] - Z_day[j]['p'][n_comp][1][i])/2, ls = ls[i], label=label[i], color=color[i], alpha=j/2+0.5)
+                ax[1].plot(xtime, (Z_day[j]['c'][n_comp][pair][i] + Z_day[j]['c'][n_comp][1][i])/2, ls = ls[i], label=label[i], color=color[i], alpha=j/2+0.5)
+                ax[2].plot(xtime, (Z_day[j]['ct'][n_comp][pair][i] + Z_day[j]['p'][j][n_comp][1][i])/2, ls = ls[i], label=label[i], color=color[i], alpha=j/2+0.5)
+
+for k in range(3):
+        add_vlines(ax[k])
+        ax[k].set_xlim([0, 12])
+        ax[k].axhline(0, ls=':')
+        ax[k].set_xlabel('Time (s)')
+        ax[k].set_ylabel('%s' %pc[k])
+
+plt.legend(fontsize=14, frameon=0)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/dpca/figure_18.png]]
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
 
 * Pair * choice * time
 
@@ -472,9 +701,9 @@ print(X_dpca.shape, X_dpca_avg.shape)
 
 #+RESULTS:
 : JawsM15
-: (288, 693, 84) (288, 17)
-: X_dpca (4, 2, 72, 693, 84)
-: (72, 693, 4, 2, 84) (693, 4, 2, 84)
+: (96, 693, 84) (96, 17)
+: X_dpca (4, 2, 24, 693, 84)
+: (24, 693, 4, 2, 84) (693, 4, 2, 84)
 
 #+begin_src ipython
 reg = crossval_dpca_reg(X_dpca, marginalization='pct', lambdas=np.logspace(-3, 3, 10))
@@ -482,7 +711,129 @@ print(reg)
 #+end_src
 
 #+RESULTS:
-: (72, 693, 4, 2, 84)
+:RESULTS:
+: (24, 693, 4, 2, 84)
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[44], line 1
+----> 1 reg = crossval_dpca_reg(X_dpca, marginalization='pct', lambdas=np.logspace(-3, 3, 10))
+      2 print(reg)
+
+Cell In[42], line 44, in crossval_dpca_reg(X_trials, marginalization, lambdas)
+     42 dpca = dPCA.dPCA(labels=marginalization, regularizer=lam)
+     43 dpca.protect = ['t']
+---> 44 Z = dpca.fit_transform(X_train_avg, X[train_idx])
+     46 # Compute reconstruction trial-averages from components of training data
+     47 X_recons = []
+
+File ~/dual_task/dual_data/src/dPCA/dPCA.py:164, in dPCA.fit_transform(self, X, trialX)
+    147 def fit_transform(self, X, trialX=None):
+    148     """Fit the model with X and apply the dimensionality reduction on X.
+    149
+    150     Parameters
+   (...)
+    162
+    163     """
+--> 164     self._fit(X,trialX=trialX)
+    166     return self.transform(X)
+
+File ~/dual_task/dual_data/src/dPCA/dPCA.py:566, in dPCA._fit(self, X, trialX, mXs, center, SVD, optimize)
+    563     regX, regmXs, pregX = X, mXs, pinv(X.reshape((n_features,-1)))
+    565 # compute closed-form solution
+--> 566 self.P, self.D = self._randomized_dpca(regX,regmXs,pinvX=pregX)
+
+File ~/dual_task/dual_data/src/dPCA/dPCA.py:468, in dPCA._randomized_dpca(self, X, mXs, pinvX)
+    466     U,s,V = randomized_svd(np.dot(C,rX),n_components=self.n_components[key],n_iter=self.n_iter,random_state=np.random.randint(10e5))
+    467 else:
+--> 468     U,s,V = randomized_svd(np.dot(C,rX),n_components=self.n_components,n_iter=self.n_iter,random_state=np.random.randint(10e5))
+    470 P[key] = U
+    471 D[key] = np.dot(U.T,C).T
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/_param_validation.py:218, in validate_params.<locals>.decorator.<locals>.wrapper(*args, **kwargs)
+    212 try:
+    213     with config_context(
+    214         skip_parameter_validation=(
+    215             prefer_skip_nested_validation or global_skip_validation
+    216         )
+    217     ):
+--> 218         return func(*args, **kwargs)
+    219 except InvalidParameterError as e:
+    220     # When the function is just a wrapper around an estimator, we allow
+    221     # the function to delegate validation to the estimator, but we replace
+    222     # the name of the estimator by the name of the function in the error
+    223     # message to avoid confusion.
+    224     msg = re.sub(
+    225         r"parameter of \w+ must be",
+    226         f"parameter of {func.__qualname__} must be",
+    227         str(e),
+    228     )
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/extmath.py:517, in randomized_svd(M, n_components, n_oversamples, n_iter, power_iteration_normalizer, transpose, flip_sign, random_state, svd_lapack_driver)
+    360 @validate_params(
+    361     {
+    362         "M": ["array-like", "sparse matrix"],
+   (...)
+    384     svd_lapack_driver="gesdd",
+    385 ):
+    386     """Compute a truncated randomized SVD.
+    387
+    388     This method solves the fixed-rank approximation problem described in [1]_
+   (...)
+    515     ((3, 2), (2,), (2, 4))
+    516     """
+--> 517     M = check_array(M, accept_sparse=True)
+    518     return _randomized_svd(
+    519         M,
+    520         n_components=n_components,
+   (...)
+    527         svd_lapack_driver=svd_lapack_driver,
+    528     )
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/validation.py:1105, in check_array(array, accept_sparse, accept_large_sparse, dtype, order, copy, force_writeable, force_all_finite, ensure_all_finite, ensure_non_negative, ensure_2d, allow_nd, ensure_min_samples, ensure_min_features, estimator, input_name)
+   1099     raise ValueError(
+   1100         f"Found array with dim {array.ndim},"
+   1101         f" while dim <= 2 is required{context}."
+   1102     )
+   1104 if ensure_all_finite:
+-> 1105     _assert_all_finite(
+   1106         array,
+   1107         input_name=input_name,
+   1108         estimator_name=estimator_name,
+   1109         allow_nan=ensure_all_finite == "allow-nan",
+   1110     )
+   1112 if copy:
+   1113     if _is_numpy_namespace(xp):
+   1114         # only make a copy if `array` and `array_orig` may share memory`
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/validation.py:120, in _assert_all_finite(X, allow_nan, msg_dtype, estimator_name, input_name)
+    117 if first_pass_isfinite:
+    118     return
+--> 120 _assert_all_finite_element_wise(
+    121     X,
+    122     xp=xp,
+    123     allow_nan=allow_nan,
+    124     msg_dtype=msg_dtype,
+    125     estimator_name=estimator_name,
+    126     input_name=input_name,
+    127 )
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/validation.py:169, in _assert_all_finite_element_wise(X, xp, allow_nan, msg_dtype, estimator_name, input_name)
+    152 if estimator_name and input_name == "X" and has_nan_error:
+    153     # Improve the error message on how to handle missing values in
+    154     # scikit-learn.
+    155     msg_err += (
+    156         f"\n{estimator_name} does not accept missing values"
+    157         " encoded as NaN natively. For supervised learning, you might want"
+   (...)
+    167         "#estimators-that-handle-nan-values"
+    168     )
+--> 169 raise ValueError(msg_err)
+
+ValueError: Input contains NaN.
+#+end_example
+:END:
 
 #+begin_src ipython
 dpca = dPCA.dPCA(labels='pct', n_components=2, regularizer=1.0 / X_dpca.shape[1])
@@ -491,12 +842,138 @@ dpca.protect = ['t']
 Z = dpca_cv(X_dpca, dpca, n_splits=X_dpca.shape[0])
 #+end_src
 
+#+RESULTS:
+:RESULTS:
+: (23, 693, 4, 2, 84) (1, 693, 4, 2, 84)
+# [goto error]
+#+begin_example
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+Cell In[45], line 4
+      1 dpca = dPCA.dPCA(labels='pct', n_components=2, regularizer=1.0 / X_dpca.shape[1])
+      2 dpca.protect = ['t']
+----> 4 Z = dpca_cv(X_dpca, dpca, n_splits=X_dpca.shape[0])
+
+Cell In[41], line 21, in dpca_cv(X, dPCA, n_splits)
+     18     X_test_avg = np.nanmean(X_test, axis=0)
+     19     X_test_avg -= X_train_scale
+---> 21     dPCA.fit_transform(X_train_avg, X_train)
+     22     Z_test.append(dPCA.transform(X_test_avg))
+     24 result = defaultdict(list)
+
+File ~/dual_task/dual_data/src/dPCA/dPCA.py:164, in dPCA.fit_transform(self, X, trialX)
+    147 def fit_transform(self, X, trialX=None):
+    148     """Fit the model with X and apply the dimensionality reduction on X.
+    149
+    150     Parameters
+   (...)
+    162
+    163     """
+--> 164     self._fit(X,trialX=trialX)
+    166     return self.transform(X)
+
+File ~/dual_task/dual_data/src/dPCA/dPCA.py:566, in dPCA._fit(self, X, trialX, mXs, center, SVD, optimize)
+    563     regX, regmXs, pregX = X, mXs, pinv(X.reshape((n_features,-1)))
+    565 # compute closed-form solution
+--> 566 self.P, self.D = self._randomized_dpca(regX,regmXs,pinvX=pregX)
+
+File ~/dual_task/dual_data/src/dPCA/dPCA.py:468, in dPCA._randomized_dpca(self, X, mXs, pinvX)
+    466     U,s,V = randomized_svd(np.dot(C,rX),n_components=self.n_components[key],n_iter=self.n_iter,random_state=np.random.randint(10e5))
+    467 else:
+--> 468     U,s,V = randomized_svd(np.dot(C,rX),n_components=self.n_components,n_iter=self.n_iter,random_state=np.random.randint(10e5))
+    470 P[key] = U
+    471 D[key] = np.dot(U.T,C).T
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/_param_validation.py:218, in validate_params.<locals>.decorator.<locals>.wrapper(*args, **kwargs)
+    212 try:
+    213     with config_context(
+    214         skip_parameter_validation=(
+    215             prefer_skip_nested_validation or global_skip_validation
+    216         )
+    217     ):
+--> 218         return func(*args, **kwargs)
+    219 except InvalidParameterError as e:
+    220     # When the function is just a wrapper around an estimator, we allow
+    221     # the function to delegate validation to the estimator, but we replace
+    222     # the name of the estimator by the name of the function in the error
+    223     # message to avoid confusion.
+    224     msg = re.sub(
+    225         r"parameter of \w+ must be",
+    226         f"parameter of {func.__qualname__} must be",
+    227         str(e),
+    228     )
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/extmath.py:517, in randomized_svd(M, n_components, n_oversamples, n_iter, power_iteration_normalizer, transpose, flip_sign, random_state, svd_lapack_driver)
+    360 @validate_params(
+    361     {
+    362         "M": ["array-like", "sparse matrix"],
+   (...)
+    384     svd_lapack_driver="gesdd",
+    385 ):
+    386     """Compute a truncated randomized SVD.
+    387
+    388     This method solves the fixed-rank approximation problem described in [1]_
+   (...)
+    515     ((3, 2), (2,), (2, 4))
+    516     """
+--> 517     M = check_array(M, accept_sparse=True)
+    518     return _randomized_svd(
+    519         M,
+    520         n_components=n_components,
+   (...)
+    527         svd_lapack_driver=svd_lapack_driver,
+    528     )
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/validation.py:1105, in check_array(array, accept_sparse, accept_large_sparse, dtype, order, copy, force_writeable, force_all_finite, ensure_all_finite, ensure_non_negative, ensure_2d, allow_nd, ensure_min_samples, ensure_min_features, estimator, input_name)
+   1099     raise ValueError(
+   1100         f"Found array with dim {array.ndim},"
+   1101         f" while dim <= 2 is required{context}."
+   1102     )
+   1104 if ensure_all_finite:
+-> 1105     _assert_all_finite(
+   1106         array,
+   1107         input_name=input_name,
+   1108         estimator_name=estimator_name,
+   1109         allow_nan=ensure_all_finite == "allow-nan",
+   1110     )
+   1112 if copy:
+   1113     if _is_numpy_namespace(xp):
+   1114         # only make a copy if `array` and `array_orig` may share memory`
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/validation.py:120, in _assert_all_finite(X, allow_nan, msg_dtype, estimator_name, input_name)
+    117 if first_pass_isfinite:
+    118     return
+--> 120 _assert_all_finite_element_wise(
+    121     X,
+    122     xp=xp,
+    123     allow_nan=allow_nan,
+    124     msg_dtype=msg_dtype,
+    125     estimator_name=estimator_name,
+    126     input_name=input_name,
+    127 )
+
+File ~/mambaforge/envs/torch/lib/python3.10/site-packages/sklearn/utils/validation.py:169, in _assert_all_finite_element_wise(X, xp, allow_nan, msg_dtype, estimator_name, input_name)
+    152 if estimator_name and input_name == "X" and has_nan_error:
+    153     # Improve the error message on how to handle missing values in
+    154     # scikit-learn.
+    155     msg_err += (
+    156         f"\n{estimator_name} does not accept missing values"
+    157         " encoded as NaN natively. For supervised learning, you might want"
+   (...)
+    167         "#estimators-that-handle-nan-values"
+    168     )
+--> 169 raise ValueError(msg_err)
+
+ValueError: Input contains NaN.
+#+end_example
+:END:
+
 #+begin_src ipython
 print(Z['p'].shape)
 #+end_src
 
 #+RESULTS:
-: (2, 4, 2, 84)
+: (2, 2, 2, 84)
 
 #+begin_src ipython
 dpca = dPCA.dPCA(labels='pct', n_components=2, regularizer=reg)
@@ -513,13 +990,18 @@ print(Z['p'].shape)
 #+end_src
 
 #+RESULTS:
-: Start optimizing regularization.
-: Starting trial  1 / 3
-: Starting trial  2 / 3
-: Starting trial  3 / 3
-: Optimized regularization, optimal lambda =  0.0017286737396774677
-: Regularization will be fixed; to compute the optimal                    parameter again on the next fit, please                    set opt_regularizer_flag to True.
-: (2, 4, 2, 84)
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: NameError                                 Traceback (most recent call last)
+: Cell In[47], line 1
+: ----> 1 dpca = dPCA.dPCA(labels='pct', n_components=2, regularizer=reg)
+:       2 dpca.protect = ['t']
+:       4 # axes = (1, 2, 3)
+:       5 # X_dpca -= np.mean(X_dpca, axis=axes, keepdims=True)
+:
+: NameError: name 'reg' is not defined
+:END:
 
 #+begin_src ipython
 from src.common.plot_utils import add_vlines
@@ -550,7 +1032,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/dpca/figure_20.png]]
+[[file:./figures/dpca/figure_27.png]]
 
 #+begin_src ipython
 from src.common.plot_utils import add_vlines
@@ -581,7 +1063,20 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/dpca/figure_21.png]]
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[49], line 13
+:      11 pair = [0, 2]
+:      12 for i in range(2):
+: ---> 13         ax[0].plot(xtime, (Z['p'][0][pair[0]][i] - Z['p'][0][pair[1]][i])/2, ls = ls[i], label=label[i])
+:      14         ax[1].plot(xtime, (Z['c'][0][pair[0]][i] + Z['c'][0][pair[1]][i])/2, ls = ls[i], label=label[i])
+:      15         ax[2].plot(xtime, (Z['ct'][0][pair[0]][i] + Z['ct'][0][pair[1]][i])/2, ls = ls[i], label=label[i])
+:
+: IndexError: index 2 is out of bounds for axis 0 with size 2
+[[file:./figures/dpca/figure_28.png]]
+:END:
 
 #+begin_src ipython
 from src.common.plot_utils import add_vlines
@@ -612,7 +1107,20 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/dpca/figure_22.png]]
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: IndexError                                Traceback (most recent call last)
+: Cell In[50], line 13
+:      11 pair = [1, 3]
+:      12 for i in range(2):
+: ---> 13         ax[0].plot(xtime, (Z['p'][0][pair[0]][i] - Z['p'][0][pair[1]][i])/2, ls = ls[i], label=label[i])
+:      14         ax[1].plot(xtime, (Z['c'][0][pair[0]][i] + Z['c'][0][pair[1]][i])/2, ls = ls[i], label=label[i])
+:      15         ax[2].plot(xtime, (Z['ct'][0][pair[0]][i] + Z['ct'][0][pair[1]][i])/2, ls = ls[i], label=label[i])
+:
+: IndexError: index 3 is out of bounds for axis 0 with size 2
+[[file:./figures/dpca/figure_29.png]]
+:END:
 
 
 #+begin_src ipython
@@ -709,7 +1217,6 @@ for d in EV_day:
 #+end_src
 
 #+RESULTS:
-
 
 #+begin_src ipython
 from collections import defaultdict
@@ -828,6 +1335,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
+
 
 * Sample * test * time
 

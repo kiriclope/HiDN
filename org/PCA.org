@@ -68,62 +68,141 @@ import matplotlib.pyplot
 * Helpers
 
 #+begin_src ipython
+import numpy as np
+
+class StandardScaler:
+    def __init__(self, axis=0, if_scale=1):
+        self.axis = axis
+        self.center_ = None
+        self.scale_ = None
+        self.if_scale_ = if_scale
+
+    def fit(self, X):
+        self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
+        self.scale_ = np.nanstd(X, axis=self.axis, keepdims=True)
+        # Prevent division by zero
+        self.scale_ = np.where(self.scale_ == 0, 1, self.scale_)
+        return self
+
+    def transform(self, X):
+        if self.if_scale_:
+            return (X - self.center_) / self.scale_
+        return (X - self.center_)
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+
+class RobustScaler:
+    def __init__(self, axis=0):
+        self.axis = axis
+        self.center_ = None
+        self.scale_ = None
+
+    def fit(self, X):
+        self.center_ = np.nanmedian(X, axis=self.axis, keepdims=True)
+        q75 = np.nanpercentile(X, 75, axis=self.axis, keepdims=True)
+        q25 = np.nanpercentile(X, 25, axis=self.axis, keepdims=True)
+        self.scale_ = q75 - q25
+        # Prevent division by zero
+        self.scale_ = np.where(self.scale_ == 0, 1, self.scale_)
+        return self
+
+    def transform(self, X):
+        return (X - self.center_) / self.scale_
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def pad_list(arrays, axis=0, max_len=None):
+    """
+    Pads a list of arrays along the specified axis with NaNs so all have the same size along that axis.
+    Returns a list of padded arrays.
+    """
+    # Find maximum size along specified axis
+    if max_len is None:
+        max_len = max(arr.shape[axis] for arr in arrays)
+
+    padded = []
+    for arr in arrays:
+        pad_width = [(0, 0)] * arr.ndim
+
+
+        n_pad = max_len - arr.shape[axis]
+
+        if n_pad > 0:
+            pad_width[axis] = (0, n_pad)
+            arr_padded = np.pad(arr, pad_width, mode='constant', constant_values=np.nan)
+        else:
+            arr_padded = arr
+        padded.append(arr_padded)
+
+    return padded
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+def avg_cond(X, y, **options):
+
+    X_avg = []
+    for i in range(4):
+        idx = (y.odor_pair==i)
+
+        if options['trials'] == 'correct':
+            correct = ~y.response.str.contains("incorrect")
+            idx  = (y.odor_pair==i) & correct
+
+        if idx.mean()>0:
+            X_avg.append(np.mean(X[idx], 0))
+
+        # for j in range(2):
+        #     idx = (y.sample_odor==i) & (y.choice==j)
+
+        #     if idx.mean()>0:
+        #         X_avg.append(np.mean(X[idx], 0))
+
+        # X_avg.append(scaler.fit_transform(X[idx]))
+
+        # for _, task in enumerate(options['tasks']):
+        #     idx_task = idx & (y.tasks==task)
+
+        #     if 'Dual' in task:
+        #         if options['trials'] == 'correct':
+        #             idx_task = idx & (y.tasks==task) & (y.odr_perf==1)
+
+        #     if idx_task.mean()>0:
+        #         # X_mean = np.mean(X[(y.tasks==task)], 0)
+        #         # X_std = np.std(X[(y.tasks==task)], 0)
+        #         # X_avg.append((np.mean(X[idx_task], 0) - X_mean) / X_std)
+
+        #         X_avg.append(np.mean(X[idx_task], 0))
+
+    return np.array(X_avg)
+#+end_src
+
+#+RESULTS:
+
+#+RESULTS:
+
+#+begin_src ipython
 def pad_with_nans(array, target_shape):
     result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
     print(result.shape)
     slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
     result[slices] = array[slices]
     return result
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/utils.py
-  import numpy as np
-
-  def safe_roc_auc_score(y_true, y_score):
-      y_true = np.asarray(y_true)
-      if len(np.unique(y_true)) == 1:
-          return 0.5  # return np.nan where the score cannot be calculated
-      return roc_auc_score(y_true, y_score)
-
-  def safe_f1_score(y_true, y_score):
-      y_true = np.asarray(y_true)
-      if len(np.unique(y_true)) == 1:
-          return 0.5  # return np.nan where the score cannot be calculated
-      return f1_score(y_true, y_score, average='weighted')
-      #+end_src
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/utils.py
-  def rescale_coefs(model, coefs, bias):
-
-          try:
-                  means = model.named_steps["scaler"].mean_
-                  scales = model.named_steps["scaler"].scale_
-
-                  # Rescale the coefficients
-                  rescaled_coefs = np.true_divide(coefs, scales)
-
-                  # Adjust the intercept
-                  rescaled_bias = bias - np.sum(rescaled_coefs * means)
-
-                  return rescaled_coefs, rescaled_bias
-          except:
-                  return coefs, bias
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython :tangle ../src/torch/utils.py
-  from scipy.stats import bootstrap
-
-  def get_bootstrap_ci(data, statistic=np.mean, confidence_level=0.95, n_resamples=1000, random_state=None):
-      result = bootstrap((data,), statistic)
-      ci_lower, ci_upper = result.confidence_interval
-      return np.array([ci_lower, ci_upper])
 #+end_src
 
 #+RESULTS:
@@ -157,41 +236,6 @@ def pad_with_nans(array, target_shape):
 
 #+RESULTS:
 
-#+begin_src ipython
-def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
-    try:
-        coef = estimator.named_steps["model"].coef_.flatten()
-        clf = estimator #.named_steps["model"]
-    except:
-        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
-        clf = estimator.best_estimator_.named_steps["model"]
-
-    norm_w = np.linalg.norm(coef) + 1e-6
-
-    # try:
-    #     X_test = clf.named_steps["scaler"].transform(X_test)
-    # except:
-    #     pass
-
-    # try:
-    #     X_test = clf.named_steps["pca"].transform(X_test)
-    # except:
-    #     pass
-
-    if IF_SIGN:
-        dot_product = (2*y_test -1) * np.dot(X_test, coef) / norm_w # / X_test.shape[1] * 1000
-        # dot_product = (2*y_test -1) * clf.named_steps["model"].decision_function(X_test)
-        # dot_product = (2*y_test -1) * clf.decision_function(X_test) / norm_w
-    else:
-        # dot_product = clf.decision_function(X_test) / norm_w
-        # dot_product = clf.named_steps["model"].decision_function(X_test)
-        dot_product = np.dot(X_test, coef) / norm_w # / X_test.shape[1] * 1000
-
-    return np.nanmean(dot_product)
-#+end_src
-
-#+RESULTS:
-
 * Parameters
 
 #+begin_src ipython
@@ -202,19 +246,19 @@ mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23
 # mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
 # mice = ['JawsM15', 'JawsM18', 'ChRM04']
 
-tasks = ['DPA'] # all
+tasks = ['Dual'] # all
 
 kwargs = {
    'mice': mice,
    'tasks': tasks,
    'mouse': mice[0], 'laser': 0,
-   'trials': '', 'reload': 1, 'data_type': 'dF',
+   'trials': '', 'reload': 0, 'data_type': 'dF',
    'prescreen': None, 'pval': 0.05,
-   'preprocess': False, 'scaler_BL': 'robust',
-   'avg_noise':True, 'unit_var_BL': True,
+   'preprocess': False, 'scaler_BL': 'standard',
+   'avg_noise':False, 'unit_var_BL': False,
    'random_state': None, 'T_WINDOW': 0.0,
    'l1_ratio': 0.95,
-   'n_comp': 5, 'pca': 'pca',
+   'n_comp': 3, 'pca': 'pca',
    'scaler': None,
    'bootstrap': 1, 'n_boots': 128,
    'n_splits': 5, 'n_repeats': 10,
@@ -233,8 +277,9 @@ options['cv_B'] = False
 
 #+RESULTS:
 
-* Decoding vs days
-** utils
+* Single Model
+** Decoding vs days
+*** utils
 
 #+begin_src ipython
 def decode_axis(model, **options):
@@ -320,7 +365,7 @@ def save_overlaps(df, marg, dum, **options):
 
 #+RESULTS:
 
-** run
+*** run
 
 #+begin_src ipython
 import sys
@@ -345,12 +390,148 @@ print(model.pipe)
 : Pipeline(steps=[('pca', PCA(n_components=5))])
 
 #+begin_src ipython
-options['epochs'] = ['TASK']
+options['epochs'] = ['POST_GNG']
 X_pca, y_pca, w_pca, df = decode_axis(model, **options)
  #+end_src
 
 #+RESULTS:
-
+#+begin_example
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (192, 184, 84) y_labels (192, 16) ['DualNoGo' 'DualGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 16) (5, 184) (5,)
+Loading files from /storage/leon/dual_task/data/JawsM01
+X_days (768, 184, 84) y_days (768, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4] [1. 0.]
+Training set: X (64, 184, 84) y_labels (64, 16) ['DualGo' 'DualNoGo'] (64,)
+Elapsed (with compilation) = 0h 0m 0s
+(64, 84, 5) (64, 16) (5, 184) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (192, 201, 84) y_labels (192, 16) ['DualNoGo' 'DualGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 16) (5, 201) (5,)
+Loading files from /storage/leon/dual_task/data/JawsM06
+X_days (1152, 201, 84) y_days (1152, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4 5 6] [1. 0.]
+Training set: X (192, 201, 84) y_labels (192, 16) ['DualGo' 'DualNoGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 16) (5, 201) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (192, 423, 84) y_labels (192, 16) ['DualGo' 'DualNoGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 16) (5, 423) (5,)
+Loading files from /storage/leon/dual_task/data/JawsM12
+X_days (960, 423, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4 5] [1. 0.]
+Training set: X (128, 423, 84) y_labels (128, 16) ['DualGo' 'DualNoGo'] (128,)
+Elapsed (with compilation) = 0h 0m 0s
+(128, 84, 5) (128, 16) (5, 423) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (192, 693, 84) y_labels (192, 17) ['DualGo' 'DualNoGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 17) (5, 693) (5,)
+Loading files from /storage/leon/dual_task/data/JawsM15
+X_days (1152, 693, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4. 5. 6.] [1. 0.]
+Training set: X (192, 693, 84) y_labels (192, 17) ['DualGo' 'DualNoGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 17) (5, 693) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (192, 444, 84) y_labels (192, 17) ['DualNoGo' 'DualGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 17) (5, 444) (5,)
+Loading files from /storage/leon/dual_task/data/JawsM18
+X_days (1152, 444, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4. 5. 6.] [1. 0.]
+Training set: X (192, 444, 84) y_labels (192, 17) ['DualNoGo' 'DualGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 17) (5, 444) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (192, 668, 84) y_labels (192, 17) ['DualNoGo' 'DualGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 17) (5, 668) (5,)
+Loading files from /storage/leon/dual_task/data/ChRM04
+X_days (1152, 668, 84) y_days (1152, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4. 5. 6.] [1. 0.]
+Training set: X (192, 668, 84) y_labels (192, 17) ['DualNoGo' 'DualGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 17) (5, 668) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1 2 3] [1. 0.]
+Training set: X (192, 232, 84) y_labels (192, 16) ['DualGo' 'DualNoGo'] (192,)
+Elapsed (with compilation) = 0h 0m 0s
+(192, 84, 5) (192, 16) (5, 232) (5,)
+Loading files from /storage/leon/dual_task/data/ChRM23
+X_days (960, 232, 84) y_days (960, 14)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4 5] [1. 0.]
+Training set: X (128, 232, 84) y_labels (128, 16) ['DualNoGo' 'DualGo'] (128,)
+Elapsed (with compilation) = 0h 0m 0s
+(128, 84, 5) (128, 16) (5, 232) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (384, 361, 84) y_labels (384, 17) ['DualGo' 'DualNoGo'] (384,)
+Elapsed (with compilation) = 0h 0m 0s
+(384, 84, 5) (384, 17) (5, 361) (5,)
+Loading files from /storage/leon/dual_task/data/ACCM03
+X_days (960, 361, 84) y_days (960, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4. 5.] [1. 0.]
+Training set: X (256, 361, 84) y_labels (256, 17) ['DualGo' 'DualNoGo'] (256,)
+Elapsed (with compilation) = 0h 0m 0s
+(256, 84, 5) (256, 17) (5, 361) (5,)
+['first', 'last']
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS first LASER 0
+first [1. 2. 3.] [1. 0.]
+Training set: X (384, 113, 84) y_labels (384, 17) ['DualNoGo' 'DualGo'] (384,)
+Elapsed (with compilation) = 0h 0m 0s
+(384, 84, 5) (384, 17) (5, 113) (5,)
+Loading files from /storage/leon/dual_task/data/ACCM04
+X_days (960, 113, 84) y_days (960, 15)
+DATA: FEATURES sample TASK Dual TRIALS  DAYS last LASER 0
+last [4. 5.] [1. 0.]
+Training set: X (256, 113, 84) y_labels (256, 17) ['DualGo' 'DualNoGo'] (256,)
+Elapsed (with compilation) = 0h 0m 0s
+(256, 84, 5) (256, 17) (5, 113) (5,)
+#+end_example
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1)
@@ -378,11 +559,11 @@ plt.show()
 
 #+RESULTS:
 
-* Plots
-** Data
+** Plots
+*** Data
 
 #+begin_src ipython
-n_comp = 3
+n_comp = 5
 learning = ['Naive', 'Expert']
 
 X_mouse, y_mouse, pc_mouse = [], [], []
@@ -400,8 +581,8 @@ for i_day in range(len(options['days'])):
             y = y_pca[y_pca.mouse==options['mice'][i_mouse]]
             y = y[y.day==(i_day+1)]
 
-        X = -np.array(X_pca[i_mouse][i_day][:]).swapaxes(1, -1)
-        pcs = -np.array(w_pca[i_mouse][i_day] ).swapaxes(1, -1) * 100
+        X = np.array(X_pca[i_mouse][i_day][:]).swapaxes(1, -1)
+        pcs = np.array(w_pca[i_mouse][i_day] ).swapaxes(1, -1) * 100
 
         X_.append(X)
         y_.append(y)
@@ -416,27 +597,31 @@ for i_day in range(len(options['days'])):
 
 #+RESULTS:
 #+begin_example
-JawsM01 day first X (96, 5, 84) y (96, 18) pcs (5, 184)
-JawsM06 day first X (96, 5, 84) y (96, 18) pcs (5, 201)
-JawsM12 day first X (96, 5, 84) y (96, 18) pcs (5, 423)
-JawsM15 day first X (96, 5, 84) y (96, 18) pcs (5, 693)
-JawsM18 day first X (96, 5, 84) y (96, 18) pcs (5, 444)
-ChRM04 day first X (96, 5, 84) y (96, 18) pcs (5, 668)
-ChRM23 day first X (96, 5, 84) y (96, 18) pcs (5, 232)
-JawsM01 day last X (32, 5, 84) y (32, 18) pcs (5, 184)
-JawsM06 day last X (96, 5, 84) y (96, 18) pcs (5, 201)
-JawsM12 day last X (64, 5, 84) y (64, 18) pcs (5, 423)
-JawsM15 day last X (96, 5, 84) y (96, 18) pcs (5, 693)
-JawsM18 day last X (96, 5, 84) y (96, 18) pcs (5, 444)
-ChRM04 day last X (96, 5, 84) y (96, 18) pcs (5, 668)
-ChRM23 day last X (64, 5, 84) y (64, 18) pcs (5, 232)
+JawsM01 day first X (192, 5, 84) y (192, 18) pcs (5, 184)
+JawsM06 day first X (192, 5, 84) y (192, 18) pcs (5, 201)
+JawsM12 day first X (192, 5, 84) y (192, 18) pcs (5, 423)
+JawsM15 day first X (192, 5, 84) y (192, 18) pcs (5, 693)
+JawsM18 day first X (192, 5, 84) y (192, 18) pcs (5, 444)
+ChRM04 day first X (192, 5, 84) y (192, 18) pcs (5, 668)
+ChRM23 day first X (192, 5, 84) y (192, 18) pcs (5, 232)
+ACCM03 day first X (384, 5, 84) y (384, 18) pcs (5, 361)
+ACCM04 day first X (384, 5, 84) y (384, 18) pcs (5, 113)
+JawsM01 day last X (64, 5, 84) y (64, 18) pcs (5, 184)
+JawsM06 day last X (192, 5, 84) y (192, 18) pcs (5, 201)
+JawsM12 day last X (128, 5, 84) y (128, 18) pcs (5, 423)
+JawsM15 day last X (192, 5, 84) y (192, 18) pcs (5, 693)
+JawsM18 day last X (192, 5, 84) y (192, 18) pcs (5, 444)
+ChRM04 day last X (192, 5, 84) y (192, 18) pcs (5, 668)
+ChRM23 day last X (128, 5, 84) y (128, 18) pcs (5, 232)
+ACCM03 day last X (256, 5, 84) y (256, 18) pcs (5, 361)
+ACCM04 day last X (256, 5, 84) y (256, 18) pcs (5, 113)
 #+end_example
 
-** Single mouse
+*** Single mouse
 
 #+begin_src ipython
-i_mouse = 1
-i_day = 1
+i_mouse = 3
+i_day = 0
 z_lim = 10
 
 X = X_mouse[i_day][i_mouse]
@@ -447,21 +632,21 @@ print(options['mice'][i_mouse], 'day', options['days'][i_day], 'X', X.shape, 'y'
 #+end_src
 
 #+RESULTS:
-: JawsM18 day last X (96, 5, 84) y (96, 18) pcs (5, 444)
+: JawsM15 day first X (192, 5, 84) y (192, 18) pcs (5, 693)
 
-*** Trajectories
+**** Trajectories
 
 #+begin_src ipython
+n_comp=3
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
 color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
 pair = ['AC', 'AD', 'BD', 'BC']
-task = 'DPA'
 xtime = np.linspace(0, 14, 84)
 
 for i in range(4):
-    mask = (y.odor_pair==i) & (y.tasks==task)
+    mask = (y.odor_pair==i)
     X_sel = X[mask]          # Subselect rows
     X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
     X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
@@ -489,11 +674,10 @@ fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sh
 color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
 
 pair = ['A', 'B']
-task = 'DPA'
 xtime = np.linspace(0, 14, 84)
 
 for i in range(2):
-    mask = (y.sample_odor==i) & (y.tasks==task)
+    mask = (y.sample_odor==i)
     X_sel = X[mask]          # Subselect rows
     X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
     X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
@@ -521,11 +705,10 @@ fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sh
 color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
 
 pair = ['unpair', 'pair']
-task = 'DPA'
 xtime = np.linspace(0, 14, 84)
 
 for i in range(2):
-    mask = (y.pair==i) & (y.tasks==task)
+    mask = (y.pair==i)
     X_sel = X[mask]          # Subselect rows
     X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
     X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
@@ -553,11 +736,10 @@ fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sh
 color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
 
 pair = ['nolick', 'lick']
-task = 'DPA'
 xtime = np.linspace(0, 14, 84)
 
 for i in range(2):
-    mask = (y.choice==i) & (y.tasks==task)
+    mask = (y.choice==i)
     X_sel = X[mask]          # Subselect rows
     X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
     X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
@@ -578,6 +760,37 @@ plt.show()
 
 #+RESULTS:
 [[file:./figures/overlaps/figure_23.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['C', 'D']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.test_odor==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_24.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
@@ -606,7 +819,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_24.png]]
+[[file:./figures/overlaps/figure_25.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
@@ -633,13 +846,13 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_25.png]]
+[[file:./figures/overlaps/figure_26.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
 
 pair = ['AC', 'AD', 'BD', 'BC']
-task = 'DPA'
+task = 'DualGo'
 color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
 for i in range(4):
@@ -668,7 +881,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_26.png]]
+[[file:./figures/overlaps/figure_27.png]]
 
 #+begin_src ipython
 
@@ -676,13 +889,13 @@ plt.show()
 
 #+RESULTS:
 
-*** Embeddings
+**** Embeddings
 
 #+begin_src ipython
 import cmocean
 cmap=cmocean.cm.phase
 
-theta = np.arctan2(pcs[2], pcs[0]) * 180 / np.pi
+theta = np.arctan2(pcs[1], pcs[0]) * 180 / np.pi
 idx = np.argsort(theta)
 
 theta_norm = (theta+ 360) % (360)
@@ -701,7 +914,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_28.png]]
+[[file:./figures/overlaps/figure_29.png]]
 
 
 #+begin_src ipython
@@ -718,38 +931,7 @@ for k in range(n_comp):
     ax[k].set_xlabel('Neuron Loc (°)')
     ax[k].set_ylim([-z_lim, z_lim])
 
-ax[1].set_ylim([-z_lim/2, z_lim/2])
-plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_29.png]]
-
-#+begin_src ipython
-from scipy.ndimage import gaussian_filter1d, uniform_filter1d
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
-
-ax[0].scatter(pcs[0][idx], pcs[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
-ax[0].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
-
-ax[0].set_xlabel('PC 1')
-ax[0].set_ylabel('PC 2')
-
-ax[1].scatter(pcs[0][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
-ax[1].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
-ax[1].set_xlabel('PC 1')
-ax[1].set_ylabel('PC 3')
-
-sc = ax[2].scatter(pcs[1][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
-ax[2].plot(gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
-ax[2].set_xlabel('PC 2')
-ax[2].set_ylabel('PC 3')
-
-for k in range(3):
-    ax[k].set_xlim(-z_lim, z_lim)
-    ax[k].set_ylim(-z_lim, z_lim)
-
+ax[-1].set_ylim([-z_lim/2, z_lim/2])
 plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
 plt.show()
 #+end_src
@@ -758,400 +940,6 @@ plt.show()
 [[file:./figures/overlaps/figure_30.png]]
 
 #+begin_src ipython
-fig = plt.figure()
-ax = fig.add_subplot(111, projection='3d')
-
-ax.plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'),
-           gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'),
-           gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'),
-           rasterized=1, color='k')
-
-
-sc = ax.scatter(pcs[0][idx],
-                pcs[1][idx],
-                pcs[2][idx],
-                c=theta_norm[idx], cmap=cmap,
-                rasterized=1, alpha=0.5)
-
-ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
-ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
-
-ax.set_xlabel('PC 1', fontsize=12)
-ax.set_ylabel('PC 2', fontsize=12)
-ax.set_zlabel('PC 3', fontsize=12)
-
-ax.set_xlim([-z_lim, z_lim])
-ax.set_ylim([-z_lim/10, z_lim/10])
-ax.set_zlim([-z_lim, z_lim])
-
-ax.grid(False)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_31.png]]
-
-
-
-#+RESULTS:
-
-* All mice
-
-#+begin_src ipython
-import sys
-sys.path.insert(0, '/home/leon/Dclassify')
-from src.classificationCV import ClassificationCV
-#+end_src
-
-#+RESULTS:
-
-#+begin_src ipython
-options['n_jobs'] = 64
-options['verbose'] = 1
-net = None
-params = {}
-model = ClassificationCV(net, params, **options)
-print(model.pipe)
-#+end_src
-
-#+RESULTS:
-: PCA pca 5
-: PCA 5
-: Pipeline(steps=[('pca', PCA(n_components=5))])
-
-#+begin_src ipython
-from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
-from scipy.signal import detrend
-
-options['trials']='correct'
-options['reload'] = 0
-options['laser'] = -1
-
-options['days'] = ['first', 'last']
-options['day'] = 'last'
-
-options['task'] = 'DPA'
-
-options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
-
-X_mouse = []
-for mouse in options['mice']:
-
-    options['mouse'] = mouse
-    X_days, y_days = get_X_y_days(**options)
-    y_days = y_days.reset_index()
-
-    print('X_days', X_days.shape, 'y_days', y_days.shape)
-    y_days['idx'] = y_days['index'].copy()
-
-    X, y = get_X_y_S1_S2(X_days, y_days, **options)
-    y_labels = y.copy()
-
-    X_avg = []
-    for i in range(4):
-        idx = (y_labels.odor_pair==i) # & (~y_labels.response.str.contains("incorrect"))
-
-        if idx.mean()>0:
-            X_avg.append(np.mean(X[idx], 0))
-
-    X_avg = np.array(X_avg)
-    X_mean = np.mean(X, 0)[np.newaxis]
-    X_avg -= X_mean
-
-    X_mouse.append(X_avg)
-    print(X_avg.shape)
-#+end_src
-
-#+RESULTS:
-#+begin_example
-Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 14)
-DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
-last [4] [1. 0.]
-(4, 184, 84)
-Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 14)
-DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
-last [4 5 6] [1. 0.]
-(4, 201, 84)
-Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 14)
-DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
-last [4 5] [1. 0.]
-(4, 423, 84)
-Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
-last [4. 5. 6.] [1. 0.]
-(4, 693, 84)
-Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
-last [4. 5. 6.] [1. 0.]
-(4, 444, 84)
-Loading files from /storage/leon/dual_task/data/ChRM04
-X_days (1152, 668, 84) y_days (1152, 15)
-DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
-last [4. 5. 6.] [1. 0.]
-(4, 668, 84)
-Loading files from /storage/leon/dual_task/data/ChRM23
-X_days (960, 232, 84) y_days (960, 14)
-DATA: FEATURES sample TASK DPA TRIALS correct DAYS last LASER -1
-last [4 5] [1. 0.]
-(4, 232, 84)
-#+end_example
-
-#+begin_src ipython
-X_mouse = np.hstack(X_mouse)
-print(X_mouse.shape)
-#+end_src
-
-#+RESULTS:
-: (4, 2845, 84)
-
-#+begin_src ipython
-options['epochs'] = ['POST_GNG']
-X_flat = X_mouse[..., options['bins_' + options['epochs'][0]]].transpose(0, 2, 1).reshape(-1, X_mouse.shape[1])
-model.fit_pca(X_flat)
-
-X_flat = X_mouse.transpose(0, 2, 1).reshape(-1, X_mouse.shape[1])
-X_pca = -model.transform_pca(X_flat).reshape(X_mouse.shape[0], X_mouse.shape[-1], -1)
-print(X_pca.shape)
-#+end_src
-
-#+RESULTS:
-: (4, 84, 5)
-
-#+begin_src ipython
-plt.plot(model.explained_variance_)
-plt.xlabel('PC #')
-plt.ylabel('Explained Variance')
-plt.xticks(np.arange(0, options['n_comp']), np.arange(1, options['n_comp']+1))
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_37.png]]
-
-** Trajectories
-
-#+begin_src ipython
-n_comp= 3
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ['#332288', '#88CCEE', '#117733', '#44AA99']
-
-pair = ['AC', 'AD', 'BD', 'BC']
-task = 'DPA'
-xtime = np.linspace(0, 14, 84)
-
-for i in range(4):
-    X_avg = X_pca[i].T          # Subselect rows
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=1)
-
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_38.png]]
-
-#+begin_src ipython
-n_comp= 3
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ['#332288', '#88CCEE', '#117733', '#44AA99']
-
-pair = ['A', 'B']
-task = 'DPA'
-xtime = np.linspace(0, 14, 84)
-
-X_sample = [(X_pca[0].T + X_pca[1].T)/2 , (X_pca[2].T + X_pca[3].T)/2]
-
-for i in [0, 1]:
-    X_avg = X_sample[i]
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=1)
-
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_39.png]]
-
-#+begin_src ipython
-n_comp= 3
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ['#332288', '#88CCEE', '#117733', '#44AA99']
-
-pair = ['pair', 'unpair']
-task = 'DPA'
-xtime = np.linspace(0, 14, 84)
-
-X_pair = [(X_pca[0].T + X_pca[2].T)/2 , (X_pca[1].T + X_pca[3].T)/2]
-
-for i in [0, 1]:
-    X_avg = X_pair[i]
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=1)
-
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_40.png]]
-
-#+begin_src ipython
-n_comp= 3
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ['#332288', '#88CCEE', '#117733', '#44AA99']
-
-pair = ['C', 'D']
-task = 'DPA'
-xtime = np.linspace(0, 14, 84)
-
-X_test = [(X_pca[0].T + X_pca[3].T)/2 , (X_pca[1].T + X_pca[2].T)/2]
-
-for i in range(2):
-    X_avg = X_test[i]
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=1)
-
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_41.png]]
-
-#+begin_src ipython
-fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
-
-pair = ['AC', 'AD', 'BD', 'BC']
-task = 'DPA'
-color = ['#332288', '#88CCEE', '#117733', '#44AA99']
-
-for i in range(4):
-    X_avg = X_pca[i].T[:, :66]
-
-    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
-    ax[0].set_xlabel('PC 1')
-    ax[0].set_ylabel('PC 2')
-
-    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
-    ax[1].set_xlabel('PC 1')
-    ax[1].set_ylabel('PC 3')
-
-    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
-    ax[2].set_xlabel('PC 2')
-    ax[2].set_ylabel('PC 3')
-
-for k in range(3):
-    ax[k].legend(fontsize=12, frameon=0, loc='best')
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_42.png]]
-
-#+begin_src ipython
-
-#+end_src
-
-#+RESULTS:
-
-** Embeddings
-
-#+begin_src ipython
-z_lim = 5
-pcs = model.components_ * 100
-print(pcs.shape)
-#+end_src
-
-#+RESULTS:
-: (5, 2845)
-
-#+begin_src ipython
-import cmocean
-cmap=cmocean.cm.phase
-
-theta = np.arctan2(pcs[0], pcs[1]) * 180 / np.pi
-idx = np.argsort(theta)
-
-theta_norm = (theta+ 360) % (360)
-
-counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
-
-bin_centers = 0.5*(bins[:-1] + bins[1:])
-colors = [cmap(center/(360)) for center in bin_centers]
-
-for patch, color in zip(patches, colors):
-    patch.set_facecolor(color)
-
-plt.xlabel('Neuron Loc (°)')
-plt.ylabel('Density')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_45.png]]
-
-
-#+begin_src ipython
-from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
-
-size = 0.1
-
-for k in range(n_comp):
-    sc = ax[k].scatter(theta[idx], pcs[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap)
-    ax[k].plot(theta[idx], gaussian_filter1d(pcs[k][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
-    ax[k].axhline(0, ls='--', color='k')
-    ax[k].set_ylabel('Weights PC %d' % (k+1))
-    ax[k].set_xlabel('Neuron Loc (°)')
-    ax[k].set_ylim([-z_lim, z_lim])
-
-ax[-1].set_ylim([-z_lim/10, z_lim/10])
-plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_46.png]]
-
-#+begin_src ipython
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
 
@@ -1180,7 +968,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_47.png]]
+[[file:./figures/overlaps/figure_31.png]]
 
 #+begin_src ipython
 fig = plt.figure()
@@ -1215,7 +1003,8 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_48.png]]
+[[file:./figures/overlaps/figure_32.png]]
+
 
 #+begin_src ipython
 
@@ -1223,231 +1012,350 @@ plt.show()
 
 #+RESULTS:
 
-* adeaf
+* Meta Model
+** Model
+
+#+begin_src ipython
+import sys
+sys.path.insert(0, '/home/leon/Dclassify')
+from src.classificationCV import ClassificationCV
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['n_jobs'] = 64
+options['verbose'] = 0
+net = None
+params = {}
+model = ClassificationCV(net, params, **options)
+print(model.pipe)
+#+end_src
+
+#+RESULTS:
+: PCA pca 3
+: PCA 3
+: Pipeline(steps=[('pca', PCA(n_components=3))])
+
+#+RESULTS:
 
 #+begin_src ipython
 from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
+from scipy.signal import detrend
 
+options['trials'] = ''
 options['reload'] = 0
-options['epochs'] = ['all']
-options['days'] = 'all'
+options['laser'] = 0
 
-X_mouse = []
-X_all = []
-y_all = []
+options['days'] = ['first', 'last']
+# options['days'] = 'all'
+
+options['tasks'] = ['DPA']
+options['task'] = 'DPA'
 
 options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+if options['laser']!=0:
+    options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
 
+options['mice'] = ['JawsM01', 'JawsM15']
+
+scaler = StandardScaler(axis=0)
+
+X_mouse = []
 for mouse in options['mice']:
     options['mouse'] = mouse
     options = set_options(**options)
 
     X_day = []
-    for day in options['days'][3:]:
-
+    for day in options['days']:
         options['day'] = day
 
         X_days, y_days = get_X_y_days(**options)
-        y_days = y_days.reset_index()
-        y_days['idx'] = y_days['index'].copy()
 
         X, y = get_X_y_S1_S2(X_days, y_days, **options)
-        y_labels = y.copy()
+        print(y.tasks.unique())
 
-        if options['epochs'][0] == 'all':
-            X_task = X.copy()
-        else:
-            X_task = X[..., options['bins_' + options['epochs'][0]]]
+        X = scaler.fit_transform(X)
+        X_avg = avg_cond(X, y, **options)
+        print(X_avg.shape)
 
-        X_avg = []
-        for i in range(4):
-            if options['task']!='all':
-                idx = (y_labels.odor_pair==i)
+        # scaler.fit(X)
+        # X_avg = scaler.transform(X_avg)
 
-                if idx.mean()>0:
-                    X_avg.append(np.mean(X_task[idx], 0))
-                else:
-                    for k in range(len(y_labels.tasks.unique())):
-                        task = y_labels.tasks.unique()[k]
-                        idx = (y_labels.odor_pair==i) & (y_labels.tasks==task)
-
-                        if 'Dual' in y_labels.tasks.unique()[k]:
-                            idx = (y_labels.odor_pair==i) & (y_labels.tasks==task)
-
-                        if idx.mean()>0:
-                            X_avg.append(np.mean(X_task[idx], 0))
-
-        X_avg = np.array(X_avg)
-        X_mean = np.mean(X_task, 0)[np.newaxis]
-        X_avg -= X_mean
+        # X_mean = np.mean(X_avg, (0, -1), keepdims=1)
+        # X_std = np.std(X_avg, (0, -1), keepdims=1)
+        # X_avg = (X_avg - X_mean) # / X_std
 
         X_day.append(X_avg)
 
-    X_mouse.append(np.nanmean(X_day, 0))
-#+end_src
-* CCA
+    # X_day = np.array(pad_list(X_day, 0, 8))
+    X_day = np.array(X_day)
 
-#+begin_src ipython
-from mvlearn.embed import MCCA
-mcca = MCCA(n_components=3, regs='oas')
+    print('X_day', X_day.shape)
+    X_mouse.append(X_day)
 
-X= np.array(X_mouse[0])
-
-X_reshaped = np.transpose(X, (0,1,3,2))
-X_reshaped = X_reshaped.reshape(X.shape[0], X.shape[1]*X.shape[3], X.shape[2])
-
-X_cca = mcca.fit_transform(X_reshaped)
-X_reshaped = X_cca.reshape(X.shape[0], X.shape[1], X.shape[3], 3)
-X_reshaped = np.transpose(X_reshaped, (0, 1, 3, 2))
-
-pcs = np.array(mcca.loadings_)
+X_mouse = pad_list(X_mouse)
 #+end_src
 
 #+RESULTS:
-: (7, 5, 3)
+#+begin_example
+first [1 2 3] [1. 0.]
+['DPA']
+(4, 184, 84)
+last [4] [1. 0.]
+['DPA']
+(4, 184, 84)
+X_day (2, 4, 184, 84)
+first [1. 2. 3.] [0. 1.]
+['DPA']
+(4, 693, 84)
+last [4. 5. 6.] [1. 0.]
+['DPA']
+(4, 693, 84)
+X_day (2, 4, 693, 84)
+#+end_example
 
 #+begin_src ipython
-i_mouse = 3
-z_lim = 10
-
-X = X_reshaped[i_mouse]
-y = y_mouse[0][i_mouse]
-
-print(options['mice'][i_mouse], 'day', options['days'][i_day], 'X', X.shape, 'y', y.shape, 'pcs', pcs.shape)
+X_mouse = np.concatenate(X_mouse, axis=2)
+# X_mouse = np.hstack(X_mouse)
+print(X_mouse.shape)
 #+end_src
 
 #+RESULTS:
-: JawsM15 day last X (96, 3, 84) y (96, 18) pcs (7, 5, 3)
+: (2, 4, 877, 84)
 
-*** Trajectories
+** PCA
+
+#+begin_src ipython
+from sklearn.impute import SimpleImputer
+# imputer = SimpleImputer(strategy='mean')
+
+options['epochs'] = ['TASK']
+
+traj_day, w_day, evr_day = [], [], []
+for i_day, day in enumerate(options['days']):
+
+    X_day = X_mouse[i_day]
+    mask = ~np.all(np.isnan(X_day), axis=(0, 2))
+    X_day = X_day[:, mask]
+
+    # mask = ~np.all(np.isnan(X_day), axis=(0, 1))
+    # X_day = X_day[..., mask]
+    # print(mask.shape, np.isnan(X_day).sum())
+
+    # X_flat = X_day[..., options['bins_' + options['epochs'][0]]].transpose(0, 2, 1).reshape(-1, X_day.shape[1])
+    # X_flat = imputer.fit_transform(X_flat)
+
+    X_flat = X_day.transpose(0, 2, 1).reshape(-1, X_day.shape[1])
+    print(X_flat.shape)
+
+    X_pca = cross_val_pca(X_flat, 336, 5)
+    print(X_pca.shape)
+
+    traj_day.append(X_pca.reshape(X_day.shape[0], X_day.shape[-1], -1))
+
+    # X_mean = np.nanmean(X_flat, 0, keepdims=1)
+    # X_std = np.nanstd(X_flat, 0, keepdims=1)
+    # X_flat = (X_flat - X_mean) # / X_std
+
+    # model.fit_pca(X_flat)
+
+    # w_day.append(model.components_)
+    # evr_day.append(model.explained_variance_)
+
+    # X_flat = X_day.transpose(0, 2, 1).reshape(-1, X_day.shape[1])
+    # X_flat = (X_flat - X_mean)  # / X_std
+
+    # X_pca = model.transform_pca(X_flat).reshape(X_day.shape[0], X_day.shape[-1], -1)
+    # print(X_pca.shape)
+
+    # traj_day.append(X_pca)
+#+end_src
+
+#+RESULTS:
+: (336, 3319)
+
+#+begin_src ipython
+print(np.array(traj_day).shape)
+#+end_src
+
+#+RESULTS:
+: d334b32a-d3a6-4b29-8db0-907461ff57d0
+
+#+begin_src ipython
+from sklearn.model_selection import KFold
+from sklearn.decomposition import PCA
+
+def cross_val_pca(X, n_splits, n_comp):
+    kf = KFold(n_splits, shuffle=True)
+    pca = PCA(n_components=n_comp)
+
+    X_folds = []
+    for train_idx, test_idx in kf.split(X):
+        X_train, X_test = X[train_idx], X[test_idx]
+
+        X_mean = np.nanmean(X_train, 0, keepdims=1)
+        X_cent = (X_train - X_mean)
+
+        pca.fit(X_cent)
+
+        X_pca = pca.transform(X_test - X_mean)
+        X_folds.append(X_pca)
+
+    return np.nanmean(X_folds, 0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+for i_day, day in enumerate(options['days']):
+    plt.plot(evr_day[i_day], '-o', label=day)
+
+plt.xlabel('PC #')
+plt.ylabel('Explained Variance')
+plt.legend(fontsize=18, frameon=0)
+plt.xticks(np.arange(0, options['n_comp']), np.arange(1, options['n_comp']+1))
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_43.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Trajectories
+
+#+begin_src ipython
+print(X_pca.shape)
+#+end_src
+
+#+RESULTS:
+: (4, 84, 5)
+
+#+begin_src ipython
+n_comp= 3
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+
+xtime = np.linspace(0, 14, 84)
+
+for i in range(X_pca.shape[0]):
+    X_avg = X_pca[i].T
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_52.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
 color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
-pair = ['AC', 'AD', 'BD', 'BC']
-task = 'DPA'
-xtime = np.linspace(0, 14, 84)
-
-for i in range(4):
-    mask = (y.odor_pair==i) & (y.tasks==task)
-    X_sel = X[mask]          # Subselect rows
-    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        y_sem = X_sem[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=1)
-
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_34.png]]
-
-#+begin_src ipython
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
-
 pair = ['A', 'B']
-task = 'DPA'
 xtime = np.linspace(0, 14, 84)
 
-for i in range(2):
-    mask = (y.sample_odor==i) & (y.tasks==task)
-    X_sel = X[mask]          # Subselect rows
-    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+X_sample = [(X_pca[0].T + X_pca[1].T)/2 , (X_pca[2].T + X_pca[3].T)/2]
+
+for i in [0, 1]:
+    X_avg = X_sample[i] # - shuff[i]
+
 
     for k in range(n_comp):
         y_avg = X_avg[k]
-        y_sem = X_sem[k]
         ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
         ax[k].axhline(0, ls='--', color='k')
         ax[k].set_xlabel('Time')
         ax[k].set_ylabel('PC %d' % (k+1))
         add_vlines(ax[k], if_dpa=1)
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
 
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_35.png]]
+[[file:./figures/overlaps/figure_53.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
-color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
-pair = ['unpair', 'pair']
-task = 'DPA'
+pair = ['pair', 'unpair']
 xtime = np.linspace(0, 14, 84)
 
-for i in range(2):
-    mask = (y.pair==i) & (y.tasks==task)
-    X_sel = X[mask]          # Subselect rows
-    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+X_pair = [(X_pca[0].T + X_pca[2].T)/2 , (X_pca[1].T + X_pca[3].T)/2]
+
+# if options['n_shuff']>0:
+#     shuff = [(mean_shuff[0].T + mean_shuff[2].T)/2 , (mean_shuff[1].T + mean_shuff[3].T)/2]
+
+for i in [0, 1]:
+    X_avg = X_pair[i] # - shuff[i]
 
     for k in range(n_comp):
         y_avg = X_avg[k]
-        y_sem = X_sem[k]
         ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
         ax[k].axhline(0, ls='--', color='k')
         ax[k].set_xlabel('Time')
         ax[k].set_ylabel('PC %d' % (k+1))
         add_vlines(ax[k], if_dpa=1)
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
 
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_36.png]]
+[[file:./figures/overlaps/figure_54.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
-color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
-pair = ['nolick', 'lick']
-task = 'DPA'
+pair = ['C', 'D']
+
 xtime = np.linspace(0, 14, 84)
 
+X_test = [(X_pca[0].T + X_pca[3].T)/2 , (X_pca[1].T + X_pca[2].T)/2]
+
+# if options['n_shuff']>0:
+#     shuff = [(mean_shuff[0].T + mean_shuff[3].T)/2 , (mean_shuff[1].T + mean_shuff[2].T)/2]
+
 for i in range(2):
-    mask = (y.choice==i) & (y.tasks==task)
-    X_sel = X[mask]          # Subselect rows
-    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+    X_avg = X_test[i] # - shuff[i]
 
     for k in range(n_comp):
         y_avg = X_avg[k]
-        y_sem = X_sem[k]
         ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
         ax[k].axhline(0, ls='--', color='k')
         ax[k].set_xlabel('Time')
         ax[k].set_ylabel('PC %d' % (k+1))
         add_vlines(ax[k], if_dpa=1)
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
 
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_37.png]]
+[[file:./figures/overlaps/figure_55.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
@@ -1457,11 +1365,7 @@ task = 'DPA'
 color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
 for i in range(4):
-    X_avg = (X[(y.odor_pair==i) & (y.tasks==task)].mean(0))[:, :66]
-
-    # X_avg = X[(y.odor_pair==i) & (y.tasks==task)]
-    # idx = np.random.randint(X_avg.shape[0])
-    # X_avg = X_avg[idx, :66]
+    X_avg = X_pca[i].T[:, :66] # - mean_shuff[i].T[:, :66]
 
     ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
     ax[0].set_xlabel('PC 1')
@@ -1482,10 +1386,3196 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_38.png]]
+[[file:./figures/overlaps/figure_56.png]]
 
 #+begin_src ipython
 
 #+end_src
 
 #+RESULTS:
+
+** Embeddings
+
+#+begin_src ipython
+z_lim = 5
+pcs = model.components_ * 100
+print(pcs.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 3319)
+
+#+begin_src ipython
+import numpy as np
+
+# lower = np.percentile(w_shuff, 95, axis=0)   # [3, 3319]
+# upper = np.percentile(w_shuff, 5, axis=0)  # [3, 3319]
+
+# significant = (pcs < lower) | (pcs > upper)      # [3, 3319]
+# pc_sig = pcs * significant
+
+# for pc_idx in range(pcs.shape[0]):
+#     sig_idx = np.where(significant[pc_idx, :])[0]
+#     print(f"PC{pc_idx+1}: {len(sig_idx)} significant neurons")
+
+pc_list = []
+# for pc_idx in range(pcs.shape[0]):  # for each PC
+#     sig_idx = np.where(significant[pc_idx, :])[0]
+#     pc_list.append(pcs[pc_idx, sig_idx])
+
+#     mask = significant[pc_idx, :]           # Boolean mask, True means significant
+#     pcs[pc_idx, ~mask] = np.nan             # Set NON-significant entries to NaN
+
+pc_list = np.array(pc_list, dtype=object)
+print(pc_list.shape)
+#+end_src
+
+#+RESULTS:
+: (0,)
+
+#+begin_src ipython
+import cmocean
+cmap=cmocean.cm.phase
+
+theta = np.arctan2(pcs[1], pcs[0]) * 180 / np.pi
+idx = np.argsort(theta)
+
+theta_norm = (theta+ 360) % (360)
+
+counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
+
+bin_centers = 0.5*(bins[:-1] + bins[1:])
+colors = [cmap(center/(360)) for center in bin_centers]
+
+for patch, color in zip(patches, colors):
+    patch.set_facecolor(color)
+
+plt.xlabel('Neuron Loc (°)')
+plt.ylabel('Density')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_54.png]]
+
+#+begin_src ipython
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+
+def nan_gaussian_filter1d(data, sigma, **kwargs):
+    """Gaussian smoothing ignoring NaNs."""
+    data = np.asarray(data)
+    nan_mask = np.isnan(data)
+    data_filled = data.copy()
+    data_filled[nan_mask] = 0
+    weights = (~nan_mask).astype(float)
+    filtered = gaussian_filter1d(data_filled, sigma, **kwargs)
+    weights_filtered = gaussian_filter1d(weights, sigma, **kwargs)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        result = filtered / weights_filtered
+    result[weights_filtered == 0] = np.nan
+    return result
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+size = 0.1
+
+for k in range(n_comp):
+    sc = ax[k].scatter(theta[idx], pcs[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap)
+    ax[k].plot(theta[idx], nan_gaussian_filter1d(pcs[k][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+ax[-1].set_ylim([-z_lim/10, z_lim/10])
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_56.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
+
+ax[0].scatter(pcs[0][idx], pcs[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[0].plot(nan_gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), nan_gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].scatter(pcs[0][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[1].plot(nan_gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), nan_gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+sc = ax[2].scatter(pcs[1][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[2].plot(nan_gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), nan_gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_57.png]]
+
+#+begin_src ipython
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.plot(nan_gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'),
+        nan_gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'),
+        nan_gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'),
+           rasterized=1, color='k')
+
+
+sc = ax.scatter(pcs[0][idx],
+                pcs[1][idx],
+                pcs[2][idx],
+                c=theta_norm[idx], cmap=cmap,
+                rasterized=1, alpha=0.5)
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim, z_lim])
+ax.set_zlim([-z_lim/10, z_lim/10])
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_58.png]]
+
+
+#+begin_src ipython
+nbins = 30
+theta_bins = np.linspace(-180, 180, nbins+1)
+theta_digitized = np.digitize(theta, theta_bins) - 1
+
+pcs_binned = np.zeros((3, nbins))
+for i in range(nbins):
+    mask = theta_digitized == i
+    for j in range(3):
+        pcs_binned[j, i] = np.mean(pcs[j][mask]) if np.any(mask) else np.nan
+
+pcs_smooth = gaussian_filter1d(pcs_binned, sigma=2, axis=1, mode='wrap')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot * 180 / np.pi, pcs_smooth[i], lw=2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_ylabel('Weights PC %d' % (i+1))
+    ax.set_xlabel('Neuron Loc (°)')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_60.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+# Compute bin centers in degrees and radians
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)  # for polar plots
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width), sharey=1)
+
+# PC1 vs PC2
+axs[0].plot(pcs_smooth[0], pcs_smooth[1], 'k-')
+axs[0].set_xlabel('PC 1')
+axs[0].set_ylabel('PC 2')
+
+# PC1 vs PC3
+axs[1].plot(pcs_smooth[0], pcs_smooth[2], 'k-')
+axs[1].set_xlabel('PC 1')
+axs[1].set_ylabel('PC 3')
+
+# PC2 vs PC3
+axs[2].plot(pcs_smooth[1], pcs_smooth[2], 'k-')
+axs[2].set_xlabel('PC 2')
+axs[2].set_ylabel('PC 3')
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_61.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(1, 3, subplot_kw={'polar': True}, figsize=(n_comp*width, width))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot, pcs_smooth[i], lw=2)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_62.png]]
+
+#+begin_src ipython
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.plot(pcs_smooth[0], pcs_smooth[1], pcs_smooth[2], rasterized=1, color='k')
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim, z_lim])
+ax.set_zlim([-z_lim/10, z_lim/10])
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_63.png]]
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Single mouse
+** Data
+
+#+begin_src ipython
+X_trials, y_trials = [], []
+scaler = StandardScaler(axis=0)
+
+counter = 0
+for mouse in options['mice']:
+
+    options['mouse'] = mouse
+    X_days, y_days = get_X_y_days(**options)
+    y_days = y_days.reset_index()
+
+    print('X_days', X_days.shape, 'y_days', y_days.shape)
+    y_days['idx'] = y_days['index'].copy()
+
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+
+    X_scaled = scaler.fit_transform(X)
+
+    # X_mean = np.mean(X, 0)[np.newaxis]
+    # X_std = np.std(X, 0)[np.newaxis]
+    # X_scaled = (X - X_mean) / X_std
+
+    X_trial = np.zeros((X.shape[0], X_mouse.shape[2], X.shape[-1]))
+    X_trial[:, counter:X.shape[1]+counter, :] = X_scaled
+
+    counter += X.shape[1]
+
+    X_trials.append(X_trial)
+    y_trials.append(y)
+
+X_trials = np.array(X_trials, dtype=object)
+y_trials = np.array(y_trials, dtype=object)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+X_days (768, 184, 84) y_days (768, 14)
+last [4] [1. 0.]
+X_days (1152, 201, 84) y_days (1152, 14)
+last [4 5 6] [1. 0.]
+X_days (960, 423, 84) y_days (960, 14)
+last [4 5] [1. 0.]
+X_days (1152, 693, 84) y_days (1152, 15)
+last [4. 5. 6.] [1. 0.]
+X_days (1152, 444, 84) y_days (1152, 15)
+last [4. 5. 6.] [1. 0.]
+X_days (1152, 668, 84) y_days (1152, 15)
+last [4. 5. 6.] [1. 0.]
+X_days (960, 232, 84) y_days (960, 14)
+last [4 5] [1. 0.]
+X_days (960, 361, 84) y_days (960, 15)
+last [4. 5.] [1. 0.]
+X_days (960, 113, 84) y_days (960, 15)
+last [4. 5.] [1. 0.]
+#+end_example
+
+
+#+begin_src ipython
+pca_list = []
+for i, mouse in enumerate(options['mice']):
+
+    X_i = X_trials[i] # single trials for given mouse
+    X_flat = X_i.transpose(0, 2, 1).reshape(-1, X_i.shape[1])
+
+    X_i_pca = model.transform_pca(X_flat-X_mean).reshape(X_i.shape[0], X_i.shape[-1], -1)
+
+    print(mouse, X_i.shape, X_flat.shape, X_i_pca.shape)
+
+    pca_list.append(X_i_pca)
+
+pca_list = np.array(pca_list, dtype=object)
+print('pca', pca_list.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+JawsM01 (32, 3319, 84) (2688, 3319) (32, 84, 3)
+JawsM06 (96, 3319, 84) (8064, 3319) (96, 84, 3)
+JawsM12 (64, 3319, 84) (5376, 3319) (64, 84, 3)
+JawsM15 (96, 3319, 84) (8064, 3319) (96, 84, 3)
+JawsM18 (96, 3319, 84) (8064, 3319) (96, 84, 3)
+ChRM04 (96, 3319, 84) (8064, 3319) (96, 84, 3)
+ChRM23 (64, 3319, 84) (5376, 3319) (64, 84, 3)
+ACCM03 (128, 3319, 84) (10752, 3319) (128, 84, 3)
+ACCM04 (128, 3319, 84) (10752, 3319) (128, 84, 3)
+pca (9,)
+#+end_example
+
+** avg odor pair trajectory
+
+#+begin_src ipython
+traj_mouse = []
+for i_mouse, mouse in enumerate(options['mice'][3:7]):
+    X = np.swapaxes(pca_list[i_mouse], 1, 2)
+    y = y_trials[i_mouse]
+
+    traj_ = []
+    for i in range(4):
+        mask = (y.odor_pair==i) & ~y.response.str.contains("incorrect")
+        traj_.append(X[mask].mean(0))
+    traj_mouse.append(traj_)
+
+traj_mouse = np.array(traj_mouse)
+print(traj_mouse.shape)
+#+end_src
+
+#+RESULTS:
+: (4, 4, 3, 84)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height),)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 84)
+
+traj_mean = traj_mouse.mean(0)
+traj_sem = traj_mouse.std(0) / np.sqrt(traj_mouse.shape[0])
+
+for i in range(4):
+    for k in range(n_comp):
+        y_avg = traj_mean[i, k]
+        y_sem = traj_sem[i, k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+ax[-1].legend(fontsize=12, frameon=0, loc='best')
+ax[-1].text(0.15, 1.0, "n=9", transform=ax[-1].transAxes, ha='right', va='top', fontsize=18)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_73.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    X_avg = traj_mean[i, :, :66]
+    X_sem = traj_sem[i, :, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].fill_between(X_avg[0], X_avg[1] - X_sem[1], X_avg[1] + X_sem[1], color=color[i], alpha=0.2)
+
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].fill_between(X_avg[0], X_avg[2] - X_sem[2], X_avg[2] + X_sem[2], color=color[i], alpha=0.2)
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].fill_between(X_avg[1], X_avg[2] - X_sem[2], X_avg[2] + X_sem[2], color=color[i], alpha=0.2)
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+ax[-1].legend(fontsize=12, frameon=0, loc='best')
+ax[-1].text(0.15, 1.1, "n=9", transform=ax[-1].transAxes, ha='right', va='top', fontsize=18)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_74.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+** Trajectories
+
+#+begin_src ipython
+n_comp = 3
+i_mouse = 3
+print(options['mice'][i_mouse])
+X = np.swapaxes(pca_list[i_mouse], 1, 2)
+y = y_trials[i_mouse]
+print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: JawsM15
+: (96, 3, 84) (96, 17)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height),)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(4):
+    mask = (y.odor_pair==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_77.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = y.tasks.unique()
+xtime = np.linspace(0, 14, 84)
+
+for i in range(len(y.tasks.unique())):
+    mask = (y.tasks==y.tasks.unique()[i]) # & (y.odor_pair==3)
+    X_sel = X[mask]
+
+    X_avg = X_sel.mean(0)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_78.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['A', 'B']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.sample_odor.values==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_79.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['unpair', 'pair']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.pair==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_80.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['nolick', 'lick']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.choice==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_81.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['C', 'D']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.test_odor==i)
+    X_sel = X[mask]
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_82.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    X_avg = (X[(y.odor_pair==i)].mean(0))[:, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_83.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+** Embeddings
+
+#+begin_src ipython
+import cmocean
+cmap=cmocean.cm.phase
+
+theta = np.arctan2(pcs[0], pcs[1]) * 180 / np.pi
+idx = np.argsort(theta)
+
+theta_norm = (theta+ 360) % (360)
+
+counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
+
+bin_centers = 0.5*(bins[:-1] + bins[1:])
+colors = [cmap(center/(360)) for center in bin_centers]
+
+for patch, color in zip(patches, colors):
+    patch.set_facecolor(color)
+
+plt.xlabel('Neuron Loc (°)')
+plt.ylabel('Density')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_85.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+size = 0.05
+
+for k in range(n_comp):
+    sc = ax[k].scatter(theta[idx], pcs[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap)
+    ax[k].plot(theta[idx], gaussian_filter1d(pcs[k][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+ax[-1].set_ylim([-z_lim/2, z_lim/2])
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_86.png]]
+
+#+begin_src ipython
+nbins = 30
+theta_bins = np.linspace(0, 360, nbins+1)
+theta_digitized = np.digitize(theta_norm, theta_bins) - 1
+
+# For each bin, average pcs[0], pcs[1], and pcs[2]
+pcs_binned = np.zeros((3, nbins))
+for i in range(nbins):
+    mask = theta_digitized == i
+    for j in range(3):
+        pcs_binned[j, i] = np.mean(pcs[j][mask]) if np.any(mask) else np.nan
+
+pcs_smooth = gaussian_filter1d(pcs_binned, sigma=3, axis=1, mode='wrap')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot * 180 / np.pi, pcs_smooth[i], lw=2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_ylabel('Weights PC %d' % (i+1))
+    ax.set_xlabel('Neuron Loc (°)')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_88.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+# Compute bin centers in degrees and radians
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)  # for polar plots
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width), sharey=1)
+
+# PC1 vs PC2
+axs[0].plot(pcs_smooth[0], pcs_smooth[1], 'k-')
+axs[0].set_xlabel('PC 1')
+axs[0].set_ylabel('PC 2')
+
+# PC1 vs PC3
+axs[1].plot(pcs_smooth[0], pcs_smooth[2], 'k-')
+axs[1].set_xlabel('PC 1')
+axs[1].set_ylabel('PC 3')
+
+# PC2 vs PC3
+axs[2].plot(pcs_smooth[1], pcs_smooth[2], 'k-')
+axs[2].set_xlabel('PC 2')
+axs[2].set_ylabel('PC 3')
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_89.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(1, 3, subplot_kw={'polar': True}, figsize=(n_comp*width, width))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot, pcs_smooth[i], lw=2)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_90.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
+
+ax[0].scatter(pcs[0][idx], pcs[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[0].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].scatter(pcs[0][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[1].plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+sc = ax[2].scatter(pcs[1][idx], pcs[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[2].plot(gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'), gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_91.png]]
+
+#+begin_src ipython
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.plot(gaussian_filter1d(pcs[0][idx], int(size*pcs.shape[1]), mode='wrap'),
+           gaussian_filter1d(pcs[1][idx], int(size*pcs.shape[1]), mode='wrap'),
+           gaussian_filter1d(pcs[2][idx], int(size*pcs.shape[1]), mode='wrap'),
+           rasterized=1, color='k')
+
+
+sc = ax.scatter(pcs[0][idx],
+                pcs[1][idx],
+                pcs[2][idx],
+                c=theta_norm[idx], cmap=cmap,
+                rasterized=1, alpha=0.5)
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim, z_lim])
+ax.set_zlim([-z_lim/10, z_lim/10])
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_92.png]]
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+** Speed
+
+#+begin_src ipython
+print(X.shape)
+y_labels = y_trials[i_mouse]
+speed = np.abs(np.diff(X, axis=-1))
+print(speed.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 3, 84)
+: (96, 3, 83)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 83)
+
+for i in range(4):
+    mask = (y_labels.odor_pair==i)
+    X_sel = speed[mask]          # Subselect rows
+    # X_sel = np.abs(np.diff(X_sel, axis=-1))
+
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+        ax[k].set_xlim(2, 10)
+        ax[k].set_ylim(0, 0.5)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_95.png]]
+
+#+begin_src ipython
+x = X[:, 0, :]  # shape (trials, time)
+y = X[:, 1, :]
+
+# Differences along time axis
+dx = np.diff(x, axis=-1)
+dy = np.diff(y, axis=-1)
+
+# Paired x, y for time intervals
+x_mid = x[:, :-1]
+y_mid = y[:, :-1]
+
+# Radial distance from origin
+radius = np.sqrt(x_mid**2 + y_mid**2)
+
+# Radial speed (project velocity onto unit vector from origin)
+radial_speed = (x_mid * dx + y_mid * dy) / radius
+
+# Angle for each time point
+angles = np.arctan2(y, x)
+
+angles_unwrapped = np.unwrap(angles, axis=-1)
+angular_speed = np.diff(angles_unwrapped, axis=-1)  # in radians per time step
+print(radial_speed.shape, angular_speed.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 83) (96, 83)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 83)
+
+for i in range(4):
+    mask = (y_labels.odor_pair==i)
+    X_sel = radial_speed[mask]
+    print(X_sel.shape)
+
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    ax.plot(xtime, gaussian_filter1d(X_avg, sigma=1), color=color[i], label=pair[i])
+    # ax.fill_between(xtime, X_avg-X_sem, X_avg+X_sem, color=color[i], alpha=0.2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('PC %d' % (k+1))
+    add_vlines(ax, if_dpa=1)
+
+    ax.legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (24, 83)
+: (24, 83)
+: (24, 83)
+: (24, 83)
+[[file:./figures/overlaps/figure_97.png]]
+:END:
+
+** Flow
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+
+def polar_velocities(x, y, sigma=1):
+    """
+    x, y: (n_traj, n_points)
+    sigma: gaussian smoothing in time (in points)
+    Returns:
+      dr_s, dtheta_s: (n_traj, n_points): smoothed radial and angular velocities
+      r, theta: positions at each point, for later conversion
+    """
+    # Polar coords
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+
+    # Derivatives
+    dr = np.gradient(r, axis=1)
+    dtheta = np.gradient(theta, axis=1)
+
+    # Handle angle wrapping
+    dtheta = np.unwrap(theta, axis=1)
+    dtheta = np.gradient(dtheta, axis=1)
+
+    # Smoothing
+    dr_s     = gaussian_filter(dr, sigma=sigma)
+    dtheta_s = gaussian_filter(dtheta, sigma=sigma)
+
+    return dr_s, dtheta_s, r, theta
+
+def pol2cart(dr, dtheta, r, theta):
+    """
+    Converts smoothed polar velocities to Cartesian velocities.
+    All arrays shape: (n_traj, n_points)
+    """
+    u = dr * np.cos(theta) - r * dtheta * np.sin(theta)
+    v = dr * np.sin(theta) + r * dtheta * np.cos(theta)
+    return u, v
+
+def create_field(x, y, u, v, grid_size=100, method='linear'):
+    """
+    Interpolate velocity field to a regular grid.
+    Inputs: x,y,u,v all (n_samples,) or (n_traj, n_points) -- flatten them first.
+    Returns: xi, yi, ui, vi: all (grid_size, grid_size) arrays.
+    """
+    x_flat = x.flatten()
+    y_flat = y.flatten()
+    u_flat = u.flatten()
+    v_flat = v.flatten()
+
+    # xi, yi = np.meshgrid(
+    #     np.linspace(np.min(x_flat), np.max(x_flat), grid_size),
+    #     np.linspace(np.min(y_flat), np.max(y_flat), grid_size),
+    # )
+
+    x_min, x_max = np.min(x_flat)-1, np.max(x_flat)+1
+    y_min, y_max = np.min(y_flat)-1, np.max(y_flat)+1
+
+    z_min = np.min((x_min, y_min))
+    z_max = np.min((x_max, y_max))
+
+    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
+                         np.linspace(z_min, z_max, grid_size))
+
+
+    ui = griddata((x_flat, y_flat), u_flat, (xi, yi), method=method, fill_value=np.nan)
+    vi = griddata((x_flat, y_flat), v_flat, (xi, yi), method=method, fill_value=np.nan)
+
+    # Fill nans with nearest
+    mask = np.isnan(ui)
+    if np.any(mask):
+        ui[mask] = griddata((x_flat, y_flat), u_flat, (xi, yi), method='nearest')[mask]
+        vi[mask] = griddata((x_flat, y_flat), v_flat, (xi, yi), method='nearest')[mask]
+
+    return xi, yi, ui, vi
+
+def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
+    speed = np.sqrt(ui**2 + vi**2)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(5,5))
+    # Normalize for coloring
+    import matplotlib as mpl
+    vmin, vmax = np.nanpercentile(speed, [5, 95])
+    norm = mpl.colors.Normalize(vmin, vmax)
+    strm = ax.streamplot(xi, yi, ui, vi, density=density, color=speed, cmap='coolwarm', norm=norm)
+    if show_cbar:
+        plt.colorbar(strm.lines, ax=ax, label='Speed')
+    ax.set_aspect('equal')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    return ax
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+n_comp = 3
+i_mouse = 3
+X = np.swapaxes(pca_list[i_mouse], 1, 2)
+y_labels = y_trials[i_mouse]
+print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: (96, 3, 84) (96, 84)
+
+#+begin_src ipython
+idx = (y_labels.test_odor==0)
+
+X_delay = X[idx]
+X_delay = X_delay[:, :2, options['bins_TEST']]
+
+x = X_delay[:,0,:]
+y = X_delay[:,1,:]
+
+# 1. Polar smoothing
+dr_s, dtheta_s, r, theta = polar_velocities(x, y, sigma=3)
+
+# 2. Map back to Cartesian velocities
+u, v = pol2cart(dr_s, dtheta_s, r, theta)
+
+# 3. Interpolate to grid
+xi, yi, ui, vi = create_field(x, y, u, v, grid_size=32, method='linear')
+
+# 4. Plot
+fig, ax = plt.subplots(figsize=(width, width))
+plot_field(xi, yi, ui, vi, ax=ax)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_100.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* CV Meta Model
+** Data
+
+#+begin_src ipython
+X_trials, y_trials = [], []
+
+n_neurons = 3319
+counter = 0
+for mouse in options['mice']:
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+    X, y = get_X_y_days(**options)
+    print(mouse, X.shape, y.shape, options['n_days'])
+
+    X_trial = np.zeros((X.shape[0], n_neurons, X.shape[-1]))
+    X_trial[:, counter:X.shape[1]+counter, :] = X
+
+    counter += X.shape[1]
+
+    X_trials.append(X_trial)
+
+    y['mouse'] = mouse
+    y_trials.append(y)
+
+X_trials = np.array(X_trials, dtype=object)
+y_trials = np.array(y_trials, dtype=object)
+#+end_src
+
+#+RESULTS:
+: JawsM01 (768, 184, 84) (768, 15) 4
+: JawsM06 (1152, 201, 84) (1152, 15) 6
+: JawsM12 (960, 423, 84) (960, 15) 5
+: JawsM15 (1152, 693, 84) (1152, 15) 6
+: JawsM18 (1152, 444, 84) (1152, 15) 6
+: ChRM04 (1152, 668, 84) (1152, 15) 6
+: ChRM23 (960, 232, 84) (960, 15) 5
+: ACCM03 (960, 361, 84) (960, 15) 5
+: ACCM04 (960, 113, 84) (960, 15) 5
+
+#+begin_src ipython
+X_all = np.concatenate(X_trials, 0)
+y_all = pd.concat(y_trials)
+print(X_all.shape, y_all.shape)
+#+end_src
+
+#+RESULTS:
+: (9216, 3319, 84) (9216, 16)
+
+** Model
+
+#+begin_src ipython
+from sklearn.model_selection import StratifiedKFold
+from sklearn.decomposition import PCA
+from tqdm import tqdm
+from tqdm_joblib import tqdm_joblib
+
+from joblib import Parallel, delayed
+import numpy as np
+import pandas as pd
+
+def process_fold(train_idx, test_idx, X, y, n_comp, epoch, condition):
+    pca = PCA(n_components=n_comp)
+    scaler = StandardScaler()
+
+    X_train, X_test = X[train_idx], X[test_idx]
+
+    # Fit scaler and transform train
+    X_train = scaler.fit_transform(X_train)
+    # User-supplied function
+    X_avg = cv_avg_cond(X_train, y.iloc[train_idx].copy(), condition)
+
+    X_flat = X_avg[..., epoch].transpose(0, 2, 1).reshape(-1, X_avg.shape[1])
+
+    X_mean = np.nanmean(X_flat, 0, keepdims=1)
+    X_cent = (X_flat - X_mean)
+
+    pca.fit(X_cent)
+    w_fold = pca.components_
+    evr_fold = pca.explained_variance_ratio_
+
+    # Test fold
+    X_test_scaled = scaler.transform(X_test)
+    y_test = y.iloc[test_idx]
+
+    X_flat = X_test_scaled.transpose(0, 2, 1).reshape(-1, X_test_scaled.shape[1])
+    X_mean = np.nanmean(X_flat, 0, keepdims=1)
+    X_cent = (X_flat - X_mean)
+    X_pca = pca.transform(X_cent).reshape(X_test_scaled.shape[0], X_test_scaled.shape[-1], -1)
+
+    return X_pca, y_test.copy(), w_fold, evr_fold
+
+
+
+def par_cross_val_avg_pca(X, y, n_splits, n_comp, epoch, condition, n_jobs=-1):
+
+    kf = StratifiedKFold(n_splits=n_splits, shuffle=True)
+    labels = y['mouse'].astype(str) + '_' + y['odor_pair'].astype(str) + '_' + y['tasks'].astype(str)
+
+    fold_args = list(kf.split(X, labels))
+
+    # with tqdm_joblib(tqdm(desc="PCA folds", total=len(fold_args))) as progress_bar:
+    #     results = Parallel(n_jobs=n_jobs)(
+    #         delayed(process_fold)(train_idx, test_idx, X, y, n_comp, epoch, condition)
+    #         for train_idx, test_idx in fold_args
+    # )
+
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(process_fold)(train_idx, test_idx, X, y, n_comp, epoch, condition)
+        for train_idx, test_idx in fold_args
+    )
+
+    X_folds, y_folds, w_folds, evr_folds = zip(*results)
+    X_folds = np.concatenate(X_folds, axis=0)
+    y_folds = pd.concat(y_folds)
+    w_folds = np.array(w_folds, dtype=object)
+    evr_folds = np.array(evr_folds, dtype=object)
+    return X_folds, y_folds, w_folds, evr_folds
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+import itertools
+from functools import reduce
+import operator
+
+def cv_avg_cond(X, y, condition='odor_pair'):
+    # Ensure condition is a list
+    if isinstance(condition, str):
+        condition = [condition]
+
+    # Find unique values for each condition
+    unique_vals = [y[c].unique() for c in condition]
+
+    X_avg = []
+    combos = list(itertools.product(*unique_vals))
+    for combo in combos:
+        # Build boolean mask for all conditions
+        idx = reduce(operator.and_, [(y[c]==v) for c,v in zip(condition, combo)])
+        if idx.any():
+            X_avg.append(np.mean(X[idx], axis=0))
+
+    return np.array(X_avg)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.decomposition import PCA
+from tqdm import tqdm
+
+def cross_val_avg_pca(X, y, n_splits, n_comp, epoch, condition):
+
+    scaler = StandardScaler(axis=0)
+    pca = PCA(n_components=n_comp)
+
+    kf = StratifiedKFold(n_splits=n_splits, shuffle=True)
+    labels = y['mouse'].astype(str) + '_' + y['odor_pair'].astype(str) + '_' + y['tasks'].astype(str)
+
+    X_folds, y_folds = [], []
+    w_folds, evr_folds = [], []
+    for train_idx, test_idx in tqdm(kf.split(X, labels), total=kf.get_n_splits(X, labels)):
+
+        X_train, X_test = X[train_idx], X[test_idx]
+
+        X_train = scaler.fit_transform(X_train)
+        X_avg = cv_avg_cond(X_train, y.iloc[train_idx].copy(), condition)
+
+        X_flat = X_avg[..., epoch].transpose(0, 2, 1).reshape(-1, X_avg.shape[1])
+
+        X_mean = np.nanmean(X_flat, 0, keepdims=1)
+        X_cent = (X_flat - X_mean)
+
+        pca.fit(X_cent)
+        w_folds.append(pca.components_)
+        evr_folds.append(pca.explained_variance_ratio_)
+
+        X_test = scaler.transform(X_test)
+        y_test = y.iloc[test_idx]
+
+        X_flat = X_test.transpose(0, 2, 1).reshape(-1, X_test.shape[1])
+        X_mean = np.nanmean(X_flat, 0, keepdims=1)
+        X_cent = (X_flat - X_mean)
+        X_pca = pca.transform(X_cent).reshape(X_test.shape[0], X_test.shape[-1], -1)
+
+        X_folds.append(X_pca)
+        y_folds.append(y_folds.append(y.iloc[test_idx].copy()))
+
+    X_folds = np.concatenate(X_folds, 0)
+    y_folds = pd.concat(y_folds)
+
+    w_folds = np.array(w_folds, dtype=object)
+    evr_folds = np.array(evr_folds, dtype=object)
+
+    return X_folds, y_folds, w_folds, evr_folds
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+options['epochs'] = ['TASK']
+epoch = options['bins_' + options['epochs'][0]]
+condition = 'odor_pair'
+
+idx = (y_all.learning == 'Naive') & (y_all.laser==1) & (y_all.performance==1) & ((y_all.tasks=='DPA') | (y_all.odr_perf==1))
+
+X = X_all[idx]
+y = y_all[idx]
+
+print(X.shape, y.shape)
+print(y.mouse.unique())
+print(y.odor_pair.unique())
+print(y.tasks.unique())
+#+end_src
+
+#+RESULTS:
+: (1317, 3319, 84) (1317, 16)
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23']
+: [0. 2. 3. 1.]
+: ['DPA' 'DualGo' 'DualNoGo']
+
+#+begin_src ipython
+pca = PCA(n_components=3)
+scaler = StandardScaler(axis=0)
+
+# fit on full data
+X_scaled = scaler.fit_transform(X)
+X_avg = cv_avg_cond(X_scaled, y.copy(), condition)
+X_flat = X_avg[..., epoch].transpose(0, 2, 1).reshape(-1, X_avg.shape[1])
+X_mean = np.nanmean(X_flat, 0, keepdims=1)
+X_cent = (X_flat - X_mean)
+
+pca.fit(X_cent)
+w_all = pca.components_
+evr_all = pca.explained_variance_ratio_
+
+X_flat = X_scaled.transpose(0, 2, 1).reshape(-1, X_scaled.shape[1])
+X_mean = np.nanmean(X_flat, 0, keepdims=1)
+X_cent = (X_flat - X_mean)
+
+X_pca = pca.transform(X_cent).reshape(X_scaled.shape[0], X_scaled.shape[-1], -1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+print(w_all.shape, evr_all.shape)
+#+end_src
+
+#+RESULTS:
+: (3, 3319) (3,)
+
+#+begin_src ipython
+n_splits = 10
+n_comp = 3
+X_cv, y_cv, w_cv, evr_cv = cross_val_avg_pca(X, y, n_splits, n_comp, epoch, condition)
+#+end_src
+
+#+RESULTS:
+: 100% 10/10 [02:11<00:00, 13.16s/it]
+
+#+begin_src ipython
+print(X_cv.shape, y_cv.shape, w_cv.shape, evr_cv.shape)
+#+end_src
+
+#+RESULTS:
+: (1317, 84, 3) (1317, 16) (10, 3, 3319) (10, 3)
+
+#+begin_src ipython
+X_pca = np.array(X_cv, dtype=float)
+X = np.swapaxes(X_pca, 1, 2)
+y = y_cv
+w = np.mean(w_cv, 0, dtype=float) * 100
+# w = w_all * 100
+print(X.shape, y.shape, w.shape)
+#+end_src
+
+#+RESULTS:
+: (1317, 3, 84) (1317, 16) (3, 3319)
+
+** Trajectories
+
+#+begin_src ipython
+n_comp = 3
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height),)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(4):
+    mask = (y.odor_pair==i)
+    X_sel = X[mask]
+
+    X_avg = np.mean(X_sel, 0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = np.std(X_sel, 0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_106.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = y.tasks.unique()
+xtime = np.linspace(0, 14, 84)
+
+for i in range(len(y.tasks.unique())):
+    mask = (y.tasks==y.tasks.unique()[i]) # & (y.odor_pair==3)
+    X_sel = X[mask]
+
+    X_avg = X_sel.mean(0)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_107.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['A', 'B']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.sample_odor.values==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_108.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['unpair', 'pair']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.pair==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_109.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#4daf4a"]
+
+pair = ['nolick', 'lick']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.choice==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_110.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#4daf4a"]
+
+pair = ['C', 'D']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.test_odor==i)
+    X_sel = X[mask]
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_111.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    X_avg = (X[(y.odor_pair==i)].mean(0))[:, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_112.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Embeddings
+*** spatial filter
+
+#+begin_src ipython
+z_lim =5
+size = 0.1
+
+import cmocean
+cmap=cmocean.cm.phase
+
+theta = np.arctan2(w[0], w[1]) * 180 / np.pi
+idx = np.argsort(theta)
+
+theta_norm = (theta+ 360) % (360)
+
+counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
+
+bin_centers = 0.5*(bins[:-1] + bins[1:])
+colors = [cmap(center/(360)) for center in bin_centers]
+
+for patch, color in zip(patches, colors):
+    patch.set_facecolor(color)
+
+plt.xlabel('Neuron Loc (°)')
+plt.ylabel('Density')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_114.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+for k in range(n_comp):
+    sc = ax[k].scatter(theta[idx], w[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap)
+    ax[k].plot(theta[idx], gaussian_filter1d(w[k][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+ax[-1].set_ylim([-z_lim/2, z_lim/2])
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_115.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
+
+ax[0].scatter(w[0][idx], w[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[0].plot(gaussian_filter1d(w[0][idx], int(size*w.shape[1]), mode='wrap'), gaussian_filter1d(w[1][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].scatter(w[0][idx], w[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[1].plot(gaussian_filter1d(w[0][idx], int(size*w.shape[1]), mode='wrap'), gaussian_filter1d(w[2][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+sc = ax[2].scatter(w[1][idx], w[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[2].plot(gaussian_filter1d(w[1][idx], int(size*w.shape[1]), mode='wrap'), gaussian_filter1d(w[2][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_116.png]]
+
+#+begin_src ipython
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.plot(gaussian_filter1d(w[0][idx], int(size*w.shape[1]), mode='wrap'),
+           gaussian_filter1d(w[1][idx], int(size*w.shape[1]), mode='wrap'),
+           gaussian_filter1d(w[2][idx], int(size*w.shape[1]), mode='wrap'),
+           rasterized=1, color='k')
+
+
+sc = ax.scatter(w[0][idx],
+                w[1][idx],
+                w[2][idx],
+                c=theta_norm[idx], cmap=cmap,
+                rasterized=1, alpha=0.5)
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim, z_lim])
+ax.set_zlim([-z_lim/10, z_lim/10])
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_117.png]]
+
+*** theta space
+
+#+begin_src ipython
+nbins = 32
+theta_bins = np.linspace(0, 360, nbins+1)
+theta_digitized = np.digitize(theta_norm, theta_bins) - 1
+
+# For each bin, average w[0], w[1], and w[2]
+w_binned = np.zeros((3, nbins))
+for i in range(nbins):
+    mask = theta_digitized == i
+    for j in range(3):
+        w_binned[j, i] = np.mean(w[j][mask]) if np.any(mask) else np.nan
+
+w_smooth = gaussian_filter1d(w_binned, sigma=3, axis=1, mode='wrap')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot * 180 / np.pi, w_smooth[i], lw=2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_ylabel('Weights PC %d' % (i+1))
+    ax.set_xlabel('Neuron Loc (°)')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_119.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+# Compute bin centers in degrees and radians
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)  # for polar plots
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width), sharey=1)
+
+# PC1 vs PC2
+axs[0].plot(w_smooth[0], w_smooth[1], 'k-')
+axs[0].set_xlabel('PC 1')
+axs[0].set_ylabel('PC 2')
+
+# PC1 vs PC3
+axs[1].plot(w_smooth[0], w_smooth[2], 'k-')
+axs[1].set_xlabel('PC 1')
+axs[1].set_ylabel('PC 3')
+
+# PC2 vs PC3
+axs[2].plot(w_smooth[1], w_smooth[2], 'k-')
+axs[2].set_xlabel('PC 2')
+axs[2].set_ylabel('PC 3')
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_120.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(1, 3, subplot_kw={'polar': True}, figsize=(n_comp*width, width))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot, w_smooth[i], lw=2)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_121.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Mouse average trajectories
+
+#+begin_src ipython
+traj_mouse = []
+for i_mouse, mouse in enumerate(options['mice']):
+    idx = (y.mouse==mouse)
+    X_idx = X[idx]
+    y_idx = y[idx]
+
+    traj_ = []
+    for i in range(4):
+        mask = (y_idx.odor_pair==i)
+        traj_.append(X_idx[mask].mean(0))
+
+    traj_mouse.append(traj_)
+
+traj_mouse = np.array(traj_mouse)
+print(traj_mouse.shape)
+#+end_src
+
+#+RESULTS:
+: (9, 4, 3, 84)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height),)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 84)
+
+traj_mean = traj_mouse.mean(0)
+traj_sem = traj_mouse.std(0) / np.sqrt(traj_mouse.shape[0])
+
+for i in range(4):
+    for k in range(n_comp):
+        y_avg = traj_mean[i, k]
+        y_sem = traj_sem[i, k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+ax[-1].legend(fontsize=12, frameon=0, loc='best')
+ax[-1].text(0.15, 1.0, "n=9", transform=ax[-1].transAxes, ha='right', va='top', fontsize=18)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_124.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    X_avg = traj_mean[i, :, :66]
+    X_sem = traj_sem[i, :, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].fill_between(X_avg[0], X_avg[1] - X_sem[1], X_avg[1] + X_sem[1], color=color[i], alpha=0.2)
+
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].fill_between(X_avg[0], X_avg[2] - X_sem[2], X_avg[2] + X_sem[2], color=color[i], alpha=0.2)
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].fill_between(X_avg[1], X_avg[2] - X_sem[2], X_avg[2] + X_sem[2], color=color[i], alpha=0.2)
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+ax[-1].legend(fontsize=12, frameon=0, loc='best')
+ax[-1].text(0.15, 1.1, "n=9", transform=ax[-1].transAxes, ha='right', va='top', fontsize=18)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_125.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Speed
+
+#+begin_src ipython
+idx = y_cv.tasks=='DPA'
+y_ = y_cv[idx]
+speed = np.abs(np.diff(X[idx], axis=-1))
+print(speed.shape)
+#+end_src
+
+#+RESULTS:
+: (700, 3, 83)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 83)
+
+for i in range(4):
+    mask = (y_.odor_pair==i)
+    X_sel = speed[mask]          # Subselect rows
+    # X_sel = np.abs(np.diff(X_sel, axis=-1))
+
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_130.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+xtime = np.linspace(0, 14, 83)
+
+X_avg = speed.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+X_sem = speed.std(0) / np.sqrt(speed.shape[0])  # SEM
+
+for k in range(n_comp):
+    y_avg = X_avg[k]
+    y_sem = X_sem[k]
+    ax.plot(xtime, y_avg, color=color[k], label='PC %d' %k)
+    ax.fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[k], alpha=0.2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Speed')
+    add_vlines(ax, if_dpa=0)
+
+    ax.legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_131.png]]
+
+#+begin_src ipython
+x = X[idx, 0, :]  # shape (trials, time)
+y = X[idx, 1, :]
+
+# Differences along time axis
+dx = np.diff(x, axis=-1)
+dy = np.diff(y, axis=-1)
+
+# Paired x, y for time intervals
+x_mid = x[:, :-1]
+y_mid = y[:, :-1]
+
+# Radial distance from origin
+radius = np.sqrt(x_mid**2 + y_mid**2)
+
+# Radial speed (project velocity onto unit vector from origin)
+radial_speed = (x_mid * dx + y_mid * dy) / radius
+
+# Angle for each time point
+angles = np.arctan2(y, x)
+
+angles_unwrapped = np.unwrap(angles, axis=-1)
+angular_speed = np.diff(angles_unwrapped, axis=-1)  # in radians per time step
+print(radial_speed.shape, angular_speed.shape)
+#+end_src
+
+#+RESULTS:
+: (700, 83) (700, 83)
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 83)
+
+for i in range(4):
+    mask = (y_.odor_pair==i)
+    X_sel = radial_speed[mask]
+
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    ax.plot(xtime, gaussian_filter1d(X_avg, sigma=1), color=color[i], label=pair[i])
+    # ax.fill_between(xtime, X_avg-X_sem, X_avg+X_sem, color=color[i], alpha=0.2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Radial')
+    add_vlines(ax, if_dpa=1)
+
+    ax.legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_133.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 83)
+
+for i in range(4):
+    mask = (y_.odor_pair==i)
+    X_sel = angular_speed[mask]
+
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    ax.plot(xtime, gaussian_filter1d(X_avg, sigma=5), color=color[i], label=pair[i])
+    # ax.fill_between(xtime, X_avg-X_sem, X_avg+X_sem, color=color[i], alpha=0.2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_xlabel('Time')
+
+    add_vlines(ax, if_dpa=1)
+
+    ax.legend(fontsize=12, frameon=0, loc='best')
+ax.set_ylabel('Angular')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_134.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 83)
+
+X_sel = radial_speed
+X_avg = X_sel.mean(0)
+X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
+
+ax.plot(xtime, gaussian_filter1d(X_avg, sigma=1), color=color[0], label='radial')
+
+X_sel = angular_speed
+X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+ax.plot(xtime, gaussian_filter1d(X_avg, sigma=1), color=color[2], label='angular')
+
+# ax.fill_between(xtime, X_avg-X_sem, X_avg+X_sem, color=color[i], alpha=0.2)
+ax.axhline(0, ls='--', color='k')
+ax.set_xlabel('Time')
+ax.set_ylabel('Speed')
+add_vlines(ax, if_dpa=1)
+
+ax.legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_135.png]]
+
+** Flow
+
+#+begin_src ipython
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+
+def polar_velocities(x, y, sigma=1):
+    """
+    x, y: (n_traj, n_points)
+    sigma: gaussian smoothing in time (in points)
+    Returns:
+      dr_s, dtheta_s: (n_traj, n_points): smoothed radial and angular velocities
+      r, theta: positions at each point, for later conversion
+    """
+    # Polar coords
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+
+    # Derivatives
+    dr = np.gradient(r, axis=1)
+    dtheta = np.gradient(theta, axis=1)
+
+    # Handle angle wrapping
+    dtheta = np.unwrap(theta, axis=1)
+    dtheta = np.gradient(dtheta, axis=1)
+
+    # Smoothing
+    dr_s     = gaussian_filter(dr, sigma=sigma)
+    dtheta_s = gaussian_filter(dtheta, sigma=sigma)
+
+    return dr_s, dtheta_s, r, theta
+
+def pol2cart(dr, dtheta, r, theta):
+    """
+    Converts smoothed polar velocities to Cartesian velocities.
+    All arrays shape: (n_traj, n_points)
+    """
+    u = dr * np.cos(theta) - r * dtheta * np.sin(theta)
+    v = dr * np.sin(theta) + r * dtheta * np.cos(theta)
+    return u, v
+
+def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
+    """
+    Interpolate velocity field to a regular grid.
+    Inputs: x,y,u,v all (n_samples,) or (n_traj, n_points) -- flatten them first.
+    Returns: xi, yi, ui, vi: all (grid_size, grid_size) arrays.
+    """
+    x_flat = x.flatten()
+    y_flat = y.flatten()
+    u_flat = u.flatten()
+    v_flat = v.flatten()
+
+    # xi, yi = np.meshgrid(
+    #     np.linspace(np.min(x_flat), np.max(x_flat), grid_size),
+    #     np.linspace(np.min(y_flat), np.max(y_flat), grid_size),
+    # )
+
+    x_min, x_max = np.min(x_flat)-1, np.max(x_flat)+1
+    y_min, y_max = np.min(y_flat)-1, np.max(y_flat)+1
+
+    if z_lim is 0:
+        z_min = np.min((x_min, y_min))
+        z_max = np.min((x_max, y_max))
+    else:
+        z_min = -z_lim
+        z_max = z_lim
+
+    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
+                         np.linspace(z_min, z_max, grid_size))
+
+
+    ui = griddata((x_flat, y_flat), u_flat, (xi, yi), method=method, fill_value=np.nan)
+    vi = griddata((x_flat, y_flat), v_flat, (xi, yi), method=method, fill_value=np.nan)
+
+    # Fill nans with nearest
+    mask = np.isnan(ui)
+    if np.any(mask):
+        ui[mask] = griddata((x_flat, y_flat), u_flat, (xi, yi), method='nearest')[mask]
+        vi[mask] = griddata((x_flat, y_flat), v_flat, (xi, yi), method='nearest')[mask]
+
+    return xi, yi, ui, vi
+
+def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
+    speed = np.sqrt(ui**2 + vi**2)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(5,5))
+    # Normalize for coloring
+    import matplotlib as mpl
+    vmin, vmax = np.nanpercentile(speed, [5, 95])
+    norm = mpl.colors.Normalize(vmin, vmax)
+    strm = ax.streamplot(xi, yi, ui, vi, density=density, color=speed, cmap='coolwarm', norm=norm)
+    if show_cbar:
+        plt.colorbar(strm.lines, ax=ax, label='Speed')
+    ax.set_aspect('equal')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    return ax
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+n_comp = 3
+i_mouse = 3
+print(options['mice'][i_mouse])
+# X = np.swapaxes(pca_list[i_mouse], 1, 2)
+# y_labels = y_trials[i_mouse]
+# print(X.shape, y.shape)
+#+end_src
+
+#+RESULTS:
+: JawsM15
+
+#+begin_src ipython
+idx = (y_cv.tasks=='DPA') & (y_cv.mouse==options['mice'][i_mouse])
+
+X_delay = X[idx].copy()
+X_delay = X_delay[:, :2, options['bins_DELAY']]
+
+x = X_delay[:,0,:]
+y = X_delay[:,1,:]
+
+# 1. Polar smoothing
+dr_s, dtheta_s, r, theta = polar_velocities(x, y, sigma=3)
+
+# 2. Map back to Cartesian velocities
+u, v = pol2cart(dr_s, dtheta_s, r, theta)
+
+# 3. Interpolate to grid
+xi, yi, ui, vi = create_field(x, y, u, v, grid_size=12, method='linear', z_lim=10)
+
+# 4. Plot
+fig, ax = plt.subplots(figsize=(width, width))
+plot_field(xi, yi, ui, vi, ax=ax)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_136.png]]
+
+#+begin_src ipython
+idx = (y_cv.tasks=='DPA') & (y_cv.test_odor==0) # & (y_cv.mouse==options['mice'][i_mouse])
+
+X_delay = X[idx].copy()
+X_delay = X_delay[:, :2, options['bins_TEST']]
+
+x = X_delay[:,0,:]
+y = X_delay[:,1,:]
+
+# 1. Polar smoothing
+dr_s, dtheta_s, r, theta = polar_velocities(x, y, sigma=5)
+
+# 2. Map back to Cartesian velocities
+u, v = pol2cart(dr_s, dtheta_s, r, theta)
+
+# 3. Interpolate to grid
+xi, yi, ui, vi = create_field(x, y, u, v, grid_size=16, method='linear', z_lim=3)
+
+# 4. Plot
+fig, ax = plt.subplots(figsize=(width, width))
+plot_field(xi, yi, ui, vi, ax=ax)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_137.png]]
+
+#+begin_src ipython
+idx = (y_cv.tasks=='DPA') & (y_cv.sample_odor==0) #& (y_cv.mouse==options['mice'][i_mouse])
+
+X_delay = X[idx].copy()
+X_delay = X_delay[:, :2, options['bins_STIM']]
+
+x = X_delay[:,0,:]
+y = X_delay[:,1,:]
+
+# 1. Polar smoothing
+dr_s, dtheta_s, r, theta = polar_velocities(x, y, sigma=5)
+
+# 2. Map back to Cartesian velocities
+u, v = pol2cart(dr_s, dtheta_s, r, theta)
+
+# 3. Interpolate to grid
+xi, yi, ui, vi = create_field(x, y, u, v, grid_size=12, method='linear', z_lim=6)
+
+# 4. Plot
+fig, ax = plt.subplots(figsize=(width, width))
+plot_field(xi, yi, ui, vi, ax=ax)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_138.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+
+* Cross validated PCA
+** Model
+
+#+begin_src ipython
+from sklearn.model_selection import KFold
+from sklearn.decomposition import PCA
+
+def cross_val_avg_pca(X, y, n_splits, n_comp, epoch, condition):
+    kf = KFold(n_splits, shuffle=True)
+    pca = PCA(n_components=n_comp)
+    scaler = StandardScaler(axis=0)
+
+    X_folds, y_folds = [], []
+    w_folds, evr_folds = [], []
+    for train_idx, test_idx in kf.split(X):
+        X_train, X_test = X[train_idx], X[test_idx]
+
+        X_train = scaler.fit_transform(X_train)
+        X_avg = cv_avg_cond(X_train, y.iloc[train_idx].copy(), condition)
+
+        X_flat = X_avg[..., epoch].transpose(0, 2, 1).reshape(-1, X_avg.shape[1])
+
+        X_mean = np.nanmean(X_flat, 0, keepdims=1)
+        X_cent = (X_flat - X_mean)
+
+        pca.fit(X_cent)
+        w_folds.append(pca.components_)
+        evr_folds.append(pca.explained_variance_ratio_)
+
+        X_test = scaler.transform(X_test)
+
+        X_flat = X_test.transpose(0, 2, 1).reshape(-1, X_test.shape[1])
+        X_cent = (X_flat - X_mean)
+
+        X_pca = pca.transform(X_cent).reshape(X_test.shape[0], X_test.shape[-1], -1)
+
+        X_folds.append(X_pca[0])
+        y_folds.append(y_folds.append(y.iloc[test_idx].copy()))
+
+    X_folds = np.array(X_folds)
+    y_folds = pd.concat(y_folds)
+
+    w_folds = np.array(w_folds)
+    evr_folds = np.array(evr_folds)
+
+    return X_folds, y_folds, w_folds, evr_folds
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import numpy as np
+import itertools
+from functools import reduce
+import operator
+
+def cv_avg_cond(X, y, condition='odor_pair'):
+    # Ensure condition is a list
+    if isinstance(condition, str):
+        condition = [condition]
+
+    # Find unique values for each condition
+    unique_vals = [y[c].unique() for c in condition]
+
+    X_avg = []
+    combos = list(itertools.product(*unique_vals))
+    for combo in combos:
+        # Build boolean mask for all conditions
+        idx = reduce(operator.and_, [(y[c]==v) for c,v in zip(condition, combo)])
+        if idx.any():
+            X_avg.append(np.mean(X[idx], axis=0))
+
+    return np.array(X_avg)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
+from scipy.signal import detrend
+
+options['tasks'] = ['DPA']
+options['task'] = 'DPA'
+options['trials'] = ''
+
+options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+# options['mice'] = ['JawsM01', 'JawsM06']
+# options['mice'] = ['JawsM15']
+
+options['epochs'] = ['POST_GNG']
+# options['epochs'] = ['TASK']
+epoch = options['bins_' + options['epochs'][0]]
+
+condition = ['sample_odor', 'choice']
+condition = 'odor_pair'
+
+w_mouse, evr_mouse = [], []
+X_mouse, y_mouse = [], []
+
+for mouse in options['mice']:
+    options['mouse'] = mouse
+    options = set_options(**options)
+    print(mouse)
+
+    w_day, evr_day = [], []
+    X_day, y_day = [], []
+    for day in options['days']:
+        options['day'] = day
+
+        X_days, y_days = get_X_y_days(**options)
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        print(X.shape, y.shape)
+
+        X_cv, y_cv, w_cv, evr_cv = cross_val_avg_pca(X, y, X.shape[0], 5, epoch, condition)
+        y_cv['learning'] = day
+
+        X_day.append(X_cv)
+        y_day.append(y_cv)
+
+        w_day.append(w_cv)
+        evr_day.append(evr_cv)
+
+    X_day = np.concatenate(X_day, axis=0)
+    w_day = np.concatenate(w_day, axis=0)
+    evr_day = np.concatenate(evr_day, axis=0)
+
+    print(X_day.shape, w_day.shape, evr_day.shape)
+
+    X_mouse.append(X_day)
+
+    y_day = pd.concat(y_day)
+    y_day['mouse'] = mouse
+    y_mouse.append(y_day)
+
+    w_mouse.append(w_day)
+    evr_mouse.append(evr_day)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+JawsM01
+first [1 2 3] [1. 0.]
+(96, 184, 84) (96, 14)
+last [4] [1. 0.]
+(32, 184, 84) (32, 14)
+(128, 84, 5) (128, 5, 184) (128, 5)
+JawsM06
+first [1 2 3] [1. 0.]
+(96, 201, 84) (96, 14)
+last [4 5 6] [1. 0.]
+(96, 201, 84) (96, 14)
+(192, 84, 5) (192, 5, 201) (192, 5)
+JawsM12
+first [1 2 3] [1. 0.]
+(96, 423, 84) (96, 14)
+last [4 5] [1. 0.]
+(64, 423, 84) (64, 14)
+(160, 84, 5) (160, 5, 423) (160, 5)
+JawsM15
+first [1. 2. 3.] [0. 1.]
+(96, 693, 84) (96, 15)
+last [4. 5. 6.] [1. 0.]
+(96, 693, 84) (96, 15)
+(192, 84, 5) (192, 5, 693) (192, 5)
+JawsM18
+first [1. 2. 3.] [1. 0.]
+(96, 444, 84) (96, 15)
+last [4. 5. 6.] [1. 0.]
+(96, 444, 84) (96, 15)
+(192, 84, 5) (192, 5, 444) (192, 5)
+ChRM04
+first [1. 2. 3.] [1. 0.]
+(96, 668, 84) (96, 15)
+last [4. 5. 6.] [1. 0.]
+(96, 668, 84) (96, 15)
+(192, 84, 5) (192, 5, 668) (192, 5)
+ChRM23
+first [1 2 3] [1. 0.]
+(96, 232, 84) (96, 14)
+last [4 5] [1. 0.]
+(64, 232, 84) (64, 14)
+(160, 84, 5) (160, 5, 232) (160, 5)
+ACCM03
+first [1. 2. 3.] [1. 0.]
+(192, 361, 84) (192, 15)
+last [4. 5.] [1. 0.]
+(128, 361, 84) (128, 15)
+(320, 84, 5) (320, 5, 361) (320, 5)
+ACCM04
+first [1. 2. 3.] [1. 0.]
+(192, 113, 84) (192, 15)
+last [4. 5.] [1. 0.]
+(128, 113, 84) (128, 15)
+(320, 84, 5) (320, 5, 113) (320, 5)
+#+end_example
+
+#+begin_src ipython
+X_mouse = np.array(X_mouse, dtype=object)
+y_mouse = pd.concat(y_mouse)
+print(X_mouse.shape, y_mouse.shape)
+
+w_mouse = np.array(w_mouse, dtype=object)
+evr_mouse = np.array(evr_mouse, dtype=object)
+print(w_mouse.shape, evr_mouse.shape)
+#+end_src
+
+#+RESULTS:
+: (9,) (1856, 16)
+: (9,) (9,)
+
+#+begin_src ipython
+pkl_save(X_mouse, 'traj_cv_dpa', path="../data/pca")
+pkl_save(y_mouse, 'y_cv_dpa', path="../data/pca")
+pkl_save(w_mouse, 'w_cv_dpa', path="../data/pca")
+pkl_save(evr_mouse, 'evr_cv_dpa', path="../data/pca")
+#+end_src
+
+#+RESULTS:
+: saving to ../data/pca/traj_cv_dpa.pkl
+: saving to ../data/pca/y_cv_dpa.pkl
+: saving to ../data/pca/w_cv_dpa.pkl
+: saving to ../data/pca/evr_cv_dpa.pkl
+
+#+begin_src ipython
+X = np.concatenate(X_mouse, 0)
+print(X_mouse[0].shape, X_mouse[1].shape, X_all.shape)
+print(w_mouse[0].shape, w_mouse[1].shape, X_all.shape)
+y = y_mouse
+print(X.shape, y.shape, w.shape)
+#+end_src
+
+#+RESULTS:
+: (128, 84, 5) (192, 84, 5) (5568, 84, 5)
+: (128, 5, 184) (192, 5, 201) (5568, 84, 5)
+: (1856, 84, 5) (1856, 16) (3319, 5)
+
+#+begin_src ipython
+i_mouse = 0
+i_day = 1
+
+X = X_mouse[i_mouse]
+w = w_mouse[i_mouse]
+
+y = y_mouse[(y_mouse.mouse==options['mice'][i_mouse])]
+print(X.shape, y.shape, w.shape)
+#+end_src
+
+#+RESULTS:
+: (128, 84, 5) (128, 16) (128, 5, 184)
+
+#+begin_src ipython
+idx = (y.learning==options['days'][i_day])
+print(idx.sum())
+
+y = y[idx]
+
+X_pca = np.array(X[idx], dtype=float)
+X = np.swapaxes(X_pca, 1, 2)
+
+# w = w[idx]
+# w = np.mean(w_mouse[i_mouse][idx], 0, dtype=float) * 100
+
+print(X.shape, y.shape, w.shape, y.tasks.unique(), y.response.unique())
+#+end_src
+
+#+RESULTS:
+: 32
+: (32, 5, 84) (32, 16) (128, 5, 184) ['DPA'] ['correct_hit' 'correct_rej' 'incorrect_fa']
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Trajectories
+
+#+begin_src ipython
+n_comp = 3
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height),)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(4):
+    mask = (y.odor_pair==i)
+    X_sel = X[mask]
+
+    X_avg = np.mean(X_sel, 0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = np.std(X_sel, 0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_72.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = y.tasks.unique()
+xtime = np.linspace(0, 14, 84)
+
+for i in range(len(y.tasks.unique())):
+    mask = (y.tasks==y.tasks.unique()[i]) # & (y.odor_pair==3)
+    X_sel = X[mask]
+
+    X_avg = X_sel.mean(0)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_73.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['A', 'B']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.sample_odor.values==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_74.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['unpair', 'pair']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.pair==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_75.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#4daf4a"]
+
+pair = ['nolick', 'lick']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.choice==i)
+    X_sel = X[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_76.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#4daf4a", "#ffae19"]
+
+pair = ['C', 'D']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y.test_odor==i)
+    X_sel = X[mask]
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_77.png]]
+
+#+begin_src ipython
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    X_avg = (X[(y.odor_pair==i)].mean(0))[:, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_78.png]]
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+** Embeddings
+
+#+begin_src ipython
+z_lim=5
+import cmocean
+cmap=cmocean.cm.phase
+
+theta = np.arctan2(w[0], w[1]) * 180 / np.pi
+idx = np.argsort(theta)
+
+theta_norm = (theta+ 360) % (360)
+
+counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
+
+bin_centers = 0.5*(bins[:-1] + bins[1:])
+colors = [cmap(center/(360)) for center in bin_centers]
+
+for patch, color in zip(patches, colors):
+    patch.set_facecolor(color)
+
+plt.xlabel('Neuron Loc (°)')
+plt.ylabel('Density')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_77.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+size = 0.1
+
+for k in range(n_comp):
+    sc = ax[k].scatter(theta[idx], w[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap)
+    ax[k].plot(theta[idx], gaussian_filter1d(w[k][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+ax[-1].set_ylim([-z_lim/2, z_lim/2])
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_78.png]]
+
+#+begin_src ipython
+nbins = 30
+theta_bins = np.linspace(0, 360, nbins+1)
+theta_digitized = np.digitize(theta_norm, theta_bins) - 1
+
+# For each bin, average w[0], w[1], and w[2]
+w_binned = np.zeros((3, nbins))
+for i in range(nbins):
+    mask = theta_digitized == i
+    for j in range(3):
+        w_binned[j, i] = np.mean(w[j][mask]) if np.any(mask) else np.nan
+
+w_smooth = gaussian_filter1d(w_binned, sigma=3, axis=1, mode='wrap')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot * 180 / np.pi, w_smooth[i], lw=2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_ylabel('Weights PC %d' % (i+1))
+    ax.set_xlabel('Neuron Loc (°)')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_80.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+# Compute bin centers in degrees and radians
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)  # for polar plots
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width), sharey=1)
+
+# PC1 vs PC2
+axs[0].plot(w_smooth[0], w_smooth[1], 'k-')
+axs[0].set_xlabel('PC 1')
+axs[0].set_ylabel('PC 2')
+
+# PC1 vs PC3
+axs[1].plot(w_smooth[0], w_smooth[2], 'k-')
+axs[1].set_xlabel('PC 1')
+axs[1].set_ylabel('PC 3')
+
+# PC2 vs PC3
+axs[2].plot(w_smooth[1], w_smooth[2], 'k-')
+axs[2].set_xlabel('PC 2')
+axs[2].set_ylabel('PC 3')
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_81.png]]
+
+#+begin_src ipython
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(1, 3, subplot_kw={'polar': True}, figsize=(n_comp*width, width))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot, w_smooth[i], lw=2)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_82.png]]
+
+#+begin_src ipython
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
+
+ax[0].scatter(w[0][idx], w[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[0].plot(gaussian_filter1d(w[0][idx], int(size*w.shape[1]), mode='wrap'), gaussian_filter1d(w[1][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].scatter(w[0][idx], w[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[1].plot(gaussian_filter1d(w[0][idx], int(size*w.shape[1]), mode='wrap'), gaussian_filter1d(w[2][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+sc = ax[2].scatter(w[1][idx], w[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5)
+ax[2].plot(gaussian_filter1d(w[1][idx], int(size*w.shape[1]), mode='wrap'), gaussian_filter1d(w[2][idx], int(size*w.shape[1]), mode='wrap'), 'k')
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_83.png]]
+
+#+begin_src ipython
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.plot(gaussian_filter1d(w[0][idx], int(size*w.shape[1]), mode='wrap'),
+           gaussian_filter1d(w[1][idx], int(size*w.shape[1]), mode='wrap'),
+           gaussian_filter1d(w[2][idx], int(size*w.shape[1]), mode='wrap'),
+           rasterized=1, color='k')
+
+
+sc = ax.scatter(w[0][idx],
+                w[1][idx],
+                w[2][idx],
+                c=theta_norm[idx], cmap=cmap,
+                rasterized=1, alpha=0.5)
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim, z_lim])
+ax.set_zlim([-z_lim/10, z_lim/10])
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_84.png]]
+
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+
+* Bootstrapped PCA
+
+
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
+from scipy.signal import detrend
+
+options['tasks'] = ['all']
+options['task'] = 'all'
+
+options['mice'] = ['JawsM15']
+options['epochs'] = ['POST_GNG']
+epoch = options['bins_' + options['epochs'][0]]
+
+scaler = StandardScaler(axis=0)
+
+X_mouse, y_mouse = [], []
+for mouse in options['mice']:
+    options['mouse'] = mouse
+    options = set_options(**options)
+    print(mouse)
+
+    X_day, y_day = [], []
+    for day in options['days']:
+        options['day'] = day
+
+        X_days, y_days = get_X_y_days(**options)
+        X, y = get_X_y_S1_S2(X_days, y_days, **options)
+        print(X.shape, y.shape)
+
+        X_pca, y_pca = bootstrap_avg_pca(X, y, 100, 5, epoch, scaler)
+        y_pca['learning'] = day
+
+        X_day.append(X_pca)
+        y_day.append(y_pca)
+
+
+    X_mouse.append(X_day)
+    y_mouse.append(pd.concat(y_day))
+
+X_mouse = np.array(X_mouse)
+y_mouse = pd.concat(y_mouse)
+print(X_mouse.shape, y_mouse.shape)
+#+end_src
+
+#+RESULTS:
+: JawsM15
+: first [1. 2. 3.] [1. 0.]
+: (288, 693, 84) (288, 15)
+: last [4. 5. 6.] [1. 0.]
+: (288, 693, 84) (288, 15)
+
+#+begin_src ipython
+
+#+end_src
+
+#+RESULTS:
+: e61d978f-2d1c-47e3-89d5-7c1885f54f50

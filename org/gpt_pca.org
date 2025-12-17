@@ -2,7 +2,7 @@
 :GPTEL_MODEL: gpt-4.1
 :GPTEL_BACKEND: ChatGPT
 :GPTEL_SYSTEM: You are a large language model living in Emacs and a helpful assistant. Respond concisely.
-:GPTEL_BOUNDS: ((response (658 3332) (3581 5759) (5766 7241) (7288 9308) (9319 10772) (10796 12260) (12305 13724) (13757 14702) (14730 15920) (15955 18992) (19092 20369) (20377 21533) (21590 23342) (23505 25604)))
+:GPTEL_BOUNDS: ((response (756 3436) (3685 5854) (5860 7340) (7482 8558) (8680 10783) (10832 12606) (12669 15162) (15170 16993) (17040 19430) (21403 25460) (25511 60449) (60459 61912) (61936 63400) (63445 64864) (64897 65842) (65870 67060) (67095 70132) (70232 71509) (71517 72673) (72730 74482) (74645 76744)))
 :END:
 
 *** I do trial average pca on some neural data X (trials x neurons x time) where I have 4 different conditions. I have 10 mice with quite different number of neurons. How can I improve PCA for small number of neurons? How can I plot a mouse average of the trajectories?
@@ -10,22 +10,22 @@
 **PCA with small neuron numbers:*
 PCA performance depends on both the number of samples (trials) and variables (neurons). With few neurons, your components may not capture meaningful structure and results may be noisier. Here are some strategies:
 
-*** 1. *Pooling Across Mice?*
+**** 1. *Pooling Across Mice?*
 If your goal is population-level structure, you might:
 - Pool neurons across mice (concatenate them), then PCA on all neurons. /But/ you lose mouse-specific information and have to deal with neuron sampling variability.
 - Subsample equal neuron numbers per mouse, or use only common neuron subpopulations.
 
-*** 2. *Regularized or Sparse PCA*
+**** 2. *Regularized or Sparse PCA*
 These methods can help when variables are few/noisy:
 - *Sparse PCA*: Encourages components to use only a few neurons, enhancing interpretability.
 - *Probabilistic PCA:* Imposes a probabilistic model; can improve robustness.
 - *Factor Analysis:* Similar, but explicitly models noise.
 
-*** 3. *Averaging Across Trials / Bootstrapping*
+**** 3. *Averaging Across Trials / Bootstrapping*
 - /Average trials within each condition per mouse/ for a denoised input (which it seems you already do).
 - /Bootstrap neurons/ if possible, to estimate variability.
 
-** Plotting Mouse-Averaged Trajectories
+**** Plotting Mouse-Averaged Trajectories
 
 1. *Run PCA Per Mouse:*
    Each mouse: (Conditions × Time × Neurons) → Compute PCA, project condition-mean activity onto first few PCs.
@@ -54,7 +54,7 @@ sem_traj = scipy.stats.sem(proj_per_mouse, axis=0)
 # plot avg_traj ± sem_traj for each condition
 #+end_src
 
-*** *Summary*
+**** *Summary*
 - Use regularized/sparse PCA for small neuron cases.
 - Align or project mouse activity into common PC space before averaging/plotting.
 - Plot mean ± error across mice for each condition’s trajectory in PC1-PC2(-PC3) space.
@@ -74,27 +74,27 @@ A third PC showing an artifactual ramp commonly happens in neural population ana
 Here are some better approaches:
 ---
 
-*** 1. Control by Shuffling
+**** 1. Control by Shuffling
 - *Trial Shuffle:* Shuffle trial/condition labels and re-do PCA. Artifactual ramps will persist; true dynamics will disappear.
 - *Time Shift Shuffle:* Circularly shift activity traces per neuron independently, redo PCA. If ramp remains, it's not condition-specific.
 *If ramp is present in shuffles, and not in the main data, it's likely meaningful.*
 
-*** 2. Remove Ramping Component Explicitly
+**** 2. Remove Ramping Component Explicitly
 If you believe the 3rd PC is "global drift" (the same across all neurons and conditions):
 - Project original data onto first 2 PCs only (ignore PC3).
 - OR: After PCA, subtract mean activity (per trial or global) at each timepoint.
 - OR: Do "residualizing": regress out the ramping PC from the data, then rerun PCA.
 
-*** 3. Test for Condition-specificity
+**** 3. Test for Condition-specificity
 Does the ramp appear only in pooled data, or separately per condition?
 - If visible in all conditions, may be artifactual.
 - If contrasts with conditions, could be meaningful.
 
-*** 4. Visualize Loadings and Time Series
+**** 4. Visualize Loadings and Time Series
 - Plot the PC3 /loadings/ (per neuron): if uniformly positive across neurons, likely global drift.
 - Plot PC3 /scores/ (the trajectories): does it follow the mean activity or show trial-averaged structure?
 
-*** 5. Use Demixed/Targeted PCA
+**** 5. Use Demixed/Targeted PCA
 - /Demixed PCA (dPCA)*, /jPCA/, or Targeted PCA to isolate time-locked/condition-locked patterns from global drift or various confounds.
 
 ---
@@ -110,7 +110,7 @@ If you share a plot or code snippet I can advise more specifically!
 ***
 Great that pooling gives nice trajectories! If the third PC shows a "ramp" (monotonic increase) that you believe is an artifact (e.g., global drift, photobleaching, movement, etc.), there are a few ways to address this:
 
-*** 1. /Preprocess to Remove Global Trends/
+**** 1. /Preprocess to Remove Global Trends/
 
 - *Demean or Detrend Each Neuron:*
   Remove slow drifts by subtracting either the mean or a low-order polynomial (e.g., fit and subtract a linear trend) from each neuron’s activity timecourse before PCA.
@@ -120,49 +120,1366 @@ Great that pooling gives nice trajectories! If the third PC shows a "ramp" (mono
     #+end_src
 - *High-pass filter* the data along the time axis to remove slow ramps or drifts.
 
-*** 2. /Check Trial Averaging/
+**** 2. /Check Trial Averaging/
 - Sometimes trial averaging can introduce ramps if there is misalignment or trial-to-trial drift. Ensure data are well-aligned.
 
-*** 3. /Identify and Remove the Ramping PC/
+**** 3. /Identify and Remove the Ramping PC/
 - If the 3rd PC is a ramp, /you can simply ignore it in downstream analysis or plotting/ (use only PC1 and PC2).
 - Alternatively, /regress out/ the ramping PC from your data and repeat PCA on the residuals.
 
-*** 4. /Interpret Carefully/
+**** 4. /Interpret Carefully/
 - Sometimes a ramp in a PC reflects a feature of your experiment (e.g., anticipation, arousal, task dynamics). Double-check whether the ramp is truly artifactual.
 
-*** *Summary*
+**** *Summary*
 - Detrend each neuron before PCA
 - Consider high-pass filtering
 - Optionally: omit or regress out ramping PC
 
 If you want code to regress out a PC or detrend, let me know!
 
+
+*** The task is a delayed paired association task (sample + delay + test + response) and the third pc encodes the test stimulus identity.
+
+If the third PC encodes *test stimulus identity*, then it is likely a meaningful signal—not an artifact—even if its time course looks like a ramp:
+
+- In delayed tasks, it’s common for a PC to “ramp” at test, reflecting stimulus encoding or decision variable buildup.
+- If PC3 /separates trajectories by test stimulus/ during the test epoch (not just drifting up but showing condition-dependent differences), this validates its relevance.
+
+*What should you do?*
+- Do /not/ remove or detrend PC3 just because it ramps, if it meaningfully distinguishes conditions.
+- You can check loadings and scores: does PC3 correlate with stimulus/test identity across trials/conditions?
+- For plotting, highlight/test its allocation of variance specifically during the test period.
+
+*Summary:*
+A ramp-like PC can be entirely legitimate if it discriminates between task conditions. If so, do not remove or detrend it—embrace it as part of your neural dynamics!
+
+If you want advice on how to visualize stimulus separation along PC3, or statistical tests for condition differences, let me know!
+
+*** the ramp should not be there because animals cannot tell before test presentation which stimulus will be presented
+
+Thank you for clarifying. If the third PC "ramps up" before the test stimulus, but animals do /not/ have this information and it should be unpredictable, the ramp is likely artifactual (e.g. due to slow drift, temporal structure, global state changes, pooling artifacts, or similar).
+
+*** How to Deal with the Unexpected Ramp in PC3
+
+*1. Check Condition-Averaged Trajectories*
+Does the ramp in PC3 look the same for all conditions, or do they diverge only /after/ test stimulus onset?
+- If ramping is the same prior to test for all conditions: it’s likely a non-specific artifact.
+- If conditions diverge only after test onset, you may want to plot or interpret only post-test periods for PC3.
+
+*2. Remove the Artifactual Component*
+- /Method A: Ignore PC3 for epochs prior to test/: In plots, set PC3 to zero or mask it out before test onset.
+- /Method B: Subtract the Pre-Test Baseline/: For each trial/condition, subtract the average PC3 value during the pre-test epoch from the entire PC3 time-course. This will “flatten” PC3 before test.
+
+    #+begin_src python
+    # Py pseudocode
+    for tr in trials:
+        pre_test_baseline = PC3_scores[tr, pre_test_mask].mean()
+        PC3_scores[tr, :] -= pre_test_baseline
+    #+end_src
+
+- /Method C: Repeat PCA Using Only the Test Period/: Run PCA on neural data starting at test onset. This ensures PCs focus on variance related to the test, not before.
+
+*3. Shuffling as a Control*
+- Shuffle test stimulus labels randomly; if the ramp still appears before test, it's almost surely a non-informational artifact.
+
+*4. Demixed/Targeted PCA (Advanced)*
+- Use /demixed PCA (dPCA)/ or linear regression to focus on variance /uniquely explained/ by test stimulus identity, thus minimizing artifactual ramps tied to generic time structure.
+
+---
+
+*Summary:*
+- The ramp-like PC pre-test seems not to reflect informative neural coding.
+- Subtract or zero out pre-test activity in that PC, or restrict PCA to the test period.
+- Consider advanced demixing methods to better isolate real task variables.
+
+Let me know if you’d like sample code for any of these steps!
+
+*** should I remove some of the temporal info
+
+You generally don’t want to /blindly/ remove temporal information, since temporal structure is often a meaningful part of neural dynamics—especially in tasks with distinct epochs (sample, delay, test, response).
+
+*But* if you have evidence that certain temporal trends (especially pre-test ramps unrelated to task variables) are artifactual, you can:
+
+** Options
+1. *Baseline-correct PCs (not raw data):*
+   Subtract the PC value averaged during the pre-test epoch from its entire time course (as in previous message). This preserves within-epoch temporal structure while flattening the non-informative ramp.
+
+2. *High-pass Filter (use with caution):*
+   Apply a gentle temporal high-pass filter to remove very slow drifts, *after verifying that task-relevant dynamics (locked to cue/test/response) are NOT affected*.
+
+3. *PCA on Specific Epochs:*
+   Restrict PCA to a time window around the test or response. This focuses the PCs on task-evoked variance, not generic temporal drifts.
+
+4. *Trial-shuffle Control:*
+   Shuffle trial labels: if the ramp persists, it’s truly time-locked rather than stimulus-locked, confirming it’s safe to remove.
+
+** Guidance
+- *Don’t remove all temporal info*: Task-related ramps or trajectories are often meaningful!
+- *Remove/flatten only artifactual (non-condition-specific) trends*—e.g., baseline-correct pre-stimulus.
+- When publishing, report exactly how/when you manipulate temporal structure, so results are clear and reproducible.
+
+*Summary*:
+Careful baseline correction (per epoch or per trial) is preferable to wholesale temporal detrending. Don’t discard temporal information indiscriminately: use data-driven tests and controls to identify and address true artifacts.
+
+Let me know if you need code for any of these approaches!
+
+*** can i instead of shuffling remove the non trial avg pcs
+
+Yes, you can remove non-trial-averaged PCs to help isolate condition-locked activity. Here's how that works and some considerations:
+
+*** What does "removing non trial-averaged PCs" mean?
+- When you compute PCA on trial-averaged data (average across repetitions for each condition), the resulting PCs represent variance that is consistent across trials and locked to your task structure.
+- PCs derived from non-trial-averaged (single-trial) data may include both trial-locked (signal) and non-trial-locked (noise, drifts, artifacts) components.
+
+*** How to use this idea practically
+
+*Approach 1: PCA on trial-averaged data only*
+- Compute the condition mean trajectory (for each mouse or combined).
+- Run PCA on the trial-averaged data: PCs will reflect condition-locked population activity.
+- Use only these PCs and project all (or just averaged) data onto them.
+
+*Approach 2: Subtract non-trial-locked variance*
+- Compute PCA on the residual (single-trial minus trial average) to estimate "noise" or "unlocked" PCs.
+- Project those out of your single-trial data.
+- Retain only the variance explained by the trial-locked/condition-locked PCs.
+
+*Approach 3: Variance Decomposition Techniques*
+- Consider methods like demixed PCA (dPCA) or targeted dimensionality reduction, which explicitly separate trial-locked from trial-unlocked variance.
+
+*** *Pro/Con*
+- /Pro:/ This keeps only task-relevant temporal structure and may eliminate artifactual ramps that do not align with task epochs.
+- /Con:/ You will miss trial-to-trial variability and anything not exactly locked in time to trials (including sometimes slow modulations that may have biological relevance).
+
+---
+
+*** *Summary Table*
+
+| Approach                | Removes        | Keeps                | Useful when      |
+|-------------------------|---------------|----------------------|------------------|
+| Shuffle trial labels    | Non-task-locked structure | All task-locked  | Identify artifacts |
+| Remove non-trial PC     | Trial-unlocked variance   | Condition average | Focus only on trial-locked |
+| Detrend/high-pass       | Slow drifts    | ~All else            | Ramps/artifacts  |
+
+---
+
+*** *In Practice:*
+Yes, removing (or simply not using) the PCs found in single-trial but not present in trial-averaged PCA is a way to focus analysis on task-locked structure. For plotting, it's standard to report trajectories from PCA on trial-averaged data.
+
+Let me know if you want Python or Matlab code for this kind of projection!
+
+***
+
+Yes, you can guide PCA (or use related techniques) to extract a component that is time-locked to specific task events. Here are recommended approaches:
+
+---
+
+*1. Targeted Principal Component Analysis (Targeted PCA)*
+Specify a template (e.g., a vector that's 1 during your event of interest, 0 elsewhere) and find the neural activity projection(s) most similar to that template:
+- Correlate each neuron's (or full population's) timecourse with the template, then select or project using these weights.
+- This gives a "task-locked" projection.
+
+*2. Demixed PCA (dPCA)*
+dPCA [Kobak et al., 2016] is specifically designed to extract components that correspond to specific task variables (such as time, stimulus, decision, etc).
+- One dPCA dimension is often a “time” component, capturing activity purely locked to trial structure.
+- dPCA is available as open-source code ([dPCA in Python](https://github.com/machenslab/dPCA)).
+
+*3. Linear Regression/Encoding Model*
+- Regress each neuron's activity onto time/event-related regressors (e.g., boxcar functions for sample, delay, test).
+- The leading “temporal” regressor can serve as an explicit time-locked component.
+
+---
+
+*Summary Table*
+
+| Method        | Extracts time-locked PC? | Brief instructions                   |
+|---------------|:------------------------:|--------------------------------------|
+| Targeted PCA  | Yes                      | Use your event as template           |
+| dPCA          | Yes                      | Demixes variance by time/task vars   |
+| Regression    | Yes                      | Project onto/fit regressors of time  |
+
+---
+
+*Take-home:*
+/Standard PCA/ will mix all sources of variance; /dPCA/ or /targeted projections/ allow you to focus on time-locked structure.
+
+If you want example code for your data structure, let me know!
+
+*** how do i do targetted pca with my data
+
+
+Certainly! Here’s a concise guide for *Targeted PCA* (“template matching PCA”) with your data of shape =(trials, neurons, time)=:
+
+---
+
+*** *1. Define Your Time-Locked Template*
+
+Create a 1D vector, length = number of time points, that is:
+- 1 during the event of interest (e.g., test stimulus),
+- 0 elsewhere.
+
+Example (Python/pseudocode):
+#+begin_src python
+import numpy as np
+
+n_time = X.shape[2]
+template = np.zeros(n_time)
+template[test_onset_idx : test_offset_idx] = 1  # test period = ones
+template = template - template.mean()  # Zero-mean for correlation
+#+end_src
+
+---
+
+*** *2. Correlate Each Neuron’s Average Trajectory With the Template*
+
+First, compute the trial average (across trials and, if appropriate, conditions).
+
+#+begin_src python
+X_avg = np.mean(X, axis=0)   # shape: neurons x time
+#+end_src
+
+Then, compute the Pearson correlation (or dot-product) between each neuron's time course and your template:
+#+begin_src python
+neuron_weights = np.array([np.corrcoef(X_avg[n], template)[0,1] for n in range(X_avg.shape[0])])
+#+end_src
+
+---
+
+*** *3. Compute the Targeted Projection*
+
+The optimal targeted component is the (weighted) sum of the population activity using these weights:
+#+begin_src python
+targeted_proj = np.dot(neuron_weights, X_avg)   # shape: time
+#+end_src
+This gives you a single time course (the "targeted PC" or projection) that is maximally time-locked to your event template.
+
+---
+
+*** *4. (Optional) Orthonormalize/Remove Mean, Variance Control*
+
+For more sophistication (like true PCA), z-score the neuron activity across time. Can also orthonormalize the weights or use regression instead of correlation.
+
+---
+
+*** *5. Plot*
+Plot =targeted_proj= over time.
+You can repeat separately per condition or for single trials.
+
+---
+
+**** *Summary – Step-by-Step in Python/Pseudocode:*
+#+begin_src python
+# Step 1: define template (0's and 1's)
+# Step 2: X_avg = mean across trials
+# Step 3: weights = corr(neuron, template)  # shape: neurons
+# Step 4: proj = dot(weights, X_avg)        # shape: time
+# Step 5: plot(proj)
+#+end_src
+
+---
+
+*References*:
+- _Brendel, M., et al. (2020, Neuron)_ — "Targeted Dimensionality Reduction"
+- See also *Demixed PCA* [Kobak et al., 2016] for automated extraction of time/task/stim components.
+
+---
+
+*Let me know if you want a full code example with your data dimensions or want to adapt for multiple conditions!*
+
+***
+*** Is this code correct
+
+#+begin_src ipython
+import numpy as np
+
+# Suppose X is (n_trials, n_neurons, n_time)
+def shuffle_trials(X, labels):
+    # Shuffle the assignment of trials to conditions
+    shuffled_labels = np.random.permutation(labels.values)
+    X_shuff = []
+    for i in range(4):  # 4 conditions
+        idx = (shuffled_labels == i)
+        if idx.mean() > 0:
+            X_shuff.append(np.mean(X[idx], 0))
+
+    X_shuff = np.array(X_shuff)
+
+    return X_shuff
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
+from scipy.signal import detrend
+
+options['n_shuff'] = 100
+
+options['trials'] = 'correct'
+options['reload'] = 0
+options['laser'] = 0
+
+options['days'] = ['first', 'last']
+options['day'] = 'last'
+
+options['task'] = 'Dual'
+
+options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+#options['mice'] = ['JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+
+X_mouse = []
+X_shuff = []
+for mouse in options['mice']:
+
+    options['mouse'] = mouse
+    X_days, y_days = get_X_y_days(**options)
+    y_days = y_days.reset_index()
+
+    print('X_days', X_days.shape, 'y_days', y_days.shape)
+    y_days['idx'] = y_days['index'].copy()
+
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    y_labels = y.copy()
+
+    X_avg = []
+    for i in range(4):
+        idx = (y_labels.odor_pair.values==i) # & (~y_labels.response.str.contains("incorrect"))
+
+        if idx.mean()>0:
+            X_avg.append(np.mean(X[idx], 0))
+
+    X_avg = np.array(X_avg)
+    X_mean = np.mean(X, 0)[np.newaxis]
+    X_avg -= X_mean
+
+    X_shuff_ = []
+    if options['n_shuff']>0:
+        for _ in range(options['n_shuff']):
+            X_shuff_.append(shuffle_trials(X.copy(), y_labels.copy().odor_pair) - X_mean)
+        X_shuff_ = np.array(X_shuff_)
+        print(X_shuff_.shape)
+
+    X_shuff.append(X_shuff_)
+    X_mouse.append(X_avg)
+#+end_src
+
+
+
+Your code does most things correctly for shuffling condition labels and averaging, but a few *improvements and clarifications* are in order:
+
+---
+
+*A. The shuffle function:*
+#+begin_src python
+def shuffle_trials(X, labels):
+    # Shuffle the assignment of trials to conditions
+    shuffled_labels = np.random.permutation(labels.values)
+    X_shuff = []
+    for i in range(4):  # 4 conditions
+        idx = (shuffled_labels == i)
+        if idx.mean() > 0:
+            X_shuff.append(np.mean(X[idx], 0))
+    X_shuff = np.array(X_shuff)
+    return X_shuff
+#+end_src
+- ✅ This correctly shuffles condition labels and computes the condition-averaged activity.
+- 🔍 Make sure =labels= contains consecutive integers starting from 0 to 3. If not, shuffling may mix label identities (for instance, labels could be [2,3,5,9]).
+- *Suggestion:* Convert =labels= to unique integers for generality:
+
+#+begin_src python
+def shuffle_trials(X, labels):
+    labels_unique, labels_int = np.unique(labels, return_inverse=True)
+    shuffled_labels = np.random.permutation(labels_int)
+    X_shuff = []
+    for i in range(4):
+        idx = (shuffled_labels == i)
+        if idx.any():
+            X_shuff.append(np.mean(X[idx], 0))
+    X_shuff = np.array(X_shuff)
+    return X_shuff
+#+end_src
+
+my labels are ints in [0, 1, 2, 3]
+labels contains a list of trials with either label [0, 1, 1, 3, 2, 1, 1, 0, ...]
+
+Great—if your =labels= are already integers in \[0, 1, 2, 3\], your original shuffle function will work correctly for your use case. A few stylistic and reliability notes:
+
+*** Your function is functionally correct:
+
+#+begin_src python
+def shuffle_trials(X, labels):
+    shuffled_labels = np.random.permutation(labels.values)
+    X_shuff = []
+    for i in range(4):
+        idx = (shuffled_labels == i)
+        if idx.mean() > 0:
+            X_shuff.append(np.mean(X[idx], 0))
+    X_shuff = np.array(X_shuff)
+    return X_shuff
+#+end_src
+
+*** Possible refinements and best practices
+
+- You can write =if idx.any():= for clarity instead of =if idx.mean()>0:=.
+- If any label happens to have no members after shuffling (rare with large samples), the array will be shorter than 4. If you require a fixed shape, you might want to pad with =np.nan=s, or always fill outputs for all four conditions.
+- Consider returning shuffled labels for debugging (optionally).
+
+*** Final version (safe and clear):
+
+#+begin_src python
+def shuffle_trials(X, labels):
+    shuffled_labels = np.random.permutation(labels)
+    X_shuff = []
+    for i in range(4):
+        idx = (shuffled_labels == i)
+        if idx.any():
+            X_shuff.append(np.mean(X[idx], 0))
+        else:
+            # pad with nan array if condition missing (optional)
+            X_shuff.append(np.full(X.shape[1:], np.nan))
+    X_shuff = np.array(X_shuff)
+    return X_shuff
+#+end_src
+
+*** TL;DR
+
+*Yes, your code will work as intended* for labels in [0, 1, 2, 3] and is appropriate for your neural shuffling analysis.
+
+***
+
+*B. In your analysis loop:*
+- Subtraction by =X_mean= after =X_avg = np.array(X_avg)= is correct and mean-centers trajectories.
+- When appending shuffle results:
+  #+begin_src python
+  X_shuff_.append(shuffle_trials(X.copy(), y_labels.copy().odor_pair) - X_mean)
+  #+end_src
+  is correct.
+
+*C. Sanity checks:*
+- Make sure for every mouse and every shuffle, the /shape/ returned by =shuffle_trials= is =(4, n_neurons, n_time)=, and that you have =n_shuff= such arrays per mouse.
+- After the loop, =X_shuff= is a list of arrays with shape =(n_shuff, 4, n_neurons, n_time)= (one per mouse).
+
+*D. You could slightly streamline the code* by using =idx.any()= not =idx.mean()>0= (same thing, slightly more explicit).
+---
+
+*Summary:*
+- Your code will work as intended, but the shuffle will only be meaningful if =labels= are 0-3 integers.
+- For safety, use =np.unique(labels, return_inverse=True)= in the shuffle function to remap arbitrary label values to [0...N-1].
+
+If you want a cleaned up, fully vectorized version or have more questions about analyzing/visualizing the results, let me know!
+
+***
 *** are they some param to tune for detrend
 
 Yes, there are a couple of parameters and choices you can tune when detrending neural data:
 
 ---
-*** 1. *Type of Detrending*
+**** 1. *Type of Detrending*
 - *Linear Detrend:* Removes linear trends (default for =scipy.signal.detrend=). Good for slow, straight drifts.
 - *Polynomial Detrend:* Removes nonlinear trends (e.g., quadratic, cubic).
   - Use =numpy.polyfit()= with higher-order polynomials, e.g., order=2, order=3.
 
 ---
-*** 2. *High-Pass Filtering*
+**** 2. *High-Pass Filtering*
 - Instead of detrend, you can apply a high-pass filter to cut off frequencies below a chosen threshold.
   - *Cutoff frequency:* Determines which slow trends are removed. Pick based on your experiment timing.
 
 ---
-*** 3. *Window Size* (if using sliding or moving-average detrending)
+**** 3. *Window Size* (if using* sliding or moving-average detrending)
 - If using a moving-average or other local detrending, the window length (in samples or seconds) is a parameter to tune.
 
 ---
-*** 4. *Axis*
+**** 4. *Axis*
 - Specify which dimension is time (e.g., =axis=2= in your data shape (trials × neurons × time)).
 
 ---
 
-** *Practical Example*
+
+How do I test if loadings are significantly different from zero
+
+To test if a neuron's loading on a principal component (PC) is significantly different from zero, you can use a statistical test or resampling approach. Here are some common methods:
+
+---
+
+*1. Bootstrapping (Recommended)*
+- /Resample/ your data many times (trials and/or neurons), recompute PCA for each bootstrap sample, and collect the loadings.
+- For each neuron, build a distribution of loadings. If zero falls outside (e.g.) the central 95% interval, you consider that loading significant.
+
+*2. Permutation Test (Shuffle Control)*
+- /Shuffle/ the data (trials or timepoints) to destroy meaningful structure, then compute the distribution of loadings for PCs. True loadings that are far from the shuffled distribution can be considered significant.
+
+*3. Analytical Test (t-test)*
+- Less common due to PCA's dependence on global structure, but for each neuron you could theoretically test if its average loading across bootstraps differs from zero—though this is less robust.
+
+*4. Null Model*
+- Fit PCA to random/noise data matched in structure, and use distribution of these loadings as a null.
+
+---
+
+*Practical Code Example (Python/pseudocode):*
+#+begin_src python
+from sklearn.utils import resample
+loadings_samples = []
+for i in range(1000):
+    X_boot = resample(X, axis=0) # resample trials
+    pca.fit(X_boot.mean(axis=0)) # trial averaged
+    loadings_samples.append(pca.components_[0]) # first PC
+
+loadings_samples = np.array(loadings_samples) # (n_bootstraps, n_neurons)
+ci_low, ci_high = np.percentile(loadings_samples, [2.5, 97.5], axis=0)
+significant = (ci_low > 0) | (ci_high < 0)
+#+end_src
+Now, significant neurons are those whose 95% CIs for loading do not cross zero.
+
+---
+
+*In summary:*
+You generally use bootstrapping or shuffling to estimate the variability of loadings and identify those consistently away from zero. Direct statistical tests are less preferred due to PCA's data dependency, but can be used as a rough check.
+
+
+*** this is my code
+
+#+begin_src ipython
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2, get_X_y_mice
+from scipy.signal import detrend
+
+options['trials']='correct'
+options['reload'] = 0
+options['laser'] = -1
+
+options['days'] = ['first', 'last']
+options['day'] = 'last'
+
+options['task'] = 'DPA'
+
+options['mice'] = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+
+X_mouse = []
+for mouse in options['mice']:
+
+    options['mouse'] = mouse
+    X_days, y_days = get_X_y_days(**options)
+    y_days = y_days.reset_index()
+
+    print('X_days', X_days.shape, 'y_days', y_days.shape)
+    y_days['idx'] = y_days['index'].copy()
+
+    X, y = get_X_y_S1_S2(X_days, y_days, **options)
+    y_labels = y.copy()
+
+    X_avg = []
+    for i in range(4):
+        idx = (y_labels.odor_pair==i) # & (~y_labels.response.str.contains("incorrect"))
+
+        if idx.mean()>0:
+            X_avg.append(np.mean(X[idx], 0))
+
+
+   X_avg = np.array(X_avg)
+    X_mean = np.mean(X, 0)[np.newaxis]
+    X_avg -= X_mean
+
+    X_mouse.append(X_avg)
+    print(X_avg.shape)
+#+end_src
+
+how would you shuffle
+
+Here’s how you can shuffle your data to get a “null” PCA trajectory, and compare it to your real dynamics:
+
+---
+**** 1. *Shuffle Across Trials (Within Each Condition)*
+
+This shuffles the neuron activity at each timepoint, /destroying any real cross-neuron correlations/ while preserving per-neuron activity distributions. This is the most common null:
+
+#+begin_src python
+import numpy as np
+
+# Suppose X is (n_trials, n_neurons, n_time)
+def shuffle_trials(X, labels):
+    # Shuffle the assignment of trials to conditions
+    shuffled_labels = np.random.permutation(labels)
+    X_shuff = []
+    for i in range(4):  # 4 conditions
+        idx = (shuffled_labels == i)
+        if idx.mean() > 0:
+            X_shuff.append(np.mean(X[idx], 0))
+    X_shuff = np.array(X_shuff)
+    return X_shuff
+#+end_src
+
+Run this shuffling (say, 1000 times), perform PCA on each shuffled-average, and compare the trajectories or PC ramps you get to those from non-shuffled data.
+
+---
+
+**** 2. *Shuffle Time Within Each Neuron*
+
+For each neuron, circularly shift or permute the time dimension independently across trials. This destroys population-level temporal structure but retains autocorrelation.
+
+#+begin_src python
+# Shuffle timepoints within each neuron
+def shuffle_time(X):
+    n_trials, n_neurons, n_time = X.shape
+    X_shuff = X.copy()
+    for n in range(n_neurons):
+        shuff_idx = np.random.permutation(n_time)
+        X_shuff[:, n, :] = X[:, n, :][:, shuff_idx]
+    return X_shuff
+#+end_src
+---
+
+**** 3. *Shuffle Neurons*
+
+Randomly permute neuron identities (not common unless you have neuron type or location structure).
+
+---
+
+**** *How To Use This Shuffling*
+
+- For each shuffle, do your usual averaging by condition, mean-subtraction, and PCA.
+- Collect the null distribution of PC ramps.
+- If your real data’s PC ramp falls outside the null, it is more likely to be real.
+
+*Visualization:* Plot the real PC3 trajectory along with the shuffled distribution (e.g., shaded confidence interval or median plus 95% of shuffles).
+
+---
+
+**** *Summary*
+
+- The easiest “shuffle” is to randomly permute /trial labels/, which breaks real structure but preserves the overall data distribution.
+- Use as a null to test how much of PC3 (or other PCs) could arise by chance.
+- Repeat shuffle-PCA many times for a null distribution.
+
+If you want ready-to-run code for the full PCA+shuffle test, let me know!
+
+*** give full code for the first shuffle type
+
+Here's a complete example that shuffles trial labels (within mouse), computes condition means, performs PCA on both shuffled and real data, and compares the real trajectory to a null distribution:
+
+#+begin_src python
+import numpy as np
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+
+# Assume X is [n_trials, n_neurons, n_time] for one mouse,
+# y_labels.odor_pair (length n_trials) gives 0/1/2/3 condition for each trial
+
+n_shuffles = 1000
+
+def condition_avgs(X, labels, n_conditions=4):
+    """Return average for each condition."""
+    avgs = []
+    for cond in range(n_conditions):
+        idx = (labels == cond)
+        if np.any(idx):
+            avgs.append(X[idx].mean(axis=0))
+        else:
+            avgs.append(np.full(X.shape[1:], np.nan))  # pad if no trials
+    return np.array(avgs)  # shape: [n_conditions, n_neurons, n_time]
+
+# Real data: trial-average per condition
+X_avg_real = condition_avgs(X, y_labels.odor_pair)
+X_avg_real -= X.mean(axis=0)  # subtract mean across all trials (mean per neuron × time)
+
+# Collapse [conditions, neurons, time] into [conditions*time, neurons] for PCA
+X_for_pca = X_avg_real.transpose(0,2,1).reshape(-1, X.shape[1])
+pca = PCA(n_components=3)
+scores_real = pca.fit_transform(X_for_pca)
+scores_real = scores_real.reshape(X_avg_real.shape[0], X_avg_real.shape[2], -1) # [conditions, time, PCs]
+
+# Shuffle nulls
+scores_shuff = []
+for i in range(n_shuffles):
+    shuffled = np.random.permutation(y_labels.odor_pair)
+    X_avg_shuff = condition_avgs(X, shuffled)
+    X_avg_shuff -= X.mean(axis=0)
+    X_for_pca_shuff = X_avg_shuff.transpose(0,2,1).reshape(-1, X.shape[1])
+    pca_shuff = PCA(n_components=3)
+    scores_s = pca_shuff.fit_transform(X_for_pca_shuff)
+    scores_s = scores_s.reshape(X_avg_shuff.shape[0], X_avg_shuff.shape[2], -1)
+    scores_shuff.append(scores_s)
+scores_shuff = np.stack(scores_shuff, axis=0) # [n_shuffles, conditions, time, PCs]
+
+# Calculate null bands (5th/95th percentiles) for PC3 in a selected condition (e.g., cond=0)
+pc_idx = 2  # PC3 = index 2 (0-based)
+cond = 0
+
+real_pc3 = scores_real[cond,:,pc_idx]
+lo = np.percentile(scores_shuff[:, cond, :, pc_idx], 2.5, axis=0)
+hi = np.percentile(scores_shuff[:, cond, :, pc_idx], 97.5, axis=0)
+
+# Plot
+plt.figure()
+plt.plot(real_pc3, label='real', lw=2)
+plt.fill_between(np.arange(len(real_pc3)), lo, hi, alpha=0.3, label='shuffle 95% CI')
+plt.title(f'PC3 ramp, condition {cond}')
+plt.legend()
+plt.xlabel('time')
+plt.ylabel('PC3 score')
+plt.show()
+#+end_src
+
+*How it works:*
+- For each shuffle, the trial-condition mapping is randomized, then condition means are computed, centered, PCA is done.
+- Collect PC scores (trajectories), build a null distribution for PC3.
+- Plot the real PC3 timecourse vs. the shuffle (null) envelope for any condition.
+
+*If the real signal is outside the null envelope, you may have a real effect; else, the ramp is potentially artifactual.*
+
+Let me know if you want this as a function, for all mice, or need optimization for speed!
+
+*** Should I run pca only in correct trials of the task
+
+**Yes, it is usually best to run PCA only on trials relevant to your scientific question*—typically correct trials—unless you have a specific reason to include errors.
+
+*** Why?
+- *Homogeneity:* Neural dynamics on correct and incorrect trials may be qualitatively different. Including errors may confound your PCA axes, mixing unrelated patterns.
+- *Interpretation:* If you're interested in how the brain encodes conditions during accurate performance, use only correct trials to avoid noise from error-related or disengaged patterns.
+- *Power:* Usually, you have more correct than error trials; including errors can dilute the structure in the data, especially with small neuron numbers.
+
+*** When include errors?
+- If you want to characterize what changes on error trials (i.e., by comparing PC projections of correct vs. error trials), you can do both analyses: run PCA on corrects, then project errors into that space for interpretation.
+
+*** Typical workflow
+1. *Select only correct trials for PCA computation.*
+2. *If desired, project error trials into the space defined by corrects' PCs for comparison.*
+
+---
+*TL;DR:*
+/Yes, for cleanest demixing of task-related dynamics, run PCA only on correct trials (or the set most aligned with your hypothesis).
+
+***
+*** I do this
+
+#+begin_src ipython
+pca_shuff = []
+for i in range(100):
+    X = X_shuff[i]
+    X_flat = X[..., options['bins_' + options['epochs'][0]]].transpose(0, 2, 1).reshape(-1, X.shape[1])
+    model.fit_pca(X_flat)
+
+    X_flat = X.transpose(0, 2, 1).reshape(-1, X.shape[1])
+    X_pca = -model.transform_pca(X_flat).reshape(X.shape[0], X.shape[-1], -1)
+    pca_shuff.append(X_pca)
+#+end_src
+
+Can I bypass the loop
+
+If you want to run PCA on many shuffles in parallel, you can vectorize some steps (e.g., averaging conditions, centering), but *PCA can't be fully vectorized* for different datasets at once—=fit_pca= has to be called separately per shuffle because each shuffle yields a new dataset with a different covariance.
+
+However, you can speed up or simplify your pipeline in the following ways:
+
+---
+
+*** 1. Use =joblib= or =concurrent.futures= for Parallel Processing
+
+You can parallelize the loop to utilize multiple cores. Example with =joblib=:
+
+#+begin_src python
+from joblib import Parallel, delayed
+from sklearn.decomposition import PCA
+
+def fit_pca_shuff(X):
+    # X: (conditions, neurons, time)
+    X_flat = X.transpose(0, 2, 1).reshape(-1, X.shape[1])
+    pca = PCA(n_components=3)
+    pca.fit(X_flat)
+    X_pca = -pca.transform(X_flat).reshape(X.shape[0], X.shape[2], -1)
+    return X_pca
+
+pca_shuff = Parallel(n_jobs=8)(delayed(fit_pca_shuff)(X_s) for X_s in X_shuff)
+#+end_src
+This will use 8 CPU cores; adjust =n_jobs= as needed.
+
+---
+
+*** 2. Vectorize Where Possible
+
+- Centering/averaging can be vectorized across shuffles.
+- PCA must be looped or parallelized as above.
+
+---
+
+*** 3. Use =numpy= Broadcasting for Stacking
+
+If your =model= can take batch input (not standard for =sklearn.PCA=), you could batch-fit PCA, but out-of-the-box, this is not supported.
+
+---
+
+*** 4. (For Large Numbers of Shuffles) Use Incremental PCA
+
+In rare cases, you might use =IncrementalPCA= if datasets are very large, but you still need to fit separate objects for each shuffle.
+
+---
+
+*** /Summary/
+
+- Direct vectorization of PCA across shuffles is not possible with standard tools.
+- Use =joblib= or any parallel for-loop to speed up the repeat PCA over shuffles.
+- All other steps (preparing/centering) you can fully vectorize if dimensions match.
+
+---
+
+If you want trouble-free, copy-paste code for your context, just provide your PCA wrapper (=model=) and data arrangement. Let me know!
+
+*** I do this
+
+#+begin_src ipython
+import numpy as np
+
+# Suppose X is (n_trials, n_neurons, n_time)
+def shuffle_trials(X, labels):
+    # Shuffle the assignment of trials to conditions
+    shuffled_labels = np.random.permutation(labels)
+    X_shuff = []
+    for i in range(4):  # 4 conditions
+        idx = (shuffled_labels == i)
+        if idx.mean() > 0:
+            X_shuff.append(np.mean(X[idx], 0))
+
+    X_shuff = np.array(X_shuff)
+
+    return X_shuff
+#+end_src
+
+labels are a col from a df : df.labels
+would the code work the same
+
+Yes, your code will work as long as you pass =labels= as a NumPy array of the correct dtype (int or string) indexing 0-3 for four conditions. If =labels= is a column in a pandas DataFrame (say, =df.labels=), it behaves as a pandas Series, so best practice is to convert to NumPy array:
+
+#+begin_src python
+labels = df.labels.values  # or labels = df['labels'].values
+X_shuff = shuffle_trials(X, labels)
+#+end_src
+
+*Important notes:*
+- =labels==i= will work if labels are integers (0,1,2,3); if they're strings, use the appropriate comparison (e.g. =labels=='S1'=).
+- If you ever get a =ValueError: The truth value of a Series is ambiguous=, convert both sides to array with =.values=.
+- Indexing with =idx= will apply to the first axis of =X= (trials).
+
+*So:* As long as you pass =labels.values=, your =shuffle_trials= code works the same for pandas or NumPy.
+
+Let me know if you need help adapting it for string labels or more conditions!
+
+*** so i should add values ?
+
+Yes, you should add =.values= so that your pandas Series is converted into a NumPy array for indexing and comparison.
+
+*Correct usage:*
+#+begin_src python
+labels = df.labels.values  # or df['labels'].values
+X_shuff = shuffle_trials(X, labels)
+#+end_src
+
+*Why?*
+- =.values= ensures you have a plain NumPy array, making =labels == i= return a boolean NumPy array instead of a pandas Series.
+- This avoids ambiguous truth value errors and works seamlessly in your function.
+
+*Summary:*
+Always pass =labels.values= (not just =labels=) when your labels come from a DataFrame.
+
+***
+
+Good question! In this specific function:
+
+#+begin_src python
+def shuffle_trials(X, labels):
+    shuffled_labels = np.random.permutation(labels)
+    # ...
+#+end_src
+
+*You do /not/ need to use =labels.copy()=* before shuffling, because =np.random.permutation(labels)= creates a shuffled copy and leaves =labels= unchanged. The original =labels= array is unaffected, so you are safe.
+
+*Summary:*
+- If you use =np.random.shuffle(labels)=, then you should copy (=labels.copy()=) because it shuffles in place.
+- But with =np.random.permutation(labels)=, no copy is needed—it's safe as written.
+
+*In short:*
+No, you do /not/ need to use =labels.copy()= in your code above!
+
+***
+
+*** how do I connnncat
+(100, 4, 668, 84)
+(100, 4, 66, 84)
+(100, 4, 668, 84)
+on the 2 dim
+
+Those arrays have shape (100, 4, [various], 84), i.e.:
+
+- 100: number of shuffles (or repetitions)
+- 4: conditions
+- ???: timepoints (66, 668, etc)
+- 84: PCs or neurons
+
+Assuming the dimension you want to concatenate along is the /third/ one (the time axis):
+
+*A. IF shapes differ only in the third dimension*
+You can concatenate along axis=2 (time), as long as all arrays have the same size on all other axes (here: 100, 4, and 84).
+
+Example:
+#+begin_src python
+a1.shape  # (100, 4, 668, 84)
+a2.shape  # (100, 4, 66,  84)
+a3.shape  # (100, 4, 668, 84)
+
+cat = np.concatenate([a1, a2, a3], axis=2)
+print(cat.shape)
+# output: (100, 4, 668+66+668, 84)
+#+end_src
+
+*B. If other axes also differ:*
+You must first pad, resample, or align arrays so the non-concatenated axes match in size.
+
+*Summary Table:*
+
+| goal                      | how                                                            |
+|---------------------------|---------------------------------------------------------------|
+| concatenate timepoints    | np.concatenate([a1, a2, ...], axis=2)                         |
+| concatenate conditions    | np.concatenate([a1, a2, ...], axis=1)                         |
+| concatenate shuffles      | np.concatenate([a1, a2, ...], axis=0)                         |
+
+*Note:*
+If the subarrays are lists, use =np.concatenate=. If they're nested in a Python list, first ensure all arrays are the same type and have compatible shapes, except on the concatenation axis.
+
+*Error?*
+If you get a shape-mismatch error, check the sizes on all non-concatenated axes: they must be equal.
+
+Let me know if you need code for another scenario (e.g., missing values, different axis!).
+
+***
+*** you did not include all mice
+
+You're right! Here’s a *complete version* that does this for all mice in a list, stacks the nulls, and gives you a group-level null distribution for PC3 per condition and time.
+
+*** Full Shuffle-Control PCA Trajectory Analysis Across Mice
+
+#+begin_src python
+import numpy as np
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+
+n_shuffles = 1000
+n_pcs = 3
+n_conditions = 4
+
+# Assume X_mouse is a list: each entry is [n_trials, n_neurons, n_time] for one mouse
+# Assume y_labels_list is a list: each entry is y_labels.odor_pair for each mouse
+
+def condition_avgs(X, labels, n_conditions=4):
+    avgs = []
+    for cond in range(n_conditions):
+        idx = (labels == cond)
+        if np.any(idx):
+            avgs.append(X[idx].mean(axis=0))
+        else:
+            avgs.append(np.full(X.shape[1:], np.nan))
+    return np.array(avgs)
+
+# Placeholders for results
+all_real_scores = []
+all_shuff_scores = []
+
+for m, (X, y_labels) in enumerate(zip(X_mouse, y_labels_list)):
+    # Real data: condition means
+    X_avg_real = condition_avgs(X, y_labels)
+    X_avg_real -= X.mean(axis=0)
+    # Format for PCA: [conditions, neurons, time] => [conditions*time, neurons]
+    X_for_pca = X_avg_real.transpose(0,2,1).reshape(-1, X.shape[1])
+    pca = PCA(n_components=n_pcs)
+    scores_real = pca.fit_transform(X_for_pca)
+    scores_real = scores_real.reshape(n_conditions, X.shape[2], n_pcs) # [conditions, time, PCs]
+    all_real_scores.append(scores_real)
+
+    # Shuffle nulls
+    shuff_scores_this_mouse = []
+    for i in range(n_shuffles):
+        shuffled = np.random.permutation(y_labels)
+        X_avg_shuff = condition_avgs(X, shuffled)
+        X_avg_shuff -= X.mean(axis=0)
+        X_for_pca_shuff = X_avg_shuff.transpose(0,2,1).reshape(-1, X.shape[1])
+        pca_shuff = PCA(n_components=n_pcs)
+        scores_s = pca_shuff.fit_transform(X_for_pca_shuff)
+        scores_s = scores_s.reshape(n_conditions, X.shape[2], n_pcs)
+        shuff_scores_this_mouse.append(scores_s)
+    all_shuff_scores.append(np.stack(shuff_scores_this_mouse, axis=0))
+
+# Stack across mice
+all_real_scores = np.stack(all_real_scores, axis=0)    # [n_mice, conditions, time, PCs]
+all_shuff_scores = np.stack(all_shuff_scores, axis=0)  # [n_mice, n_shuffles, conditions, time, PCs]
+
+# Group stats: for PC3
+pc_idx = 2  # (third PC)
+cond = 0    # pick a condition (0-3)
+
+real_pc3 = all_real_scores[:, cond, :, pc_idx]    # [n_mice, time]
+shuff_pc3 = all_shuff_scores[:, :, cond, :, pc_idx]  # [n_mice, n_shuffles, time]
+
+# Compute group mean and CI (over all shuffles and all mice)
+mean_real_pc3 = real_pc3.mean(axis=0)
+sem_real_pc3 = real_pc3.std(axis=0) / np.sqrt(real_pc3.shape[0])
+
+lo = np.percentile(shuff_pc3.reshape(-1, shuff_pc3.shape[-1]), 2.5, axis=0)
+hi = np.percentile(shuff_pc3.reshape(-1, shuff_pc3.shape[-1]), 97.5, axis=0)
+
+plt.figure()
+plt.plot(mean_real_pc3, color='C0', lw=2, label='Real mean across mice')
+plt.fill_between(np.arange(len(mean_real_pc3)),
+                 mean_real_pc3 - sem_real_pc3,
+                 mean_real_pc3 + sem_real_pc3, color='C0', alpha=0.3, label='Mean ± SEM')
+
+plt.fill_between(np.arange(len(lo)), lo, hi, color='gray', alpha=0.5, label='Shuffle 95% CI')
+plt.title(f'PC3 ramp, condition {cond}, across mice')
+plt.xlabel('Time')
+plt.ylabel('PC3 score')
+plt.legend()
+plt.tight_layout()
+plt.show()
+#+end_src
+
+---
+
+*What this does:*
+- For each mouse:
+    - Computes real and shuffled (null) trajectories.
+- Aggregates real and null PC3 timecourses across mice.
+- Plots the mean ± SEM real PC3 trajectory vs. the null envelope.
+
+You can repeat the plot for each condition (loop over =cond = 0...3=).
+
+---
+
+*Tips:*
+- Make sure =X_mouse= and =y_labels_list= are in the same order!
+- Adjust =n_shuffles= for desired null estimation accuracy.
+
+---
+
+Let me know if you need help for saving results, more automation, or explanation!
+
+*** I have some loadings from pca and their shuff how do I exclude the non significantly different from zero
+
+pc (3, 3319) and pc_shuff (100, 3, 3319)
+
+Let’s say:
+
+- =pc= is your real PC loadings, shape (3, 3319). (e.g. 3 PCs × 3319 neurons)
+- =pc_shuff= is your shuffled PC loadings, shape (100, 3, 3319). (e.g. 100 shuffles × 3 PCs × 3319 neurons)
+
+*Goal:* Exclude neurons whose real loading on a given PC is /not/ significantly different from the shuffle null (i.e., exclude if real value falls within shuffle's central 95% range).
+
+*** Step-by-step
+
+1. *Compute shuffle lower and upper bounds* (e.g., 2.5% and 97.5% for a two-sided 95% range):
+
+#+begin_src python
+# pc_shuff: [n_shuffles, n_pcs, n_neurons]
+lo = np.percentile(pc_shuff, 2.5, axis=0)   # [n_pcs, n_neurons]
+hi = np.percentile(pc_shuff, 97.5, axis=0)  # [n_pcs, n_neurons]
+#+end_src
+
+2. *Find significant loadings:*
+Keep only neurons with loadings outside the shuffle 95% interval (either below lo or above hi):
+
+#+begin_src python
+# pc: [n_pcs, n_neurons]
+# significant: [n_pcs, n_neurons], bool
+significant = (pc < lo) | (pc > hi)
+#+end_src
+
+3. *Zero out or mask non-significant loadings:*
+
+#+begin_src python
+pc_sig = pc * significant  # non-significant set to 0
+#+end_src
+
+Or, if you want only indices:
+#+begin_src python
+neuron_idx_sig = np.where(significant)  # returns (pc_index, neuron_index) tuples
+#+end_src
+
+*Example: For PC1 only (first row):*
+#+begin_src python
+sig_pc1 = significant[0]               # shape (3319,)
+pc1_sig_loadings = pc[0] * sig_pc1
+#+end_src
+
+*If you want to /exclude/ non-significant neurons from downstream analyses like plots:*
+#+begin_src python
+idx_sig = significant[pc_idx, :]       # for PC#pc_idx
+neurons_to_keep = np.where(idx_sig)[0]
+pc_sig_only = pc[pc_idx, neurons_to_keep]
+#+end_src
+
+---
+
+*Summary:*
+- Compute the 2.5%-97.5% range from =pc_shuff=.
+- Only keep (or analyze) those entries in =pc= that are outside that interval.
+
+Let me know if you want ready-to-use code for a specific plotting or masking operation!
+
+*** Can I be less conservative in terms of significance
+
+Yes! The width of your “significance” band is set by the percentile thresholds you use on the shuffle distribution. If you want to be less conservative (i.e., fewer exclusions, more neurons marked significant), you simply widen the interval (e.g., central 98%, 90%, or even 80%).
+
+*How to do it:*
+- Use percentiles closer to the edges (for example, 5% and 95% for a 90% envelope):
+  #+begin_src python
+  lo = np.percentile(pc_shuff, 5, axis=0)   # 5th percentile
+  hi = np.percentile(pc_shuff, 95, axis=0)  # 95th percentile
+  significant = (pc < lo) | (pc > hi)
+  #+end_src
+- For 80%, use 10% and 90%.
+
+*Interpretation:*
+Lowering the threshold means more loadings may be called significant (higher false positive risk, but greater sensitivity). You are free to set it according to the signal-to-noise ratio and your scientific goals—just report what threshold you use!
+
+*Summary table:*
+
+| Interval     | Percentiles             |
+|--------------|------------------------|
+| 95% (strict) | 2.5% ... 97.5%         |
+| 90%          | 5% ... 95%             |
+| 80%          | 10% ... 90%            |
+
+Let me know if you want a function to adjust this interactively!
+
+***
+
+Yes! If you want to be *more conservative* (i.e., have fewer “significant” neurons, excluding even more neurons), use a /stricter/ significance level:
+
+- Take a *narrower* interval from the shuffle: e.g., 99% (0.5% to 99.5%) instead of 95% (2.5%-97.5%).
+- Fewer real loadings will exceed this threshold by chance.
+
+*How to do it:*
+
+#+begin_src python
+lo = np.percentile(pc_shuff, 0.5, axis=0)   # 0.5 percentile for lower bound (stricter)
+hi = np.percentile(pc_shuff, 99.5, axis=0)  # 99.5 percentile for upper bound
+significant = (pc < lo) | (pc > hi)
+#+end_src
+- For /even more/ conservativeness, use 0.1/99.9, etc.
+- You can set any confidence interval you like by changing these percentiles.
+
+*Notes:*
+- The lower your thresholds, the fewer false positives, but the more likely you are to get false negatives (“missing” some real effects).
+- If you’re doing this for /many/ neurons, also consider correcting for multiple comparisons (for example, a Bonferroni or FDR correction) if you want to be very rigorous.
+
+Let me know if you want advice on multiple testing correction!
+
+*** Can I make pca find orthogonal pcs
+
+Yes—all standard PCA algorithms (including scikit-learn's PCA, numpy.linalg.svd, Matlab's pca, etc.) always produce PCs that are orthogonal to each other in the variable (“neuron”) space. That is, the principal components (the vectors, or loadings) are guaranteed to be mutually orthogonal by definition.
+
+If you run standard PCA, the PCs are orthogonal. You /do not/ need to ask for this explicitly.
+
+*In code:*
+#+begin_src python
+from sklearn.decomposition import PCA
+
+pca = PCA()
+pca.fit(X)  # X shape: samples x features (here, features = neurons)
+components = pca.components_  # shape: n_components x n_features
+
+# Check orthogonality (optional)
+import numpy as np
+print(components @ components.T)  # Should be nearly diagonal
+#+end_src
+The off-diagonal elements will be (almost) zero, up to numerical precision.
+
+---
+*Note:*
+- If you post-process PCs in any way (e.g., rotate, mix, align, demix), you may break orthogonality.
+- "Sparse PCA" and "Demixed PCA" produce components that may /not/ be strictly orthogonal, depending on method.
+
+---
+*Summary:*
+Ordinary PCA always yields orthogonal principal components by construction. You do not need to do anything extra. If you want to enforce orthogonality after further manipulations, you can use Gram-Schmidt or QR decomposition.
+
+*** will that set to nan non sig
+
+    sig_idx = np.where(significant[pc_idx, :])[0]
+    pc_list.append(pcs[pc_idx, sig_idx])
+    pcs[pc_idx, ~sig_idx] = np.nan
+
+
+Let's break down what happens in your code:
+
+#+begin_src python
+sig_idx = np.where(significant[pc_idx, :])[0]
+pc_list.append(pcs[pc_idx, sig_idx])
+pcs[pc_idx, ~sig_idx] = np.nan
+#+end_src
+
+- =sig_idx= is an array of integer indices of the significant neurons for PC #pc_idx.
+- =~sig_idx= will *not* work as intended. ~ only works with boolean arrays, not integers! This will give an error or unexpected results.
+
+*What you want:*
+
+To set NON-significant entries to NaN, do this:
+
+#+begin_src python
+mask = significant[pc_idx, :]           # Boolean mask, True means significant
+pcs[pc_idx, ~mask] = np.nan             # Set NON-significant entries to NaN
+#+end_src
+or, for all PCs:
+
+#+begin_src python
+pcs[~significant] = np.nan
+#+end_src
+
+So:
+- Use a boolean mask, /not/ ~sig_idx
+- =sig_idx= is for indexing significant ones (e.g. to extract their values); =~mask= is for all non-significant
+
+*Summary:*
+Your code will /not/ set nonsignificant to NaN as written. Use the boolean mask as shown above instead.
+
+***
+*** what pval does it refers to
+
+
+The percentile threshold you select with the shuffle method is directly related to your two-sided significance level (α):
+
+- For 95% (2.5/97.5), α = 0.05 (p < 0.05, two-tailed)
+- For 99% (0.5/99.5), α = 0.01 (p < 0.01, two-tailed)
+- For 99.9% (0.05/99.95), α = 0.001 (p < 0.001, two-tailed)
+
+*In summary:*
+If you use the central
+- 95% interval, you are using *p < 0.05*
+- 99% interval, you are using *p < 0.01*
+- 99.9% interval, you are using *p < 0.001*
+
+This is a /two-sided/ (two-tailed) comparison: significance = value outside central X% of the shuffle/null distribution.
+
+If you want an exact p-value for each loading, you’d count the proportion of shuffles more extreme than your observed value (see below).
+
+---
+
+*How to compute the empirical p-value for each loading:*
+#+begin_src python
+pval = np.mean(np.abs(pc_shuff - np.median(pc_shuff, axis=0)) >= np.abs(pc - np.median(pc_shuff, axis=0)), axis=0)
+#+end_src
+This gives the empirical 2-sided p-value for each neuron and PC.
+
+Let me know if you want code for plotting p-value histograms, or for multiple comparison correction!
+
+***
+*** can you give me a full code
+
+Certainly! Here’s a complete and concise code block that takes your PC loadings (shape (3, 3319)) and your shuffled null (shape (100, 3, 3319)), and excludes (or zeroes out) non-significant loadings for every PC/neuron:
+
+#+begin_src ipython
+import numpy as np
+# Compute 95% confidence interval for the shuffle null
+lower = np.percentile(pc_shuff, 2.5, axis=0)   # [3, 3319]
+upper = np.percentile(pc_shuff, 97.5, axis=0)  # [3, 3319]
+
+# Boolean mask: True where real loading is outside shuffle null interval
+significant = (pc < lower) | (pc > upper)      # [3, 3319]
+
+# Zero non-significant loadings (OPTION A: keep full shape, set zeros)
+pc_sig = pc * significant
+
+# Or, if you want indices (OPTION B: for each PC, get neurons with significant loading)
+for pc_idx in range(pc.shape[0]):
+    sig_idx = np.where(significant[pc_idx, :])[0]
+    print(f"PC{pc_idx+1}: {len(sig_idx)} significant neurons")
+    # Example: use only significant entries
+    pc_sig_only = pc[pc_idx, sig_idx]
+
+# Example: keep only significant for a chosen PC (say, PC1)
+pc1_sig = pc[0, significant[0, :]]
+#+end_src
+
+*Summary:*
+- This code computes the shuffle-based (null) 95% interval for each PC and neuron.
+- It marks as "significant" the neurons whose loading is outside that null interval.
+- Non-significant values are either set to zero or removed, according to your needs.
+- Printout shows the count of significant neurons per PC.
+
+Let me know if you want to mask all other results (e.g., trajectories) accordingly!
+
+*** instead of pc1 sig I want pc sig for all pcs
+
+Absolutely! You can keep only the significant loadings for all PCs (non-significant neurons excluded) by— for each PC— extracting just the significant neuron loadings. This gives you a list of arrays, one per PC, each containing only the significant entries for that PC.
+
+*Here's how:*
+
+#+begin_src python
+pc_sig_list = []
+for pc_idx in range(pc.shape[0]):  # for each PC
+    sig_idx = np.where(significant[pc_idx, :])[0]
+    pc_sig_list.append(pc[pc_idx, sig_idx])
+# Now, pc_sig_list[0] is an array of significant loadings for PC1,
+#      pc_sig_list[1] for PC2, etc.
+#+end_src
+
+If you want a single array (with possibly unequal lengths across PCs), you can convert it to an object array:
+
+#+begin_src python
+pc_sig = np.array(pc_sig_list, dtype=object)
+#+end_src
+
+If you want to keep neuron indices as well:
+
+#+begin_src python
+pc_sig_with_idx = []
+for pc_idx in range(pc.shape[0]):
+    sig_idx = np.where(significant[pc_idx, :])[0]
+    pc_sig_with_idx.append((sig_idx, pc[pc_idx, sig_idx]))
+#+end_src
+Now each element is a tuple: (indices, loadings).
+
+*Summary*: =pc_sig_list= holds, for each PC, only the loadings significantly different from zero (as judged against your shuffle).
+
+*** I have nans and want to gaussian filter omitting them
+
+    ax[k].plot(theta[idx], gaussian_filter1d(pcs[k][idx], int(size*pcs.shape[1]), mode='wrap'), 'k')
+
+
+To apply =scipy.ndimage.gaussian_filter1d= while omitting (ignoring) NaNs, you can use NaN-aware smoothing. A common approach is:
+
+1. Replace NaNs with zero (or any value).
+2. Create a weights array that is 0 where NaN, 1 elsewhere.
+3. Convolve both the data and weights with the Gaussian filter.
+4. Normalize output by dividing (safely) by filtered weights.
+
+Here's a utility function:
+
+#+begin_src python
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+
+def nan_gaussian_filter1d(data, sigma, **kwargs):
+    """Gaussian smoothing ignoring NaNs."""
+    data = np.asarray(data)
+    nan_mask = np.isnan(data)
+    data_filled = data.copy()
+    data_filled[nan_mask] = 0
+    weights = (~nan_mask).astype(float)
+    filtered = gaussian_filter1d(data_filled, sigma, **kwargs)
+    weights_filtered = gaussian_filter1d(weights, sigma, **kwargs)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        result = filtered / weights_filtered
+    result[weights_filtered == 0] = np.nan
+    return result
+#+end_src
+
+/Usage in your plot:/
+
+#+begin_src python
+smoothed = nan_gaussian_filter1d(pcs[k][idx], int(size * pcs.shape[1]), mode='wrap')
+ax[k].plot(theta[idx], smoothed, 'k')
+#+end_src
+
+This approach skips NaNs, so the smoothing kernel ignores missing values.
+
+***
+
+
+*** *Practical Example*
 *Linear detrend (scipy)*:
 
 #+begin_src python

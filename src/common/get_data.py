@@ -426,6 +426,13 @@ def get_X_y_days(**kwargs):
 
         X_days = preprocess_df(X_days, y_days, **kwargs)
 
+    try:
+        y_days['learning'] = y_days['day'].apply(lambda x: 'Naive' if x<=3 else 'Expert')
+    except:
+        y_days['learning'] = y_days['day'].apply(lambda x: 'Naive' if x=='first' else 'Expert')
+
+    y_days['performance'] = y_days['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
+
     return X_days[..., :84], y_days
 
 
@@ -518,8 +525,13 @@ def get_X_y_S1_S2(X, y, **kwargs):
         idx_tasks = (y.tasks == "DualGo") | (y.tasks == "DualNoGo")
     if kwargs["task"] == "DualGo":
         idx_tasks = y.tasks == "DualGo"
+        if kwargs["trials"] == "correct":
+            idx_tasks = (y.tasks == "DualGo") & (y.odr_perf == 1)
+
     if kwargs["task"] == "DualNoGo":
         idx_tasks = y.tasks == "DualNoGo"
+        if kwargs["trials"] == "correct":
+            idx_tasks = (y.tasks == "DualNoGo") & (y.odr_perf == 1)
 
     if kwargs["features"] == "sample":
         idx_S1 = (y.sample_odor == 0) & (y.test_odor == 0)
