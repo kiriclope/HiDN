@@ -2,6 +2,7 @@ import numpy as np
 from src.decode.bump import circcvl
 from hmmlearn import hmm
 from sklearn.preprocessing import StandardScaler
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
 class EnergyLandscape():
 
@@ -115,6 +116,7 @@ class EnergyLandscape():
             print('Energy', energy.shape)
 
         if window>0:
-            energy = circcvl(energy, windowSize=window)
+            # energy = circcvl(energy, windowSize=window)
+            energy = gaussian_filter1d(energy, sigma=window, mode='wrap')
 
         return energy
