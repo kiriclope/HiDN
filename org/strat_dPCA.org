@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session pca :kernel dual :output-dir ./figures/pca :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session dpca :kernel dual :output-dir ./figures/dpca :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -186,6 +186,7 @@ def pad_with_nans(array, target_shape):
 #+end_src
 
 #+RESULTS:
+: b3edf6b3-b37d-4628-858d-80ee59e3fc5c
 
 #+begin_src ipython
 from scipy.linalg import orthogonal_procrustes
@@ -252,20 +253,97 @@ from sklearn.model_selection import KFold, StratifiedKFold, RepeatedStratifiedKF
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 
-def cross_val_avg_pca(X, y, pca, folds, factors, epoch):
+def cross_val_avg_pca(X, y, n_splits, n_repeats, n_comp, epoch, condition, scaler=None):
+
+    if scaler is not None:
+        scaler = StandardScaler(axis=0, if_scale=1)
+
+    pca = PCA(n_components=n_comp, svd_solver='randomized')
+    # kf = StratifiedKFold(n_splits=n_splits, shuffle=True)
+    kf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
 
     labels = y['mouse'].astype(str) + '_' + y['odor_pair'].astype(str) + '_' + y['tasks'].astype(str) + '_' + y['laser'].astype(str)
 
     X_folds, y_folds = [], []
     w_folds, evr_folds = [], []
     w_ref = None
-    for train_idx, test_idx in tqdm(folds.split(X, labels), total=folds.get_n_splits(X, labels), desc=y.mouse.unique()[0]):
+    for train_idx, test_idx in tqdm(kf.split(X, labels), total=kf.get_n_splits(X, labels)):
 
         X_train, y_train = X[train_idx], y.iloc[train_idx]
 
-        m_train = (y_train.performance==1) & (y_train.laser==0)
+        # m_train = (y_train.performance==1) & (y_train.laser==0)
         # m_train = (y_train.performance==1) & ((y_train.tasks=='DPA') | (y_train.odr_perf==1)) & (y_train.laser==0)
-        # m_train = (y_train.laser==0)
+        m_train = (y_train.laser==0)
+
+        X_train = X_train[m_train]
+        y_train = y_train[m_train]
+
+        if scaler is not None:
+            X_train = scaler.fit_transform(X_train)
+        X_train_epoch = X_train[..., epoch]
+
+        X_train_flat = X_train_epoch.transpose(0, 2, 1).reshape(-1, X_train_epoch.shape[1])
+        X_mean = np.nanmean(X_train_flat, axis=0, keepdims=True)
+
+        X_avg_epoch = cv_avg_cond(X_train_epoch, y_train, condition)
+        X_avg_flat = X_avg_epoch.transpose(0, 2, 1).reshape(-1, X_avg_epoch.shape[1])
+        X_cent = X_avg_flat - X_mean
+
+        pca.fit(X_cent)
+        w_fold = pca.components_
+        evr_folds.append(pca.explained_variance_ratio_)
+
+        X_test, y_test = X[test_idx], y.iloc[test_idx]
+        if scaler is not None:
+            X_test = scaler.transform(X_test)
+
+        X_test_flat = X_test.transpose(0, 2, 1).reshape(-1, X_test.shape[1])
+        X_cent_test = X_test_flat - X_mean
+        X_out = pca.transform(X_cent_test).reshape(X_test.shape[0], X_test.shape[-1], -1)
+
+        X_pca_aligned, w_fold_aligned = align_fold_to_ref(w_fold, w_ref, X_out)
+
+        w_folds.append(w_fold_aligned)
+
+        if w_ref is None:
+                w_ref = w_folds[0]
+
+        X_folds.append(X_pca_aligned)
+        y_folds.append(y_test)
+
+    X_folds = np.concatenate(X_folds, 0)
+    y_folds = pd.concat(y_folds)
+
+    w_folds = np.array(w_folds, dtype=object)
+    evr_folds = np.array(evr_folds, dtype=object)
+
+    return X_folds, y_folds, w_folds, evr_folds
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, StratifiedKFold, RepeatedStratifiedKFold
+from sklearn.decomposition import PCA
+from tqdm import tqdm
+
+def cross_val_avg_dpca(X, y, n_splits, n_repeats, n_comp, epoch, condition, target='sample_odor'):
+
+    pca = PCA(n_components=n_comp, svd_solver='randomized')
+    kf = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+
+    labels = y['mouse'].astype(str) + '_' + y['odor_pair'].astype(str) + '_' + y['tasks'].astype(str) + '_' + y['laser'].astype(str)
+
+    X_folds, y_folds = [], []
+    w_folds, evr_folds = [], []
+    w_ref = None
+    for train_idx, test_idx in tqdm(kf.split(X, labels), total=kf.get_n_splits(X, labels)):
+
+        X_train, y_train = X[train_idx], y.iloc[train_idx]
+
+        # m_train = (y_train.performance==1) & (y_train.laser==0)
+        # m_train = (y_train.performance==1) & ((y_train.tasks=='DPA') | (y_train.odr_perf==1)) & (y_train.laser==0)
+        m_train = (y_train.laser==0)
 
         X_train = X_train[m_train]
         y_train = y_train[m_train]
@@ -275,8 +353,19 @@ def cross_val_avg_pca(X, y, pca, folds, factors, epoch):
         X_train_flat = X_train_epoch.transpose(0, 2, 1).reshape(-1, X_train_epoch.shape[1])
         X_mean = np.nanmean(X_train_flat, axis=0, keepdims=True)
 
-        X_avg_epoch = cv_avg_cond(X_train_epoch, y_train, factors)
-        X_avg_flat = X_avg_epoch.transpose(0, 2, 1).reshape(-1, X_avg_epoch.shape[1])
+        X_avg_epoch, keys = cv_avg_cond_with_keys(X_train_epoch, y_train, condition)
+
+        print(keys, condition)
+
+        # isolate sample main effect (demixed)
+        X_demix = demix_component(
+            X_avg_epoch, keys_df=keys,
+            factors=condition,
+            target=target,
+            add_interactions=True
+        )
+
+        X_avg_flat = X_demix.transpose(0, 2, 1).reshape(-1, X_demix.shape[1])
         X_cent = X_avg_flat - X_mean
 
         pca.fit(X_cent)
@@ -401,7 +490,6 @@ def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
 #+end_src
 
 #+RESULTS:
-: 8ce204a0-efdb-44a3-9489-c13357a92cc6
 
 #+begin_src ipython
 def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
@@ -425,7 +513,6 @@ def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
 #+end_src
 
 #+RESULTS:
-: 400b3448-aca2-454e-b19c-4becda364ccb
 
 #+begin_src ipython
 import numpy as np
@@ -495,7 +582,6 @@ def create_field_rbf(
 #+end_src
 
 #+RESULTS:
-: f0c9b39f-a740-48e9-a2cf-93a71e67fcdc
 
 #+begin_src ipython
 import numpy as np
@@ -570,7 +656,6 @@ def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
 #+end_src
 
 #+RESULTS:
-: adf85571-8890-40a3-961a-40934fd5fae8
 
 #+begin_src ipython
 def get_mean_velo(r_s, dr_s, n_bins=32, z_lim=10):
@@ -589,7 +674,6 @@ def get_mean_velo(r_s, dr_s, n_bins=32, z_lim=10):
 #+end_src
 
 #+RESULTS:
-: 9a614ca2-a3b2-42dd-aa89-11958cf75842
 
 * Parameters
 
@@ -802,39 +886,24 @@ print(y_pca.tasks.unique())
 #+end_src
 
 #+RESULTS:
-: 0e029adb-d34e-460f-90f5-98e4a352a98a
-
-#+begin_src ipython
-factors = ['odor_pair']
-
-n_splits = 5
-n_repeats = 100
-n_comp = 3
-
-pca = PCA(n_components=n_comp, svd_solver='randomized')
-folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
-#+end_src
-
-#+RESULTS:
-: 6e45a1a7-58a2-4725-8d72-f5a285b4f68c
 
 #+begin_src ipython
 n_splits = 5
 n_repeats = 1
 n_comp = 3
 
-X_cv, y_cv, w_cv, evr_cv = cross_val_avg_pca(X_pca, y_pca, pca, folds, factors, epoch)
+X_cv, y_cv, w_cv, evr_cv = cross_val_avg_pca(X_pca, y_pca, n_splits, n_repeats, n_comp, epoch, condition)
 #+end_src
 
 #+RESULTS:
-: JawsM01:   0% 0/500 [00:00<?, ?it/s]
+: 100% 5/5 [10:37<00:00, 127.54s/it]
 
 #+begin_src ipython
 print(X_cv.shape, y_cv.shape, w_cv.shape, evr_cv.shape)
 #+end_src
 
 #+RESULTS:
-: d0bab805-cf4f-4a8d-a214-639a97c9fe26
+: (4032, 84, 3) (4032, 16) (5, 3, 3319) (5, 3)
 
 #+begin_src ipython
 X_meta = np.array(X_cv, dtype=float)
@@ -846,7 +915,7 @@ print(X_meta.shape, y_meta.shape, w_meta.shape)
 #+end_src
 
 #+RESULTS:
-: 3127ffe2-0fab-40d8-a5ec-d66980843640
+: (4032, 3, 84) (4032, 16) (3, 3319)
 
 ** Save/Load
 
@@ -3994,17 +4063,803 @@ print(y_all.keys())
 :        'odor_pair', 'learning', 'performance', 'mouse'],
 :       dtype='object')
 
-** PCA
+** dPCA
 
 #+begin_src ipython
-options['epochs'] = ['TASK']
-epoch = options['bins_' + options['epochs'][0]]
-print(epoch)
+import numpy as np
+from itertools import combinations
+
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.utils.validation import check_is_fitted
+from sklearn.covariance import LedoitWolf, OAS
+
+from scipy.sparse.linalg import eigsh
+
+
+def _as_1d(a):
+    a = np.asarray(a)
+    return a.reshape(-1)
+
+
+def _factor_indices(y, factors):
+    idxs, levels, dims = [], {}, []
+    for k in factors:
+        vals = _as_1d(y[k])
+        lev = np.unique(vals)
+        lev = np.sort(lev)
+        levels[k] = lev
+        idxs.append(np.searchsorted(lev, vals).astype(int))
+        dims.append(len(lev))
+    return np.stack(idxs, axis=1), levels, dims  # (B,F), dict, (F,)
+
+
+def _flat_from_coords(coords, dims):
+    dims = np.asarray(dims, dtype=int)
+    if coords.shape[-1] == 1:
+        return coords[..., 0].astype(int)
+    mult = np.array([np.prod(dims[i + 1 :], dtype=int) for i in range(len(dims))], dtype=int)
+    return (coords * mult).sum(axis=-1).astype(int)
+
+
+def _compute_condition_means(X, cond_idx, n_cond):
+    B, N, T = X.shape
+    sums = np.zeros((n_cond, N, T), dtype=float)
+    np.add.at(sums, cond_idx, X)
+    counts = np.bincount(cond_idx, minlength=n_cond).astype(int)
+    if np.any(counts == 0):
+        raise ValueError("Missing conditions detected; this implementation assumes none missing.")
+    return sums / counts[:, None, None], counts
+
+
+def _ridge_fit(Y, X, alpha):
+    XXt = X @ X.T
+    XXt.flat[:: XXt.shape[0] + 1] += float(alpha)
+    rhs = Y @ X.T
+    return np.linalg.solve(XXt.T, rhs.T).T
+
+
+def _top_components_from_decoder(V, n_components):
+    N = V.shape[0]
+    k = int(n_components)
+    if k <= 0:
+        raise ValueError("n_components must be >= 1")
+    A = V @ V.T
+    if N <= k:
+        w, U = np.linalg.eigh(A)
+        idx = np.argsort(w)[::-1][:k]
+        return U[:, idx].T
+    k_eff = min(k, N - 1)
+    w, U = eigsh(A, k=k_eff, which="LA")
+    idx = np.argsort(w)[::-1]
+    return U[:, idx].T
+
+
+def _shrinkage_to_ridge_alpha(shrinkage, cov):
+    p = cov.shape[0]
+    mu = np.trace(cov) / max(1, p)
+    s = float(shrinkage)
+    s = min(max(s, 0.0), 0.999999)
+    return (s / (1.0 - s)) * mu
+
+
+class RegularizedDPCA(BaseEstimator, TransformerMixin):
+    def __init__(
+        self,
+        factors,
+        n_components=3,
+        alpha="lw",
+        include_interactions=True,
+        center=True,
+        fit_on_trials=True,
+    ):
+        self.factors = list(factors)
+        self.n_components = int(n_components)
+        if alpha not in ("lw", "oas"):
+            raise ValueError("alpha must be 'lw' or 'oas'")
+        self.alpha = alpha
+        self.include_interactions = bool(include_interactions)
+        self.center = bool(center)
+        self.fit_on_trials = bool(fit_on_trials)
+
+    def _marginalizations(self):
+        keys = self.factors
+        out = [(k,) for k in keys]
+        if self.include_interactions:
+            for r in range(2, len(keys) + 1):
+                out.extend(tuple(c) for c in combinations(keys, r))
+        return out
+
+    def _estimate_alpha(self, Xmat):
+        Z = Xmat.T
+        Z = Z - Z.mean(axis=0, keepdims=True)
+        est = LedoitWolf().fit(Z) if self.alpha == "lw" else OAS().fit(Z)
+        self.shrinkage_ = float(est.shrinkage_)
+        return _shrinkage_to_ridge_alpha(self.shrinkage_, est.covariance_)
+
+    def fit(self, X, y):
+        X = np.asarray(X)
+        if X.ndim != 3:
+            raise ValueError("X must be (n_trials,n_neurons,n_time)")
+        if not self.fit_on_trials:
+            raise ValueError("This version is written for fit_on_trials=True.")
+
+        B, N, T = X.shape
+        for k in self.factors:
+            if k not in y:
+                raise ValueError(f"Missing factor '{k}' in y")
+
+        fidxs, levels, dims = _factor_indices(y, self.factors)  # (B,F)
+        F = fidxs.shape[1]
+        n_cond = int(np.prod(dims))
+        cond_idx = _flat_from_coords(fidxs, dims)
+
+        means, counts = _compute_condition_means(X, cond_idx, n_cond)  # (C,N,T)
+
+        # all condition coordinates in flat order
+        grids = np.meshgrid(*[np.arange(d, dtype=int) for d in dims], indexing="ij")
+        cond_coords = np.stack([g.reshape(-1) for g in grids], axis=1)  # (C,F)
+
+        grand = means.mean(axis=0) if self.center else np.zeros((N, T), float)
+        Xc = X - grand[None, :, :]
+        means_c = means - grand[None, :, :]
+
+        Xmat = Xc.transpose(1, 0, 2).reshape(N, -1)
+        self.alpha_ = self._estimate_alpha(Xmat)
+
+        # subset means for each subset of factors, stored as GRID arrays:
+        # subset_means_grid[subset] has shape (*dims_subset, N, T)
+        subset_means_grid = {}
+        for r in range(1, F + 1):
+            for subset in combinations(range(F), r):
+                dims_s = [dims[i] for i in subset]
+                coords_s = cond_coords[:, subset]
+                combo = _flat_from_coords(coords_s, dims_s)
+                n_combo = int(np.prod(dims_s))
+
+                sums = np.zeros((n_combo, N, T), float)
+                cnt = np.zeros((n_combo,), int)
+                np.add.at(sums, combo, means_c)
+                np.add.at(cnt, combo, 1)
+
+                M = sums / cnt[:, None, None]                 # (n_combo,N,T)
+                subset_means_grid[subset] = M.reshape(*dims_s, N, T)
+
+        # inclusion–exclusion in GRID space, then flatten at the end
+        effects = {}  # effects[subset] is flattened (prod(dims_subset),N,T)
+        for r in range(1, F + 1):
+            for subset in combinations(range(F), r):
+                dims_s = [dims[i] for i in subset]
+                Egrid = subset_means_grid[subset].copy()       # (*dims_s,N,T)
+
+                if r > 1:
+                    for rr in range(1, r):
+                        for subsub in combinations(subset, rr):
+                            # effect(subsub) is currently flattened; reshape to its grid
+                            dims_ss = [dims[i] for i in subsub]
+                            Esub_grid = effects[subsub].reshape(*dims_ss, N, T)
+
+                            # expand into subset grid by inserting singleton dims in missing axes
+                            reshape_sizes = []
+                            for i in subset:
+                                reshape_sizes.append(dims[i] if i in subsub else 1)
+                            Esub_in_subset = Esub_grid.reshape(*reshape_sizes, N, T)  # broadcasts
+                            Egrid -= Esub_in_subset
+
+                effects[subset] = Egrid.reshape(-1, N, T)
+
+        # fit each marginal
+        self.components_, self.decoders_ = {}, {}
+        self.marginalizations_ = [tuple(m) for m in self._marginalizations()]
+        key_to_pos = {k: i for i, k in enumerate(self.factors)}
+
+        for m in self.marginalizations_:
+            pos = tuple(key_to_pos[k] for k in m)
+            dims_m = [dims[i] for i in pos]
+            Econd = effects[pos]  # (prod(dims_m),N,T)
+
+            combo_id = _flat_from_coords(fidxs[:, pos], dims_m)  # (B,)
+            Ytrial = Econd[combo_id]                             # (B,N,T)
+            Ymat = Ytrial.transpose(1, 0, 2).reshape(N, -1)
+
+            V = _ridge_fit(Ymat, Xmat, self.alpha_)
+            W = _top_components_from_decoder(V, self.n_components)
+            self.decoders_[m] = V
+            self.components_[m] = W
+
+        self.levels_ = levels
+        self.dims_ = dims
+        self.grand_mean_ = grand
+        self.n_neurons_ = N
+        self.n_time_ = T
+        self.explained_variance_ratio_ = self._compute_evr_dict(X)
+        return self
+
+    def transform(self, X, marginalization):
+        check_is_fitted(self, "components_")
+        X = np.asarray(X)
+        if X.ndim != 3:
+            raise ValueError("X must be (n_trials,n_neurons,n_time)")
+        if X.shape[1] != self.n_neurons_ or X.shape[2] != self.n_time_:
+            raise ValueError("X shape mismatch vs fit()")
+        m = tuple(marginalization) if isinstance(marginalization, (list, tuple)) else (marginalization,)
+        W = self.components_[m]
+        Xc = X - self.grand_mean_[None, :, :]
+        return np.einsum("bnt,kn->bkt", Xc, W)
+
+    def reconstruct_marginal(self, X, marginalization):
+        check_is_fitted(self, "decoders_")
+        X = np.asarray(X)
+        if X.ndim != 3:
+            raise ValueError("X must be (n_trials,n_neurons,n_time)")
+        if X.shape[1] != self.n_neurons_ or X.shape[2] != self.n_time_:
+            raise ValueError("X shape mismatch vs fit()")
+        m = tuple(marginalization) if isinstance(marginalization, (list, tuple)) else (marginalization,)
+        V = self.decoders_[m]
+        Xc = X - self.grand_mean_[None, :, :]
+        Xhat = np.einsum("nm,bmt->bnt", V, Xc)
+        return Xhat + self.grand_mean_[None, :, :]
+
+    def transform_demixed(self, X, marginalization):
+        Xm = self.reconstruct_marginal(X, marginalization=marginalization)
+        return self.transform(Xm, marginalization=marginalization)
+
+    def _compute_evr_dict(self, X):
+        """
+        EVR per marginalization: Var(V_m Xc) / Var(Xc)
+        Returns dict: key marginalization tuple -> float
+        """
+        X = np.asarray(X)
+        Xc = X - self.grand_mean_[None, :, :]
+        den = np.var(Xc) + 1e-12
+
+        evr = {}
+        for m, V in self.decoders_.items():
+            Xhat = np.einsum("nm,bmt->bnt", V, Xc)
+            evr[m] = float(np.var(Xhat) / den)
+        return evr
 #+end_src
 
 #+RESULTS:
-: [18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41
-:  42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65]
+
+#+begin_src ipython
+import numpy as np
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.utils.validation import check_is_fitted
+from sklearn.covariance import LedoitWolf, OAS
+
+
+# ----------------------- utilities -----------------------
+
+def _unique_sorted(x):
+    x = np.asarray(x)
+    return np.unique(x)
+
+
+def _as_1d_labels(y):
+    """Convert labels to 1D numpy array."""
+    if hasattr(y, "to_numpy"):
+        y = y.to_numpy()
+    y = np.asarray(y)
+    if y.ndim != 1:
+        y = y.reshape(-1)
+    return y
+
+
+def _flatten_factors_to_cond(labels, factors):
+    """
+    labels: dict factor -> (n_trials,)
+    returns:
+      cond_idx: (n_trials,) flattened factorial condition index
+      levels: dict factor -> sorted unique values
+      all_keys: list of factors
+      dims: list of n_levels per factor in same order
+    """
+    n_trials = len(next(iter(labels.values())))
+    all_keys = list(factors)
+    levels = {k: _unique_sorted(labels[k]) for k in all_keys}
+    level_to_idx = {k: {val: i for i, val in enumerate(levels[k])} for k in all_keys}
+    dims = [len(levels[k]) for k in all_keys]
+
+    def flat_index(i):
+        idxs = [level_to_idx[k][labels[k][i]] for k in all_keys]
+        flat = 0
+        mult = 1
+        for d, ii in zip(reversed(dims), reversed(idxs)):
+            flat += ii * mult
+            mult *= d
+        return flat
+
+    cond_idx = np.fromiter((flat_index(i) for i in range(n_trials)), dtype=int, count=n_trials)
+    return cond_idx, levels, all_keys, dims
+
+
+def _unravel(flat, dims):
+    coords = []
+    rem = int(flat)
+    for d in reversed(dims):
+        coords.append(rem % d)
+        rem //= d
+    return list(reversed(coords))
+
+
+def _compute_condition_means(X, cond_idx, n_cond):
+    """
+    X: (n_trials,n_neurons,n_time)
+    returns:
+      means: (n_cond,n_neurons,n_time) with NaNs for empty conditions
+      counts: (n_cond,)
+      valid: (n_cond,) bool
+    """
+    n_trials, n_neurons, n_time = X.shape
+    means = np.zeros((n_cond, n_neurons, n_time), float)
+    counts = np.zeros((n_cond,), int)
+    for i in range(n_trials):
+        c = int(cond_idx[i])
+        means[c] += X[i]
+        counts[c] += 1
+    valid = counts > 0
+    means[valid] /= counts[valid, None, None]
+    means[~valid] = np.nan
+    return means, counts, valid
+
+
+def _ridge_fit(Y, X, alpha):
+    """
+    Solve V in: Y ≈ V X with ridge penalty alpha||V||^2
+    Y: (n_targets, n_samples)
+    X: (n_features, n_samples)
+    return V: (n_targets, n_features)
+    """
+    alpha = float(alpha)
+    Xt = X.T
+    XXt = X @ Xt
+    reg = XXt + alpha * np.eye(XXt.shape[0])
+    return (Y @ Xt) @ np.linalg.inv(reg)
+
+
+def _top_components_from_decoder(V, n_components):
+    """
+    V: (p,p) decoder, generally NOT symmetric.
+    Return components W: (k,p) using left singular vectors of V.
+    """
+    U, S, Vt = np.linalg.svd(V, full_matrices=False)
+    k = min(int(n_components), U.shape[1])
+    return U[:, :k].T
+
+
+def _shrinkage_to_ridge_alpha(shrinkage, cov):
+    """
+    Convert shrinkage-to-identity level s to ridge alpha:
+      C_shrunk = (1-s) C + s * mu I, mu=tr(C)/p
+      alpha = (s/(1-s)) * mu
+    """
+    p = cov.shape[0]
+    mu = np.trace(cov) / max(1, p)
+    s = float(shrinkage)
+    s = min(max(s, 0.0), 0.999999)
+    return (s / (1.0 - s)) * mu
+
+
+# ----------------------- estimator -----------------------
+
+class RegularizedDPCA(BaseEstimator, TransformerMixin):
+    """
+    Regularized dPCA using ridge regularization level chosen by
+    Ledoit-Wolf ('lw') or OAS ('oas') covariance shrinkage.
+
+    Parameters
+    ----------
+    factors : list[str]
+        Factor names; y must be a dict with these keys, each (n_trials,).
+    n_components : int
+        Number of demixed components per marginalization.
+    alpha : {'lw','oas'}
+        Shrinkage estimator used to set ridge alpha.
+    include_interactions : bool
+        Include interaction marginalizations.
+    include_ci : bool
+        Include condition-independent ("time-only") marginalization ('ci',).
+    center : bool
+        If True, subtract time-varying grand mean (neurons x time) computed from
+        condition means.
+    fit_on_trials : bool
+        If True, fit decoders using single-trial data with per-trial marginalized
+        targets. If False, fit using condition means.
+
+    Notes on CI
+    -----------
+    If center=True subtracts a full time-varying grand mean, the CI marginal in
+    centered space often becomes ~0. Consider center=False and doing your own
+    baseline subtraction if you want a meaningful CI.
+    """
+
+    def __init__(
+        self,
+        factors,
+        n_components=3,
+        alpha="lw",                 # ONLY 'lw' or 'oas'
+        include_interactions=True,
+        include_ci=False,
+        center=True,
+        fit_on_trials=True,
+    ):
+        self.factors = list(factors)
+        self.n_components = int(n_components)
+
+        if alpha not in ("lw", "oas"):
+            raise ValueError("alpha must be 'lw' or 'oas'")
+        self.alpha = alpha
+
+        self.include_interactions = bool(include_interactions)
+        self.include_ci = bool(include_ci)
+        self.center = bool(center)
+        self.fit_on_trials = bool(fit_on_trials)
+
+    def _make_marginalizations(self):
+        from itertools import combinations
+        keys = self.factors
+        marginals = []
+        if self.include_ci:
+            marginals.append(("ci",))
+        marginals += [(k,) for k in keys]
+        if self.include_interactions:
+            for r in range(2, len(keys) + 1):
+                for comb in combinations(keys, r):
+                    marginals.append(tuple(comb))
+        return marginals
+
+    def _compute_effects(self, means_valid, cond_coords, all_keys):
+        """
+        means_valid: (n_valid,n_neurons,n_time) centered by some grand mean
+        Returns effect(spec_keys) -> dict combo -> (n_neurons,n_time)
+        """
+        overall = np.nanmean(means_valid, axis=0)
+        effect_cache = {}
+
+        def avg_over(mask):
+            return np.nanmean(means_valid[mask], axis=0)
+
+        def effect(spec_keys):
+            spec_keys = tuple(spec_keys)
+            if spec_keys in effect_cache:
+                return effect_cache[spec_keys]
+
+            key_inds = [all_keys.index(k) for k in spec_keys]
+            combos = np.unique(cond_coords[:, key_inds], axis=0)
+
+            eff = {}
+            for combo in combos:
+                mask = np.ones((cond_coords.shape[0],), dtype=bool)
+                for ki, val in zip(key_inds, combo):
+                    mask &= (cond_coords[:, ki] == val)
+
+                m = avg_over(mask)
+                e = m - overall
+
+                if len(spec_keys) > 1:
+                    from itertools import combinations
+                    for r in range(1, len(spec_keys)):
+                        for sub_keys in combinations(spec_keys, r):
+                            sub = effect(sub_keys)
+                            sub_inds = [spec_keys.index(k) for k in sub_keys]
+                            sub_combo = tuple(combo[i] for i in sub_inds)
+                            e = e - sub[sub_combo]
+
+                eff[tuple(combo)] = e
+
+            effect_cache[spec_keys] = eff
+            return eff
+
+        return effect
+
+    def _build_cond_struct(self, X, y):
+        X = np.asarray(X)
+        n_trials, n_neurons, n_time = X.shape
+
+        labels = {k: _as_1d_labels(y[k]) for k in self.factors}
+        cond_idx, levels, all_keys, dims = _flatten_factors_to_cond(labels, self.factors)
+        n_cond = int(np.prod(dims))
+
+        means, counts, valid = _compute_condition_means(X, cond_idx, n_cond)
+        valid_ids = np.where(valid)[0]
+        cond_coords = np.array([_unravel(cid, dims) for cid in valid_ids], int)
+
+        means_valid_raw = means[valid]  # (n_valid,n_neurons,n_time) raw
+        if means_valid_raw.size == 0:
+            raise ValueError("No valid conditions (every condition count=0).")
+
+        grand = np.nanmean(means_valid_raw, axis=0) if self.center else np.zeros((n_neurons, n_time))
+        means_valid = means_valid_raw - grand[None, :, :]
+
+        return dict(
+            labels=labels,
+            cond_idx=cond_idx,
+            levels=levels,
+            all_keys=all_keys,
+            dims=dims,
+            n_cond=n_cond,
+            means=means,
+            counts=counts,
+            valid=valid,
+            valid_ids=valid_ids,
+            cond_coords=cond_coords,
+            means_valid_raw=means_valid_raw,
+            means_valid=means_valid,
+            grand=grand,
+        )
+
+    def _build_trial_matrix(self, X, grand):
+        Xc = X - grand[None, :, :]
+        return Xc.transpose(1, 0, 2).reshape(X.shape[1], -1)
+
+    def _build_condmean_matrix(self, means_valid):
+        return means_valid.transpose(1, 0, 2).reshape(means_valid.shape[1], -1)
+
+    def _ci_target_trial(self, *, means_valid_centered, n_trials):
+        """Condition-independent time course in the centered space."""
+        ci = np.nanmean(means_valid_centered, axis=0)  # (neurons,time)
+        return np.broadcast_to(ci[None, :, :], (n_trials, ci.shape[0], ci.shape[1])).copy()
+
+    def _ci_target_cond(self, *, means_valid_centered):
+        """Repeat CI(t) for each condition row."""
+        ci = np.nanmean(means_valid_centered, axis=0)  # (neurons,time)
+        n_valid = means_valid_centered.shape[0]
+        return np.broadcast_to(ci[None, :, :], (n_valid, ci.shape[0], ci.shape[1])).copy()
+
+    def _trial_targets_for_marginal(self, *, all_keys, effect, m, cond_idx, valid, dims):
+        """
+        Per-trial target tensor Ytrial: (n_trials,n_neurons,n_time)
+        Each trial is assigned the marginalized condition-mean effect for its condition.
+        """
+        if m == ("ci",):
+            raise ValueError("CI targets should be built directly (_ci_target_*), not via _trial_targets_for_marginal.")
+
+        n_trials = cond_idx.shape[0]
+        eff = effect(m)
+        if len(eff) == 0:
+            raise ValueError(f"No effects available for marginal {m} (likely missing conditions).")
+
+        first = next(iter(eff.values()))
+        n_neurons, n_time = first.shape
+
+        key_inds = [all_keys.index(k) for k in m]
+
+        Ytrial = np.zeros((n_trials, n_neurons, n_time), float)
+        for tr in range(n_trials):
+            cid = int(cond_idx[tr])
+            if not bool(valid[cid]):
+                continue
+            coords = _unravel(cid, dims)
+            combo = tuple(np.array(coords, int)[key_inds])
+            if combo in eff:
+                Ytrial[tr] = eff[combo]
+        return Ytrial
+
+    def _estimate_alpha_from_shrinkage(self, Xmat, method):
+        # Xmat: (neurons, samples); shrinkage on samples x features
+        Z = Xmat.T
+        Z = Z - Z.mean(axis=0, keepdims=True)
+        if method == "lw":
+            est = LedoitWolf().fit(Z)
+        elif method == "oas":
+            est = OAS().fit(Z)
+        else:
+            raise ValueError("method must be 'lw' or 'oas'")
+        cov = est.covariance_
+        shrink = float(est.shrinkage_)
+        alpha = _shrinkage_to_ridge_alpha(shrink, cov)
+        return alpha, shrink
+
+    def _fit_with_alpha(self, X, y, alpha_value):
+        X = np.asarray(X)
+        n_trials, n_neurons, n_time = X.shape
+
+        S = self._build_cond_struct(X, y)
+        cond_idx = S["cond_idx"]
+        levels = S["levels"]
+        all_keys = S["all_keys"]
+        dims = S["dims"]
+        valid = S["valid"]
+        cond_coords = S["cond_coords"]
+        means_valid = S["means_valid"]
+        grand = S["grand"]
+
+        effect = self._compute_effects(means_valid, cond_coords, all_keys)
+        marginals = self._make_marginalizations()
+
+        if self.fit_on_trials:
+            Xmat = self._build_trial_matrix(X, grand)
+        else:
+            Xmat = self._build_condmean_matrix(means_valid)
+
+        components_ = {}
+        decoders_ = {}
+
+        for m in marginals:
+            if m == ("ci",):
+                if self.fit_on_trials:
+                    Ytrial = self._ci_target_trial(means_valid_centered=means_valid, n_trials=n_trials)
+                    Ymat = Ytrial.transpose(1, 0, 2).reshape(n_neurons, -1)
+                else:
+                    Ycond = self._ci_target_cond(means_valid_centered=means_valid)
+                    Ymat = self._build_condmean_matrix(Ycond)
+            else:
+                if self.fit_on_trials:
+                    Ytrial = self._trial_targets_for_marginal(
+                        all_keys=all_keys,
+                        effect=effect,
+                        m=m,
+                        cond_idx=cond_idx,
+                        valid=valid,
+                        dims=dims,
+                    )
+                    Ymat = Ytrial.transpose(1, 0, 2).reshape(n_neurons, -1)
+                else:
+                    effm = effect(m)
+                    key_inds = [all_keys.index(k) for k in m]
+                    Y = np.zeros_like(means_valid)
+                    for i in range(means_valid.shape[0]):
+                        combo = tuple(cond_coords[i, key_inds])
+                        Y[i] = effm[combo]
+                    Ymat = self._build_condmean_matrix(Y)
+
+            V = _ridge_fit(Ymat, Xmat, alpha=alpha_value)          # (neurons,neurons)
+            W = _top_components_from_decoder(V, self.n_components) # (k,neurons)
+            components_[m] = W
+            decoders_[m] = V
+
+        return dict(
+            levels_=levels,
+            all_keys_=all_keys,
+            dims_=dims,
+            grand_mean_=grand,
+            marginalizations_=marginals,
+            components_=components_,
+            decoders_=decoders_,
+            n_neurons_=n_neurons,
+            n_time_=n_time,
+        )
+
+    def fit(self, X, y):
+        X = np.asarray(X)
+        if X.ndim != 3:
+            raise ValueError("X must be (n_trials,n_neurons,n_time)")
+        for k in self.factors:
+            if k not in y:
+                raise ValueError(f"Missing factor '{k}' in y")
+
+        # build centered structure to get grand mean & matrices
+        S = self._build_cond_struct(X, y)
+        if self.fit_on_trials:
+            Xmat = self._build_trial_matrix(X, S["grand"])
+        else:
+            Xmat = self._build_condmean_matrix(S["means_valid"])
+
+        self.alpha_, self.shrinkage_ = self._estimate_alpha_from_shrinkage(Xmat, self.alpha)
+        fitted = self._fit_with_alpha(X, y, self.alpha_)
+
+        for k, v in fitted.items():
+            setattr(self, k, v)
+
+        self.explained_variance_ratio_ = self._compute_evr_dict(X, per_time=False)
+        return self
+
+    def _compute_evr_dict(self, X, per_time=False):
+        """Compute EVR dict over self.marginalizations_ using fitted decoders."""
+        check_is_fitted(self, "decoders_")
+        X = np.asarray(X)
+        Xc = X - self.grand_mean_[None, :, :]
+
+        out = {}
+        for m in self.marginalizations_:
+            V = self.decoders_[m]
+            Xhat = np.einsum("nm,bmt->bnt", V, Xc)
+            if per_time:
+                num = np.nanvar(Xhat, axis=(0, 1))
+                den = np.nanvar(Xc, axis=(0, 1)) + 1e-12
+                out[m] = num / den
+            else:
+                num = np.nanvar(Xhat)
+                den = np.nanvar(Xc) + 1e-12
+                out[m] = float(num / den)
+        return out
+
+    def transform(self, X, marginalization=("sample",)):
+        check_is_fitted(self, "components_")
+        X = np.asarray(X)
+        if X.ndim != 3:
+            raise ValueError("X must be (n_trials,n_neurons,n_time)")
+        if X.shape[1] != self.n_neurons_ or X.shape[2] != self.n_time_:
+            raise ValueError("X shape mismatch vs fit")
+
+        m = tuple(marginalization) if isinstance(marginalization, (list, tuple)) else (marginalization,)
+        W = self.components_[m]
+        Xc = X - self.grand_mean_[None, :, :]
+        return np.einsum("bnt,kn->bkt", Xc, W)
+
+    def reconstruct_marginal(self, X, marginalization=("sample",)):
+        check_is_fitted(self, "decoders_")
+        X = np.asarray(X)
+        if X.ndim != 3:
+            raise ValueError("X must be (n_trials,n_neurons,n_time)")
+        if X.shape[1] != self.n_neurons_ or X.shape[2] != self.n_time_:
+            raise ValueError("X shape mismatch vs fit")
+
+        m = tuple(marginalization) if isinstance(marginalization, (list, tuple)) else (marginalization,)
+        V = self.decoders_[m]
+        Xc = X - self.grand_mean_[None, :, :]
+        Xhat = np.einsum("nm,bmt->bnt", V, Xc)
+        return Xhat + self.grand_mean_[None, :, :]
+
+    def transform_demixed(self, X, marginalization=("sample",)):
+        Xm = self.reconstruct_marginal(X, marginalization=marginalization)
+        return self.transform(Xm, marginalization=marginalization)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src ipython
+from sklearn.model_selection import KFold, StratifiedKFold, RepeatedStratifiedKFold
+from sklearn.decomposition import PCA
+from tqdm import tqdm
+
+def cross_val_avg_dpca(X, y, model, folds, factors):
+
+    labels = y['mouse'].astype(str) + '_' + y['odor_pair'].astype(str) + '_' + y['tasks'].astype(str) + '_' + y['laser'].astype(str)
+
+    X_folds, y_folds = [], []
+    w_folds, evr_folds = [], []
+    w_ref = None
+
+    for train_idx, test_idx in tqdm(folds.split(X, labels), total=folds.get_n_splits(X, labels), desc=y.mouse.unique()[0]):
+
+        X_train, y_train = X[train_idx], y.iloc[train_idx]
+        m_train = (y_train.laser==0) & (y_train.performance==1) & ((y_train.tasks=='DPA') | (y_train.odr_perf==1))
+
+        X_train = X_train[m_train]
+        y_train = y_train[m_train]
+        X_train_epoch = X_train
+
+        y_dict = {n: y_train[f"{n}"] for n in factors}
+
+        dpca.fit(X_train_epoch, y=y_dict)
+
+        w_fold = []
+        for factor in factors:
+            w_fold.append(dpca.components_[(factor,)])
+        w_fold = np.concatenate(w_fold, axis=0)
+
+        evr_fold = []
+        for factor in factors:
+            evr_fold.append(dpca.explained_variance_ratio_[(factor,)])
+        evr_fold = np.array(evr_fold)
+
+        X_test, y_test = X[test_idx], y.iloc[test_idx]
+
+        X_fold = []
+        for factor in factors:
+            X_ = dpca.transform_demixed(X_test, factor)
+            X_fold.append(X_)
+        X_fold = np.concatenate(X_fold, axis=1)
+
+        if w_ref is None:
+            w_ref = w_fold
+
+        X_fold, w_fold = align_fold_to_ref(w_fold, w_ref, np.swapaxes(X_fold, 1, 2))
+
+        X_folds.append(np.swapaxes(X_fold, 1, 2))
+        y_folds.append(y_test)
+        w_folds.append(w_fold)
+
+    X_folds = np.concatenate(X_folds, 0)
+    y_folds = pd.concat(y_folds)
+
+    w_folds = np.array(w_folds, dtype=object)
+
+    return X_folds, y_folds, w_folds, evr_folds
+#+end_src
+
+#+RESULTS:
 
 #+begin_src ipython
 y_all['sample'] = y_all.sample_odor
@@ -4014,13 +4869,20 @@ y_all['test'] = y_all.test_odor
 #+RESULTS:
 
 #+begin_src ipython
-factors = ['odor_pair']
+factors = ['sample', 'tasks', 'test']
 
 n_splits = 5
-n_repeats = 100
-n_comp = 3
+n_repeats = 1
+n_comp = 1
 
-pca = PCA(n_components=n_comp, svd_solver='randomized')
+dpca = RegularizedDPCA(
+    factors=factors,
+    n_components=n_comp,
+    alpha='lw', # 'lw' or 'oas' or 'auto'
+    include_interactions=True,
+    fit_on_trials=True,
+)
+
 folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
 #+end_src
 
@@ -4028,8 +4890,6 @@ folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
 
 #+begin_src ipython
 X_mice, y_mice, w_mice, evr_mice = [], [], [], []
-
-# options['mice'] = ['JawsM15', 'JawsM18']
 
 for mouse in options['mice']:
     idx = (y_all.learning == options['learning'])  & (y_all['mouse'] == mouse)
@@ -4040,56 +4900,29 @@ for mouse in options['mice']:
     valid_neurons = ~np.all(np.isnan(X_pca), axis=(0, 2))
     X_pca = X_pca[:, valid_neurons, :]
 
-    X_mouse, y_mouse, w_mouse, evr_mouse = cross_val_avg_pca(X_pca, y_pca, pca, folds, factors, epoch)
-
-    idx_list = np.arange(n_comp)
-
-    sample = np.zeros(3)
-    for i in range(2):
-        idx = (y_mouse.sample_odor==i)
-        X_ = X_mouse[idx][options['bins_DELAY']]
-        m_ = np.nanmean(X_, axis=(0, 1))
-        sample += (-1)**i * m_
-
-    idx_0 = np.argmax(np.abs(sample))
-    idx_1 = np.delete(idx_list, idx_0)
-
-    choice = np.zeros(2)
-    for i in range(2):
-        idx = (y_mouse.choice==i)
-        X_ = X_mouse[idx][options['bins_TEST'][-1]:]
-        m_ = np.nanmean(X_[..., idx_1], axis=(0, 1))
-        choice += (-1)**i * m_
-
-    idx_1 = np.argmax(np.abs(choice))
-
-    if idx_0==1 & idx_1==1:
-        idx_1=2
-
-    if idx_0==0:
-        idx_1+=1
-
-    idx_2 = np.delete(idx_list, (idx_0, idx_1))[0]
-
-    idx = np.array([idx_0, idx_1, idx_2])
-
-    X_mice.append(X_mouse[..., idx])
-    y_mice.append(y_mouse)
-    w_mice.append(w_mouse[:, idx])
-    evr_mice.append(evr_mouse)
+    # try:
+    if 1:
+        X_mouse, y_mouse, w_mouse, evr_mouse = cross_val_avg_dpca(X_pca, y_pca, dpca, folds, factors)
+        X_mice.append(X_mouse)
+        y_mice.append(y_mouse)
+        w_mice.append(w_mouse)
+        evr_mice.append(evr_mouse)
+    # except:
+    #     print('error', mouse)
+    #     pass
 #+end_src
 
 #+RESULTS:
 #+begin_example
-JawsM01: 100% 500/500 [00:08<00:00, 59.73it/s]
-JawsM06: 100% 500/500 [00:28<00:00, 17.84it/s]
-JawsM12: 100% 500/500 [00:38<00:00, 12.83it/s]
-JawsM15: 100% 500/500 [02:04<00:00,  4.00it/s]
-JawsM18: 100% 500/500 [01:20<00:00,  6.22it/s]
-ChRM04: 100% 500/500 [02:01<00:00,  4.12it/s]
-ChRM23: 100% 500/500 [00:17<00:00, 27.86it/s]
-ACCM03: 100% 500/500 [01:01<00:00,  8.10it/s]
-ACCM04: 100% 500/500 [00:13<00:00, 38.36it/s]
+JawsM01: 100% 5/5 [00:12<00:00,  2.52s/it]
+JawsM06: 100% 5/5 [00:34<00:00,  6.95s/it]
+JawsM12: 100% 5/5 [01:34<00:00, 18.93s/it]
+JawsM15: 100% 5/5 [06:32<00:00, 78.46s/it]
+JawsM18: 100% 5/5 [03:26<00:00, 41.31s/it]
+ChRM04: 100% 5/5 [06:37<00:00, 79.58s/it]
+ChRM23: 100% 5/5 [00:29<00:00,  5.81s/it]
+ACCM03: 100% 5/5 [02:21<00:00, 28.36s/it]
+ACCM04: 100% 5/5 [00:12<00:00,  2.41s/it]
 #+end_example
 
 #+begin_src ipython
@@ -4097,7 +4930,7 @@ print(X_mice[0].shape, w_mice[0].shape)
 #+end_src
 
 #+RESULTS:
-: (19200, 84, 3) (500, 3, 184)
+: (192, 3, 84) (5, 3, 184)
 
 #+begin_src ipython
 X_stack = np.vstack(X_mice)
@@ -4108,27 +4941,27 @@ print(X_stack.shape, w_stack.shape)
 #+end_src
 
 #+RESULTS:
-: (403200, 84, 3) (500, 3, 3319)
+: (4032, 3, 84) (5, 3, 3319)
 
 #+begin_src ipython
 X_single = np.array(X_stack, dtype=float)
-X_single = np.swapaxes(X_single, 1, 2)
+# X_single = np.swapaxes(X_single, 1, 2)
 w_single = np.mean(w_stack, 0, dtype=float) * 100
 print(X_single.shape, y_single.shape, w_single.shape)
 #+end_src
 
 #+RESULTS:
-: (403200, 3, 84) (403200, 18) (3, 3319)
+: (4032, 3, 84) (4032, 18) (3, 3319)
 
 ** Save/Load
 
 #+begin_src ipython
-dum = options['epochs'][0] + '_' + options['learning'] + '_laser_%d' % options['laser']
+dum = options['learning'] + '_laser_%d' % options['laser'] + '_lw'
 print(dum)
 #+end_src
 
 #+RESULTS:
-: TASK_Expert_laser_0
+: Expert_laser_0_lw
 
 #+begin_src ipython
 pkl_save(X_single, 'single_traj_' + dum, path="../data/pca/")
@@ -4138,10 +4971,10 @@ pkl_save(evr_single, 'single_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/pca//single_traj_TASK_Expert_laser_0.pkl
-: saving to ../data/pca//single_labels_TASK_Expert_laser_0.pkl
-: saving to ../data/pca//single_weights_TASK_Expert_laser_0.pkl
-: saving to ../data/pca//single_evr_TASK_Expert_laser_0.pkl
+: saving to ../data/pca//single_traj_Expert_laser_0_lw.pkl
+: saving to ../data/pca//single_labels_Expert_laser_0_lw.pkl
+: saving to ../data/pca//single_weights_Expert_laser_0_lw.pkl
+: saving to ../data/pca//single_evr_Expert_laser_0_lw.pkl
 
 #+begin_src ipython
 X_single = pkl_load('single_traj_' + dum, path="../data/pca/")
@@ -4151,10 +4984,10 @@ evr_single = pkl_load( 'single_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: loading from ../data/pca//single_traj_TASK_Expert_laser_0.pkl
-: loading from ../data/pca//single_labels_TASK_Expert_laser_0.pkl
-: loading from ../data/pca//single_weights_TASK_Expert_laser_0.pkl
-: loading from ../data/pca//single_evr_TASK_Expert_laser_0.pkl
+: loading from ../data/pca//single_traj_Expert_laser_0_lw.pkl
+: loading from ../data/pca//single_labels_Expert_laser_0_lw.pkl
+: loading from ../data/pca//single_weights_Expert_laser_0_lw.pkl
+: loading from ../data/pca//single_evr_Expert_laser_0_lw.pkl
 
 ** Trajectories
 
@@ -4200,7 +5033,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_158.png]]
+[[file:./figures/dpca/figure_160.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -4232,7 +5065,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_159.png]]
+[[file:./figures/dpca/figure_161.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -4263,7 +5096,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_160.png]]
+[[file:./figures/dpca/figure_162.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -4294,7 +5127,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_161.png]]
+[[file:./figures/dpca/figure_163.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -4325,7 +5158,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_162.png]]
+[[file:./figures/dpca/figure_164.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -4356,7 +5189,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_163.png]]
+[[file:./figures/dpca/figure_165.png]]
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
@@ -4389,7 +5222,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_164.png]]
+[[file:./figures/dpca/figure_166.png]]
 
 #+begin_src ipython
 
@@ -4426,7 +5259,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_166.png]]
+[[file:./figures/dpca/figure_168.png]]
 
 #+begin_src ipython
 from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
@@ -4446,7 +5279,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_167.png]]
+[[file:./figures/dpca/figure_169.png]]
 
 #+begin_src ipython
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
@@ -4477,7 +5310,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_168.png]]
+[[file:./figures/dpca/figure_170.png]]
 
 #+begin_src ipython
 fig = plt.figure()
@@ -4512,7 +5345,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_169.png]]
+[[file:./figures/dpca/figure_171.png]]
 
 *** theta space
 
@@ -4528,7 +5361,7 @@ for i in range(nbins):
     for j in range(3):
         w_binned[j, i] = np.mean(w_single[j][mask]) if np.any(mask) else np.nan
 
-w_smooth = gaussian_filter1d(w_binned, sigma=1, axis=1, mode='wrap')
+w_smooth = gaussian_filter1d(w_binned, sigma=2, axis=1, mode='wrap')
 #+end_src
 
 #+RESULTS:
@@ -4554,7 +5387,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_171.png]]
+[[file:./figures/dpca/figure_173.png]]
 
 #+begin_src ipython
 import matplotlib.pyplot as plt
@@ -4586,7 +5419,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_172.png]]
+[[file:./figures/dpca/figure_174.png]]
 
 #+begin_src ipython
 import matplotlib.pyplot as plt
@@ -4605,7 +5438,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_173.png]]
+[[file:./figures/dpca/figure_175.png]]
 
 #+begin_src ipython
 
@@ -4616,8 +5449,7 @@ plt.show()
 ** Opto
 
 #+begin_src ipython
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18', 'ChRM04', 'ChRM23']
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM18', 'ChRM04', 'ChRM23']
+laser_mice = ['JawsM06', 'JawsM12', 'JawsM18', 'ChRM04']
 # laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18']
 
 traj_mouse = []
@@ -4638,7 +5470,7 @@ print(traj_mouse.shape)
 #+end_src
 
 #+RESULTS:
-: (6, 2, 3, 84)
+: (4, 2, 3, 84)
 
 #+begin_src ipython
 traj_opto = []
@@ -4659,7 +5491,7 @@ print(traj_opto.shape)
 #+end_src
 
 #+RESULTS:
-: (6, 2, 3, 84)
+: (4, 2, 3, 84)
 
 #+begin_src ipython
 fp_mouse = np.nanmean(traj_mouse[..., options['bins_LD']], -1)
@@ -4675,7 +5507,7 @@ pc2_opto = fp_opto[..., 1]
 #+end_src
 
 #+RESULTS:
-: (6, 2, 3)
+: (4, 2, 3)
 
 #+begin_src ipython
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*height, height), sharey=1)
@@ -4695,7 +5527,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_178.png]]
+[[file:./figures/dpca/figure_179.png]]
 
 #+begin_src ipython
 perf_off = y_single[y_single['mouse'].isin(laser_mice) & (y_single.laser==0)].groupby(['mouse', 'sample_odor'])['performance'].mean().reset_index()
@@ -4708,9 +5540,9 @@ print(delta_dpa)
 #+end_src
 
 #+RESULTS:
-: (12, 3) (12, 3)
-: [ 0.00694444  0.03472222  0.0625      0.02083333  0.          0.
-:   0.00694444 -0.04166667  0.01041667  0.09375     0.00694444 -0.00694444]
+: (8, 3) (8, 3)
+: [ 0.00694444  0.03472222  0.00694444 -0.04166667  0.01041667  0.09375
+:   0.00694444 -0.00694444]
 
 #+begin_src ipython
 perf_off = y_single[y_single['mouse'].isin(laser_mice) & (y_single.laser==0)].groupby(['mouse', 'sample_odor'])['odr_perf'].mean().reset_index()
@@ -4722,9 +5554,9 @@ print(delta_odr)
 #+end_src
 
 #+RESULTS:
-: (12, 3) (12, 3)
-: [-0.05208333 -0.02083333 -0.015625   -0.0625      0.03125    -0.03125
-:  -0.02083333  0.          0.          0.015625   -0.02083333  0.02083333]
+: (8, 3) (8, 3)
+: [-0.05208333 -0.02083333 -0.02083333  0.          0.          0.015625
+:  -0.02083333  0.02083333]
 
 #+begin_src ipython
 dPC1 = (pc1_opto - pc1).reshape(-1)
@@ -4733,7 +5565,7 @@ print(dPC1.shape, dPC2.shape)
 #+end_src
 
 #+RESULTS:
-: (12,) (12,)
+: (8,) (8,)
 
 #+begin_src ipython
 df = perf_off[['mouse', 'sample_odor']]
@@ -4753,11 +5585,11 @@ print(df.head())
 
 #+RESULTS:
 :      mouse  sample_odor  delta_dpa  delta_odr  delta_pc1  delta_pc2
-: 4  JawsM01          0.0   0.000000   0.031250  -1.655255   1.559401
-: 5  JawsM01          1.0   0.000000  -0.031250  -1.031674   1.242258
-: 6  JawsM06          0.0   0.006944  -0.020833   0.767538   0.800619
-: 7  JawsM06          1.0  -0.041667   0.000000   0.310336   0.592031
-: 8  JawsM12          0.0   0.010417   0.000000  -0.990690  -1.400821
+: 2  JawsM06          0.0   0.006944  -0.020833  -0.153215  -0.485115
+: 3  JawsM06          1.0  -0.041667   0.000000  -0.045689  -0.389152
+: 4  JawsM12          0.0   0.010417   0.000000  -0.261653   0.646642
+: 5  JawsM12          1.0   0.093750   0.015625  -0.048802   0.138196
+: 6  JawsM18          0.0   0.006944  -0.020833   0.237359   0.067938
 
 #+begin_src ipython
 import matplotlib.pyplot as plt
@@ -4796,7 +5628,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_183.png]]
+[[file:./figures/dpca/figure_184.png]]
 
 #+begin_src ipython
 import matplotlib.pyplot as plt
@@ -4835,7 +5667,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_184.png]]
+[[file:./figures/dpca/figure_185.png]]
 
 #+begin_src ipython
 
