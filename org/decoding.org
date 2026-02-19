@@ -1,0 +1,224 @@
+:PROPERTIES:
+:GPTEL_MODEL: gpt-4.1
+:GPTEL_BACKEND: ChatGPT
+:GPTEL_SYSTEM: You are a large language model living in Emacs and a helpful assistant. Respond concisely.
+:GPTEL_BOUNDS: ((response (359 1711) (1769 11790) (11797 12824)))
+:END:
+
+*** I do cross temporal generalization with a binary classifier. should i fit hyperparameters at each train time point
+
+No, you *should not fit hyperparameters separately at each train time point* if your goal is to draw valid inferences from your cross-temporal generalization analysis.
+
+*Why?*
+- If you optimize hyperparameters separately for every training time point, you introduce bias: you may overfit to each time point, leading to artificial increases in performance that do not generalize.
+- For fair comparison and to avoid "double-dipping," you typically select hyperparameters *once*, using held-out (cross-validated) data from your main training period.
+- Then, you fix these hyperparameters and apply the resulting classifier across test time points.
+
+*Standard practice:*
+1. Use cross-validation on training data (potentially from all time points or from one canonical time point) to select hyperparameters.
+2. Fix those hyperparameters /for the rest of the analysis/ – apply the classifier trained at each time point (using those hyperparameters) to data from other time points.
+
+*See also:*
+- King & Dehaene (2014), /J. Neurosci./ (Original cross-temporal generalization paper)
+- Guidelines in "Multivariate pattern analysis of EEG/MEG: a review of methodological considerations" (Grootswagers et al., 2017)
+
+*In short:*
+Fit your hyperparameters (e.g., regularization strength) once. Then train classifiers for each time using those fixed hyperparameters.
+
+*** so at wich time point do i fit the hyperparameters
+
+Good question! Common approaches:
+
+*** 1. Fit hyperparameters using *all training time points together*
+- Pool data from all training time points (e.g., by concatenating or using time as a dimension), and use cross-validation to select hyperparameters.
+- This ensures the chosen hyperparameters are not biased toward a specific time point.
+
+so i consider each time point a new sample? or i average over time points
+
+You typically treat each data sample at each time point as a separate sample ("sample × time").
+*You do not average over time points.*
+
+*Specifically:*
+- For hyperparameter tuning, you concatenate (stack) all samples from all training time points into one dataset (each "epoch × time" is one sample).
+- Run cross-validation for hyperparameter selection on this pooled dataset.
+
+*Why?*
+- This strategy maximizes statistical power and ensures that chosen hyperparameters generalize across your entire time range.
+- It is the recommended practice in standard MVPA/cross-temporal decoding literature (see King & Dehaene, 2014; Grootswagers et al., 2017).
+
+*Summary:*
+→ When fitting hyperparameters, treat each trial at each time point separately as a distinct training sample—do not average over time.
+
+*** my data is sample * neurons * time
+
+Great, your data is *samples × neurons × time*.
+
+Here’s what to do for hyperparameter selection:
+
+- *Reshape your data*: For hyperparameter tuning, create a new dataset where every /sample at each time point/ is treated as a separate sample.
+  E.g., reshape to (*samples × time*) × neurons (flatten sample and time into one axis).
+- *Example:* If you have 100 samples and 50 time points, you end up with 5000 samples, each with a vector of neuron activities.
+
+- *Hyperparameter search:*
+  Use this reshaped (5000 × neuron) dataset, with their corresponding labels, for cross-validation to select the best hyperparameters.
+- *Do not average over time points.*
+
+
+*Summary:*
+When tuning hyperparameters for cross-temporal decoding, concatenate samples across time so every sample × time point is a separate row.
+This ensures your hyperparameters generalize across all time points.
+
+*References:*
+- King & Dehaene (2014) J. Neurosci., Methods section
+- Grootswagers et al. (2017) NeuroImage, Section 4.4
+
+Let me know if you want example code!
+
+*** if y was (samples, ) how do i make it samples * time
+
+Great question! When you reshape your data from =(samples, neurons, time)= to =(samples * time, neurons)=, you need to make a matching label array of length =samples * time=.
+
+*How to do this:*
+Assuming your original =y= is shape =(samples,)=:
+
+#+begin_src python
+import numpy as np
+# y: shape (samples,)
+# Let's say n_times = data.shape[2]
+y_repeat = np.repeat(y, n_times)
+# y_repeat will be shape (samples * n_times,)
+#+end_src
+
+*Explanation:*
+- If you have 100 samples and 50 time points, and =y= is shape (100,),
+- After =np.repeat(y, 50)=, =y_repeat= is shape (5000,).
+- You now have a matching label for each =(sample, time)= pair.
+
+*Summary:*
+→ Use =np.repeat(y, n_times)= to expand your labels to match the flattened =(samples * time, neurons)= feature matrix for hyperparameter selection.
+
+*** how do i reshape X if it was sample * features * time
+
+Assume your data shape is (n_samples, n_features, n_times).
+To reshape so every (sample, time) pair becomes a row (for hyperparameter selection):
+
+#+begin_src python
+# X: shape (n_samples, n_features, n_times)
+X_reshaped = X.transpose(0, 2, 1).reshape(-1, n_features)
+# Now, X_reshaped: shape (n_samples * n_times, n_features)
+#+end_src
+
+*Step-by-step:*
+1. =.transpose(0, 2, 1)=: Now shape is (n_samples, n_times, n_features).
+2. =.reshape(-1, n_features)=: Stacks all samples × times together into shape (n_samples * n_times, n_features).
+
+Now you can use this reshaped X with your repeated labels (see previous message) for hyperparameter tuning.
+
+do i need to transpose
+
+Yes, you should use the transpose. The standard (NumPy) way to reshape an array of shape (samples, features, time) so that each (sample, time) pair is a row in a 2D array with shape (samples × time, features) is:
+
+#+begin_src python
+X_reshaped = X.transpose(0, 2, 1).reshape(-1, X.shape[1])
+#+end_src
+
+*Explanation:*
+- =X.transpose(0, 2, 1)=: changes X from (samples, features, time) to (samples, time, features), so features are last.
+- =.reshape(-1, X.shape[1])=: flattens the first two dimensions (samples × time) into rows, keeping features as columns.
+
+*Without the transpose*, =reshape(-1, features)= would incorrectly combine the features and time axes, not the samples and time axes.
+
+*Summary:*
+You do need the =transpose= to ensure that each row of the reshaped array corresponds to a unique (sample, time) with the features as columns.
+
+***
+---
+
+/Summary:/
+If =X= is (samples, features, time),
+use =X.transpose(0, 2, 1).reshape(-1, n_features)=
+to get =(samples * time, features)=.
+
+***
+
+Yes, this approach is recommended and widely used in the cross-temporal decoding literature./ Here’s why and some alternatives:
+
+*Why this makes sense:*
+- The point of cross-temporal generalization is to find hyperparameters that are not overfit to any single time point.
+- Pooling all sample × time pairs for hyperparameter selection means you’re finding parameters robust across the entire temporal window, which is fair and maximizes generalization.
+- This approach is used and recommended in King & Dehaene (2014, J. Neurosci., "Characterizing the dynamics of mental representations: the temporal generalization method", see their “Decoding and cross-temporal generalization” methods), Grootswagers et al. (2017, NeuroImage, see “Hyperparameter optimization”), and standard MVPA tutorials.
+
+*Alternatives:*
+1. *Select a single training time point* (e.g., the one with maximal or mean decoding, or an a priori time) for hyperparameter search.
+   - /Downside/: May bias your model to that time point and reduce generalization across time.
+2. *Nested cross-validation*: For more rigor (but more complexity), nest your hyperparameter tuning /within each cross-validation fold/, /still pooling/ all time points, to prevent information leakage.
+
+*In practice:*
+- Flattening (samples, time, neurons) to (samples×time, neurons) and repeating the labels is a well-accepted, best-practice approach for hyperparameter selection in cross-temporal MVPA.
+
+*References:*
+- King & Dehaene (2014): [“Decoding and cross-temporal generalization” section](https://www.jneurosci.org/content/34/22/8063)
+- Grootswagers et al. (2017): [Section 4.4, “Choosing classifier parameters and cross-validation”](https://www.sciencedirect.com/science/article/pii/S1053811917300421)
+
+/If your dataset or scientific question requires a different approach, or for highly nonstationary signals, consider discussing tradeoffs in your Methods or consult your field’s standards. But for most cross-temporal (neural or behavioral) decoding, the answer above is both reliable and in line with the literature.
+
+***
+
+No, you should *not* treat each time point as a new sample when fitting hyperparameters or training classifiers for cross-temporal generalization.
+
+*Clarification:*
+
+- /Samples/ are typically your experimental trials or observations (e.g., EEG trials, subjects).
+- /Time points/ are features (dimensions) of each sample (e.g., each trial has a value at each time point).
+- When you train a classifier at a given time point, you use the data from /all samples but only that time point/ as features.
+
+*For hyperparameter selection:*
+- The standard, and safest, approach is to fit hyperparameters /at each training time point separately,/ but using only the training samples (trials), and cross-validation /within training samples/--but you should *not* use or pool data across time points (i.e., don't mix time points as samples).
+- However, if you want to use a /single/ hyperparameter value for all training time points (which is conservative and ensures no information leak), you can fit the hyperparameter on data from one reference time point (often at the peak decoding performance), or do a grid search on average performance across time points within the training set (using samples, not time points, as folds for cross-validation).
+
+*Summary (for cross-temporal generalization):*
+- Your cross-validation splits should always be /across samples (trials)*—never across time points.
+- Hyperparameters should be chosen using these splits, and then fixed for all time points to avoid bias.
+
+*References:*
+- Grootswagers, T., Wardle, S., & Carlson, T. (2017). Decoding Dynamic Brain Patterns from Evoked Responses: A Tutorial on Multivariate Pattern Analysis Applied to Time Series Neuroimaging Data. /Journal of Cognitive Neuroscience/.
+- King, J.-R., & Dehaene, S. (2014). Characterizing the dynamics of mental representations: the temporal generalization method. /Trends in Cognitive Sciences/.
+
+If you'd like a concrete workflow or code example, let me know!
+
+***
+*** 2. Fit hyperparameters at a *canonical/reference time point*
+- Choose a specific, scientifically relevant time point (e.g., time of expected peak effect).
+- Use this time point's data to search for hyperparameters.
+
+*** 3. *Nested cross-validation* at each time point (if computationally feasible)
+- For /pure/ training/testing separation, fit hyperparameters using only the training set at each fold, for each time point, without ever touching any test data.
+- However, for interpretability and comparability, most studies fit hyperparameters /once/ as in 1 or 2 above.
+
+*Most common practice:*
+- Fit hyperparameters on training data pooled from all time points, then use these for every classifier you train at every time point.
+
+*Key point:*
+/Whatever you choose, make sure hyperparameters are determined only from training data (never test data), and are fixed for all subsequent analyses./
+
+---
+*References:*
+- Grootswagers, Wardle & Carlson, 2017 (see Box 2)
+- King & Dehaene, 2014
+
+Let me know if you want code examples or more details!
+
+***
+
+No, you should *not* fit hyperparameters separately at each train time point if you want a valid estimate of generalization. Hyperparameter tuning should be restricted to the /training data/ to avoid information leakage from the test data. In cross-temporal generalization, this typically means:
+
+- *Choose and fix your hyperparameters based only on the training set data* (e.g., by using nested cross-validation within the training time points).
+- Then, train your model /at each training time point/ using those fixed hyperparameters and test generalization across time.
+
+If you tune hyperparameters separately for each train time point using information from the test data (even indirectly), this can inflate your performance estimates due to overfitting.
+
+*Summary:*
+- Fit hyperparameters using only training data, not at each train time (unless you're careful to avoid test data leakage, e.g. via nested CV).
+- The same fixed hyperparameters should be used for all model fits when evaluating cross-temporal generalization.
+
+***

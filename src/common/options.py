@@ -311,6 +311,8 @@ def set_options(**kwargs):
 
     opts["bins_POSTTASK"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[0]) * frame_rate)]
 
+    opts["bins_all"] = opts["bins"][: int((t_RWD2[0]) * frame_rate)]
+
     # opts["bins_CHOICE"] = opts["bins"][int((t_TEST[0]) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 
     opts["bins_RWD2"] = opts["bins"][int((t_RWD2[0] + opts['T_WINDOW']) * frame_rate) : int(t_RWD2[1] * frame_rate)]

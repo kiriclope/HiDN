@@ -1,0 +1,3024 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:jupyter-python :results both :exports both :async yes :session meta :kernel dual :output-dir ./figures/pca :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src jupyter-python
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual/bin/python
+
+* Imports
+
+#+begin_src jupyter-python
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+  import traceback
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import pandas as pd
+  import seaborn as sns
+
+  from time import perf_counter
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+  from src.decode.bump import circcvl
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.classify import get_classification
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** scalers
+
+#+begin_src jupyter-python
+import numpy as np
+
+class StandardScaler:
+    def __init__(self, axis=0, if_scale=1):
+        self.axis = axis
+        self.center_ = None
+        self.scale_ = None
+        self.if_scale_ = if_scale
+
+    def fit(self, X):
+        self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
+        self.scale_ = np.nanstd(X, axis=(0, -1), keepdims=True)
+        # Prevent division by zero
+        self.scale_ = np.where(self.scale_==0, 1, self.scale_)
+        # self.scale_ = np.where(np.abs(self.scale_)<1e-3, 1, self.scale_)
+        return self
+
+    def transform(self, X):
+        if self.if_scale_:
+            return (X - self.center_) / self.scale_
+        return (X - self.center_)
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+
+class RobustScaler:
+    def __init__(self, axis=0):
+        self.axis = axis
+        self.center_ = None
+        self.scale_ = None
+
+    def fit(self, X):
+        self.center_ = np.nanmedian(X, axis=self.axis, keepdims=True)
+        q75 = np.nanpercentile(X, 75, axis=self.axis, keepdims=True)
+        q25 = np.nanpercentile(X, 25, axis=self.axis, keepdims=True)
+        self.scale_ = q75 - q25
+        # Prevent division by zero
+        self.scale_ = np.where(self.scale_ == 0, 1, self.scale_)
+        return self
+
+    def transform(self, X):
+        return (X - self.center_) / self.scale_
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+#+end_src
+
+#+RESULTS:
+
+** pad
+
+#+begin_src jupyter-python
+def pad_list(arrays, axis=0, max_len=None):
+    """
+    Pads a list of arrays along the specified axis with NaNs so all have the same size along that axis.
+    Returns a list of padded arrays.
+    """
+    # Find maximum size along specified axis
+    if max_len is None:
+        max_len = max(arr.shape[axis] for arr in arrays)
+
+    padded = []
+    for arr in arrays:
+        pad_width = [(0, 0)] * arr.ndim
+
+
+        n_pad = max_len - arr.shape[axis]
+
+        if n_pad > 0:
+            pad_width[axis] = (0, n_pad)
+            arr_padded = np.pad(arr, pad_width, mode='constant', constant_values=np.nan)
+        else:
+            arr_padded = arr
+        padded.append(arr_padded)
+
+    return padded
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def pad_with_nans(array, target_shape):
+    result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
+    print(result.shape)
+    slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
+    result[slices] = array[slices]
+    return result
+#+end_src
+
+#+RESULTS:
+
+** save
+
+#+begin_src jupyter-python
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
+
+
+  def pkl_load(name, path="."):
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+** cv pca
+
+#+begin_src jupyter-python
+from scipy.linalg import orthogonal_procrustes
+
+def align_fold_to_ref(W_fold, W_ref, X_pca_fold):
+    """
+    Align W_fold to W_ref using orthogonal Procrustes and
+    rotate fold's projected data accordingly.
+
+    W_ref, W_fold: (n_comp, n_neurons)
+    X_pca_fold: (n_trials, T, n_comp)
+
+    Returns: X_pca_aligned, W_fold_aligned
+    """
+    if W_ref is None:
+        W_ref = W_fold
+    # Procrustes finds R that best maps W_fold -> W_ref:  W_fold @ R ≈ W_ref
+    R, _ = orthogonal_procrustes(W_fold.T, W_ref.T)  # shapes (n_neurons, n_comp)
+
+    # R is (n_neurons, n_comp), so mapping in component space is R_comp = R.T
+    R_comp = R.T  # (n_comp, n_neurons) is W-aligned space; rotation in PC space is R_comp.T
+
+    # rotate projections: (n_trials * T, n_comp) @ (n_comp, n_comp)
+    n_trials, T, n_comp = X_pca_fold.shape
+    X_flat = X_pca_fold.reshape(-1, n_comp)
+    X_aligned = X_flat @ R_comp.T
+    X_aligned = X_aligned.reshape(n_trials, T, n_comp)
+
+    W_aligned = (W_fold.T @ R).T  # still (n_comp, n_neurons)
+    return X_aligned, W_aligned
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src jupyter-python
+old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+# mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+# mice = ['JawsM15', 'JawsM18', 'ChRM04']
+
+tasks = ['Dual'] # all
+
+kwargs = {
+   'mice': mice,
+   'tasks': tasks,
+   'mouse': mice[0], 'laser': 0,
+   'trials': '', 'reload': 0, 'data_type': 'dF',
+   'prescreen': None, 'pval': 0.05,
+   'preprocess': False, 'scaler_BL': 'standard',
+   'avg_noise':False, 'unit_var_BL': False,
+   'random_state': None, 'T_WINDOW': 0.0,
+   'l1_ratio': 0.95,
+   'n_comp': 3, 'pca': 'pca',
+   'scaler': None,
+   'bootstrap': 1, 'n_boots': 128,
+   'n_splits': 5, 'n_repeats': 10,
+   'class_weight': 0,
+   'multilabel': 0,
+   'mne_estimator':'generalizing', # sliding or generalizing
+   'n_jobs': 64,
+}
+
+# kwargs['days'] = ['first', 'middle', 'last']
+kwargs['days'] = ['first', 'last']
+# kwargs['days'] = 'all'
+options = set_options(**kwargs)
+options['cv_B'] = False
+#+end_src
+
+#+RESULTS:
+
+* Load Data
+
+#+begin_src jupyter-python
+import numpy as np
+import pandas as pd
+
+def build_padded_X(options, n_neurons_total=3319, SCALE=0):
+    X_list = []
+    y_list = []
+    mouse_slices = {}
+
+    counter = 0
+    for mouse in options["mice"]:
+        options_mouse = dict(options)
+        options_mouse["mouse"] = mouse
+        options_mouse = set_options(**options_mouse)
+
+        X, y = get_X_y_days(**options_mouse)   # X: (trials, n_neurons_mouse, time)
+        y["mouse"] = mouse
+
+        print(mouse, X.shape, y.shape)
+
+        n_m = X.shape[1]
+        sl = slice(counter, counter + n_m)
+        mouse_slices[str(mouse)] = sl
+        counter += n_m
+
+        # --- per-day scaling using laser==0 stats ---
+        X_scale = X.copy()
+
+        if SCALE:
+            for day in range(1, options_mouse["n_days"] + 1):
+                idx0 = (y.day == day) & (y.laser == 0)
+
+                mean_ = np.nanmean(X[idx0], axis=0, keepdims=True)               # (1, n_m, time)
+                std_  = np.nanstd(X[idx0], axis=0, ddof=0, keepdims=True)          # (1, n_m, 1)
+                # std_  = np.where(std_ <= 0, 1.0, std_)
+                std_floor = np.percentile(std_, 5)
+                std_safe = np.maximum(std_, std_floor)
+
+                # apply same mean/std to laser 0 and 1
+                idx = (y.day == day)
+                X_scale[idx] = (X[idx] - mean_) / std_safe
+
+                # for tasks in ['DPA', 'DualGo', 'DualNoGo']:
+                #     idx = (y.day==day) & (y.laser==0) & (y.tasks==tasks)
+
+                #     mean_ = np.nanmean(X[idx], 0, keepdims=1)
+                #     std_ = np.nanstd(X[idx], 0, ddof=1, keepdims=1)
+                #     std_floor = np.percentile(std_, 5)
+                #     std_safe = np.maximum(std_, std_floor)
+
+                #     idx = (y.day==day) & (y.tasks==tasks)
+                #     X_scale[idx] = (X[idx] - mean_) / std_
+
+        # --- pad into global neuron axis ---
+        # IMPORTANT: pad with zeros (not NaNs) for sklearn PCA
+        X_pad = np.zeros((X.shape[0], n_neurons_total, X.shape[-1]), dtype=np.float32)
+        X_pad[:, sl, :] = np.nan_to_num(X_scale, nan=0.0, posinf=0.0, neginf=0.0)
+
+        X_list.append(X_pad)
+        y_list.append(y)
+
+    # concatenate mice along trials axis
+    X_big = np.concatenate(X_list, axis=0)              # (sum_trials, n_neurons_total, time)
+    y_big = pd.concat(y_list, axis=0, ignore_index=True)
+
+    # sanity: counter should be <= n_neurons_total
+    if counter > n_neurons_total:
+        raise ValueError(f"Total neurons {counter} exceeds n_neurons_total={n_neurons_total}")
+
+    return X_big, y_big, mouse_slices
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+X_all, y_all, mouse_slices = build_padded_X(options, n_neurons_total=3319)
+print(X_all.shape, y_all.shape)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+JawsM01 (768, 184, 84) (768, 16)
+JawsM06 (1152, 201, 84) (1152, 16)
+JawsM12 (960, 423, 84) (960, 16)
+JawsM15 (1152, 693, 84) (1152, 16)
+JawsM18 (1152, 444, 84) (1152, 16)
+ChRM04 (1152, 668, 84) (1152, 16)
+ChRM23 (960, 232, 84) (960, 16)
+ACCM03 (960, 361, 84) (960, 16)
+ACCM04 (960, 113, 84) (960, 16)
+(9216, 3319, 84) (9216, 16)
+#+end_example
+
+#+begin_src jupyter-python
+pkl_save(X_all, 'X_all', path="../data/pca")
+pkl_save(y_all, 'y_all', path="../data/pca")
+pkl_save(mouse_slices, 'mouse_slices', path="../data/pca")
+#+end_src
+
+#+RESULTS:
+: saving to ../data/pca/X_all.pkl
+: saving to ../data/pca/y_all.pkl
+: saving to ../data/pca/mouse_slices.pkl
+
+* Meta Mouse
+** Load
+
+#+begin_src jupyter-python
+X_all = pkl_load('X_all', path="../data/pca")
+y_all = pkl_load('y_all', path="../data/pca")
+mouse_slices = pkl_load('mouse_slices', path="../data/pca")
+#+end_src
+
+#+RESULTS:
+: loading from ../data/pca/X_all.pkl
+: loading from ../data/pca/y_all.pkl
+: loading from ../data/pca/mouse_slices.pkl
+
+#+begin_src jupyter-python
+y_all['sample'] = y_all.sample_odor
+y_all['test'] = y_all.test_odor
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+print(y_all.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response', 'laser',
+:        'day', 'choice', 'pair', 'odr_perf', 'odr_choice', 'odr_response',
+:        'odor_pair', 'learning', 'performance', 'mouse', 'sample', 'test'],
+:       dtype='object')
+
+** Model
+
+#+begin_src jupyter-python
+import numpy as np
+import pandas as pd
+import itertools
+from functools import reduce
+import operator
+from tqdm import tqdm
+from scipy.linalg import orthogonal_procrustes
+from sklearn.base import clone
+from sklearn.decomposition import PCA
+
+# ----------------------------
+# condition averaging
+# ----------------------------
+def cv_avg_cond(X, y, condition="odor_pair", levels=None):
+    """
+    X: (n_trials, n_neuron_total, T)
+    y: DataFrame aligned with trials
+    returns: (n_combo, n_neuron_total, T) with NaNs if combo missing
+    """
+    if isinstance(condition, str):
+        condition = [condition]
+
+    if levels is None:
+        unique_vals = [list(pd.unique(y[c])) for c in condition]
+    else:
+        unique_vals = [list(levels[c]) for c in condition]
+
+    combos = list(itertools.product(*unique_vals))
+
+    out = []
+    for combo in combos:
+        idx = reduce(operator.and_, [(y[c].to_numpy() == v) for c, v in zip(condition, combo)])
+        if np.any(idx):
+            out.append(np.nanmean(X[idx], axis=0))
+        else:
+            out.append(np.full_like(X[0], np.nan))
+    return np.asarray(out)
+
+
+# ----------------------------
+# alignment (orthogonal Procrustes)
+# ----------------------------
+def procrustes_rotation(W, W_ref):
+    """
+    Returns R such that W.T @ R ~ W_ref.T in least squares sense.
+    W, W_ref: (n_comp, n_neurons)
+    R: (n_comp, n_comp)
+    """
+    if W_ref is None:
+        return np.eye(W.shape[0], dtype=float)
+    R, _ = orthogonal_procrustes(W.T, W_ref.T)
+    return R
+
+def apply_rotation_to_scores(Z, R):
+    """Z: (n_trials, T, n_comp)"""
+    if R is None:
+        return Z
+    return (Z.reshape(-1, Z.shape[-1]) @ R).reshape(Z.shape)
+
+def apply_rotation_to_loadings(W, R):
+    """W: (n_comp, n_neurons)"""
+    if R is None:
+        return W
+    return (R.T @ W)
+
+
+# ----------------------------
+# gains as a single vector
+# ----------------------------
+def compute_gain_vector(n_neurons_total, mouse_slices, mode="equal_mouse"):
+    """
+    mode:
+      - "equal_mouse": gain_m = 1/sqrt(Nm)
+      - "equal_neuron": gain_m = 1
+      - None: all ones
+    returns g: (n_neurons_total,)
+    """
+    g = np.ones(n_neurons_total, dtype=np.float32)
+    if mode is None or mode == "equal_neuron":
+        return g
+
+    if mode != "equal_mouse":
+        raise ValueError(mode)
+
+    for _, sl in mouse_slices.items():
+        Nm = sl.stop - sl.start
+        g[sl] = 1.0 / np.sqrt(Nm)
+
+    return g
+
+
+# ----------------------------
+# PCA fit/projection helpers (weighted space)
+# ----------------------------
+def _fit_space_from_train(X_train, y_train, pca, factors, levels, gain_vec):
+    """
+    Fit mean + PCA on training condition-averages, in weighted space.
+    Returns mean_w (1, n_neurons), W (n_comp, n_neurons), evr (n_comp,)
+    """
+    # condition averages for PCA fit
+    X_avg = cv_avg_cond(X_train, y_train, condition=factors, levels=levels)
+    X_flat_avg = X_avg.transpose(0, 2, 1).reshape(-1, X_avg.shape[1])  # (combo*T, neurons)
+    # X_flat_avg = np.nan_to_num(X_flat_avg, nan=0.0, posinf=0.0, neginf=0.0)
+    # mean_w = X_flat_avg.mean(axis=0, keepdims=True)
+
+    # mean computed from TRAIN TRIALS in the same (weighted) space
+    X_flat_trials = X_train.transpose(0, 2, 1).reshape(-1, X_train.shape[1])
+    # X_flat_trials = np.nan_to_num(X_flat_trials, nan=0.0, posinf=0.0, neginf=0.0)
+
+    Xw_trials = X_flat_trials * gain_vec[None, :]
+    mean_w = Xw_trials.mean(axis=0, keepdims=True)
+
+    Xw_avg = X_flat_avg * gain_vec[None, :]
+    pca.fit(Xw_avg - mean_w)
+
+    return mean_w, pca.components_.copy(), pca.explained_variance_ratio_.copy()
+
+
+def _project_trials(X_trials, pca, mean_w, gain_vec):
+    """
+    X_trials: (n_trials, n_neurons, T)
+    Returns Z: (n_trials, T, n_comp)
+    """
+    X_flat = X_trials.transpose(0, 2, 1).reshape(-1, X_trials.shape[1])
+    # X_flat = np.nan_to_num(X_flat, nan=0.0, posinf=0.0, neginf=0.0)
+
+    Xw = X_flat * gain_vec[None, :]
+    Z = pca.transform(Xw - mean_w)
+    return Z.reshape(X_trials.shape[0], X_trials.shape[-1], -1)
+
+
+def scaler(X, std_=0):
+    mean_ = np.nanmean(X, axis=0)
+    # mean_ = np.nanmean(X, axis=(0, -1))[:, np.newaxis]
+
+    if std_:
+        std = np.nanstd(X, axis=0)
+        std_floor = np.percentile(std, 5)
+        std_safe = np.maximum(std, std_floor)
+        return (X - mean_) / std_safe, mean_, std_safe
+
+    return (X - mean_), mean_, 1
+
+
+# ----------------------------
+# main CV PCA
+# ----------------------------
+def cv_pca(
+    X, y, pca, folds, factors,
+    epoch=None,               # used ONLY for fitting if not None
+    group_col=None,
+    levels=None,
+    mouse_slices=None,
+    mouse_gain_mode="equal_mouse",  # "equal_mouse" | "equal_neuron" | None
+    show_pbar=True,
+):
+    """
+    Returns:
+      Z_all:  (n_trials_all, n_time, n_comp)
+      y_all:  DataFrame aligned with Z_all
+      W_mean: (n_comp, n_neuron_total)
+      W_all_aligned: (n_comp, n_neuron_total) loading fit on all clean data (reference)
+      evr_folds: (n_folds, n_comp)
+      gain_vec: (n_neuron_total,)
+    """
+    if mouse_gain_mode is not None and mouse_slices is None:
+        raise ValueError("mouse_slices required when mouse_gain_mode is not None")
+
+    n_neurons_total = X.shape[1]
+    gain_vec = compute_gain_vector(n_neurons_total, mouse_slices, mode=mouse_gain_mode)
+
+    # clean subset for fitting/CV splits
+    m_clean = (y.laser == 0) & (y.tasks=='DPA') # & (y.performance == 1) & ((y.tasks=='DPA') | (y.odr_perf==1))
+    Xc = X[m_clean]
+    yc = y.loc[m_clean].reset_index(drop=True)
+
+    # global scaling based on clean data (applied to all splits)
+    Xc_scaled, mean_global, std_global = scaler(Xc)
+
+    # ---- fit reference space on ALL clean data (optionally epoch-restricted)
+    Xc_fit = Xc_scaled if epoch is None else Xc_scaled[..., epoch]
+    pca_all = clone(pca)
+    mean_w_all, W_all, _ = _fit_space_from_train(Xc_fit, yc, pca_all, factors, levels, gain_vec)
+    W_ref = W_all  # reference for Procrustes
+
+    # ---- project perturbed trials using ALL-clean fit
+    m_pert = ~m_clean
+    if np.any(m_pert):
+        Xp = X[m_pert]
+
+        Xp = (Xp - mean_global) / std_global
+
+        yp = y.loc[m_pert].reset_index(drop=True)
+
+        Zp = _project_trials(Xp, pca_all, mean_w_all, gain_vec)
+        # (optional) align Zp to W_ref: since pca_all produced W_ref, R is identity
+        # Zp = apply_rotation_to_scores(Zp, np.eye(W_ref.shape[0]))
+
+    # split metadata
+    groups = None
+    if group_col is not None:
+        groups = yc[group_col].astype(str).to_numpy()
+
+    strata = (
+        yc["odor_pair"].astype(str)
+        + "_" + yc["mouse"].astype(str)
+        + "_" + yc["day"].astype(str)
+        + "_" + yc["tasks"].astype(str)
+    ).to_numpy()
+
+    splitter = folds.split(Xc_scaled, strata, groups=groups)
+    if show_pbar:
+        splitter = tqdm(
+            splitter,
+            total=folds.get_n_splits(Xc_scaled, strata, groups=groups),
+            desc="cv_pca"
+        )
+
+    Z_folds, y_folds, W_folds, evr_folds = [], [], [], []
+
+    for train_idx, test_idx in splitter:
+        X_train, y_train = Xc[train_idx], yc.iloc[train_idx].reset_index(drop=True)
+        X_test,  y_test  = Xc[test_idx],  yc.iloc[test_idx].reset_index(drop=True)
+
+        # per-fold scaling (optional). If you want strictly global scaling, remove next 2 lines.
+        X_train, mean_fold, std_fold = scaler(X_train)
+        X_test = (X_test - mean_fold) / std_fold
+
+        X_train_fit = X_train if epoch is None else X_train[..., epoch]
+
+        pca_fold = clone(pca)
+        mean_w, W_fold, evr = _fit_space_from_train(X_train_fit, y_train, pca_fold, factors, levels, gain_vec)
+        evr_folds.append(evr)
+
+        # ALWAYS project test on full time axis
+        Z_test = _project_trials(X_test, pca_fold, mean_w, gain_vec)
+
+        # align fold space to reference
+        R = procrustes_rotation(W_fold, W_ref)
+        Z_test = apply_rotation_to_scores(Z_test, R)
+        W_aligned = apply_rotation_to_loadings(W_fold, R)
+
+        Z_folds.append(Z_test)
+        y_folds.append(y_test)
+        W_folds.append(W_aligned)
+
+    Z_clean = np.concatenate(Z_folds, axis=0)
+    y_clean = pd.concat(y_folds, axis=0, ignore_index=True)
+
+    W_mean = np.mean(np.stack(W_folds, axis=0), axis=0)
+    evr_folds = np.asarray(evr_folds)
+
+    if np.any(m_pert):
+        Z_all = np.concatenate([Z_clean, Zp], axis=0)
+        y_all = pd.concat([y_clean, yp], axis=0, ignore_index=True)
+        return Z_all, y_all, W_mean, W_all, evr_folds
+
+    return Z_clean, y_clean, W_mean, W_all, evr_folds
+#+end_src
+
+#+RESULTS:
+
+  #+begin_src jupyter-python
+  def pc_mouse_energy(W, mouse_slices):
+      # W: (n_comp, n_neuron_total)
+      E = {}
+      for m, sl in mouse_slices.items():
+          E[m] = np.sum(W[:, sl]**2, axis=1)  # (n_comp,)
+      return pd.DataFrame(E)  # rows=PC, cols=mouse
+  #+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+options['learning'] = 'Expert'
+
+options['epochs'] = ['TEST']
+epoch = options['bins_' + options['epochs'][0]]
+
+factors = 'odor_pair'
+# factors = ['sample', 'test']
+# factors = ['sample', 'choice', 'test']
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+dum = options['epochs'][0]
+if options['learning'] is not None:
+    dum += '_' + options['learning']
+print(dum)
+#+end_src
+
+#+RESULTS:
+: TEST_Expert
+
+#+begin_src jupyter-python
+if options['learning'] is not None:
+    idx = (y_all.learning == options['learning'])
+
+    X_pca = X_all[idx] # - np.nanmean(X_all[idx], -1, keepdims=True)
+    y_pca = y_all[idx]
+
+    # pca_mask = np.isnan(X_pca)
+    # X_pca[pca_mask] = 0
+else:
+    X_pca = X_all
+    y_pca = y_all
+
+print(X_pca.shape, y_pca.shape)
+#+end_src
+
+#+RESULTS:
+: (4032, 3319, 84) (4032, 18)
+
+#+begin_src jupyter-python
+n_splits = 5
+n_repeats = 1
+n_comp = 15
+
+pca = PCA(n_components=n_comp, svd_solver='randomized')
+folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+X_cv, y_cv, w_cv, w_all, evr_cv = cv_pca(X_pca, y_pca, pca, folds, factors, epoch, mouse_slices=mouse_slices, mouse_gain_mode=None)
+#+end_src
+
+#+RESULTS:
+: cv_pca: 100% 5/5 [00:07<00:00,  1.56s/it]
+
+#+begin_src jupyter-python
+print(X_cv.shape, y_cv.shape, w_cv.shape, w_all.shape, evr_cv.shape)
+#+end_src
+
+#+RESULTS:
+: (4032, 84, 15) (4032, 18) (15, 3319) (15, 3319) (5, 15)
+
+#+begin_src jupyter-python
+E = pc_mouse_energy(w_cv, mouse_slices)  # DataFrame: PC x mouse
+E.loc[0].sort_values(ascending=False)     # PC1 distribution across mice
+#+end_src
+
+#+RESULTS:
+: ACCM03     0.330411
+: JawsM15    0.219794
+: ChRM04     0.111827
+: JawsM18    0.105704
+: ChRM23     0.061207
+: JawsM12    0.024795
+: ACCM04     0.017268
+: JawsM06    0.013711
+: JawsM01    0.004859
+: Name: 0, dtype: float32
+
+#+begin_src jupyter-python
+X_meta = np.array(X_cv, dtype=float)
+X_meta = np.swapaxes(X_meta, 1, 2)
+y_meta = y_cv
+evr_meta = evr_cv
+# w_meta = np.mean(w_cv, 0, dtype=float) * 100
+w_meta = w_all * 100
+print(X_meta.shape, y_meta.shape, w_meta.shape)
+#+end_src
+
+#+RESULTS:
+: (4032, 15, 84) (4032, 18) (15, 3319)
+
+#+begin_src jupyter-python
+print(evr_meta.shape)
+plt.plot(evr_meta.mean(0), '-ko')
+# plt.xticks([0, 1, 2], [1, 2, 3])
+plt.xlabel('PC #')
+plt.ylabel('EVR ratio')
+plt.savefig('evr_ratio_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: (5, 15)
+[[file:./figures/pca/figure_26.png]]
+:END:
+
+ #+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+
+** Save/Load
+
+#+begin_src jupyter-python
+pkl_save(X_meta, 'meta_traj_' + dum, path="../data/pca/")
+pkl_save(y_meta, 'meta_labels_' + dum, path="../data/pca/")
+pkl_save(w_meta, 'meta_weights_' + dum, path="../data/pca/")
+pkl_save(evr_meta, 'meta_evr_' + dum, path="../data/pca/")
+#+end_src
+
+#+RESULTS:
+: saving to ../data/pca//meta_traj_TEST_Expert.pkl
+: saving to ../data/pca//meta_labels_TEST_Expert.pkl
+: saving to ../data/pca//meta_weights_TEST_Expert.pkl
+: saving to ../data/pca//meta_evr_TEST_Expert.pkl
+
+ #+begin_src jupyter-python
+X_meta = pkl_load('meta_traj_' + dum, path="../data/pca/")
+y_meta = pkl_load( 'meta_labels_' + dum, path="../data/pca/")
+w_meta = pkl_load( 'meta_weights_' + dum, path="../data/pca/")
+evr_meta = pkl_load( 'meta_evr_' + dum, path="../data/pca/")
+#+end_src
+
+#+RESULTS:
+: loading from ../data/pca//meta_traj_all_Expert.pkl
+: loading from ../data/pca//meta_labels_all_Expert.pkl
+: loading from ../data/pca//meta_weights_all_Expert.pkl
+: loading from ../data/pca//meta_evr_all_Expert.pkl
+
+** Trajectories
+
+#+begin_src jupyter-python
+n_comp = 3
+laser = 0
+i_mouse = -1
+
+idx_tasks = 1 # (y_meta.tasks == 'DPA')
+idx_correct = 1 # (y_meta.performance==1) # & (y_meta.odr_perf==1)
+idx_mouse = True
+if i_mouse !=-1:
+    idx_mouse = (y_meta.mouse==options['mice'][i_mouse])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height),)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(4):
+    mask = (y_meta.odor_pair==i) & (y_meta.laser==laser) & idx_mouse & idx_correct & idx_tasks
+    X_sel = X_meta[mask] * 10
+
+    X_avg = np.mean(X_sel, 0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = np.std(X_sel, 0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.savefig('./figures/pca/pca_odor_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_31.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = y_meta.tasks.unique()
+xtime = np.linspace(0, 14, 84)
+
+for i in range(len(pair)):
+    mask = (y_meta.tasks==y_meta.tasks.unique()[i]) & (y_meta.laser==laser) & idx_mouse & idx_correct # & (y_meta.tasks!='DPA')
+    X_sel = X_meta[mask]
+
+    X_avg = X_sel.mean(0)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.savefig('./figures/pca/pca_task_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_32.png]]
+
+  #+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['A', 'B']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y_meta.sample_odor==i) & (y_meta.laser==laser) & idx_mouse & idx_correct & idx_tasks
+    X_sel = X_meta[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.savefig('./figures/pca/pca_sample_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_33.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8",  "#ffae19"]
+
+pair = ['unpair', 'pair']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y_meta.pair==i) & (y_meta.laser==laser) & idx_mouse & idx_correct & idx_tasks
+    X_sel = X_meta[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_34.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#4daf4a"]
+
+pair = ['nolick', 'lick']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y_meta.choice==i) & (y_meta.laser==laser) & idx_mouse & idx_correct & idx_tasks
+    X_sel = X_meta[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.savefig('./figures/pca/pca_choice_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_35.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#4daf4a"]
+
+pair = ['C', 'D']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y_meta.test_odor==i) & (y_meta.laser==laser) & idx_mouse & idx_correct & idx_tasks
+    X_sel = X_meta[mask]
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.savefig('./figures/pca/pca_test_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_36.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+
+pair = ['AC', 'AD', 'BD', 'BC']
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+for i in range(4):
+    idx = (y_meta.odor_pair==i) & (y_meta.laser==laser) & idx_mouse & idx_correct
+
+    X_avg = (X_meta[idx].mean(0))[:, :66]
+
+    ax[0].plot(X_avg[0], X_avg[1], color=color[i], label=pair[i])
+    ax[0].set_xlabel('PC 1')
+    ax[0].set_ylabel('PC 2')
+
+    ax[1].plot(X_avg[0], X_avg[2], color=color[i], label=pair[i])
+    ax[1].set_xlabel('PC 1')
+    ax[1].set_ylabel('PC 3')
+
+    ax[2].plot(X_avg[1], X_avg[2], color=color[i], label=pair[i])
+    ax[2].set_xlabel('PC 2')
+    ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_37.png]]
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+
+** Embeddings
+*** spatial filter
+
+#+begin_src jupyter-python
+z_lim =5
+size = 0.1
+
+import cmocean
+cmap=cmocean.cm.phase
+
+theta = np.arctan2(w_meta[1], w_meta[0]) * 180 / np.pi
+idx = np.argsort(theta)
+
+theta_norm = (theta+ 360) % (360)
+
+counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
+
+bin_centers = 0.5*(bins[:-1] + bins[1:])
+colors = [cmap(center/(360)) for center in bin_centers]
+
+for patch, color in zip(patches, colors):
+    patch.set_facecolor(color)
+
+plt.xlabel('Neuron Loc (°)')
+plt.ylabel('Density')
+plt.savefig('./figures/pca/pca_weights_hist_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_39.png]]
+
+ #+begin_src jupyter-python
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+for k in range(n_comp):
+    sc = ax[k].scatter(theta[idx], w_meta[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap, rasterized=1)
+    ax[k].plot(theta[idx], gaussian_filter1d(w_meta[k][idx], int(size*w_meta.shape[1]), mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel('Weights PC %d' % (k+1))
+    ax[k].set_xlabel('Neuron Loc (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+ax[-1].set_ylim([-z_lim/10, z_lim/10])
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+plt.savefig('./figures/pca/pca_weights_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_40.png]]
+
+#+begin_src jupyter-python
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
+
+ax[0].scatter(w_meta[0][idx], w_meta[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5, rasterized=1)
+ax[0].plot(gaussian_filter1d(w_meta[0][idx], int(size*w_meta.shape[1]), mode='wrap'), gaussian_filter1d(w_meta[1][idx], int(size*w_meta.shape[1]), mode='wrap'), 'k')
+
+ax[0].set_xlabel('PC 1')
+ax[0].set_ylabel('PC 2')
+
+ax[1].scatter(w_meta[0][idx], w_meta[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5, rasterized=1)
+ax[1].plot(gaussian_filter1d(w_meta[0][idx], int(size*w_meta.shape[1]), mode='wrap'), gaussian_filter1d(w_meta[2][idx], int(size*w_meta.shape[1]), mode='wrap'), 'k')
+ax[1].set_xlabel('PC 1')
+ax[1].set_ylabel('PC 3')
+
+sc = ax[2].scatter(w_meta[1][idx], w_meta[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5, rasterized=1)
+ax[2].plot(gaussian_filter1d(w_meta[1][idx], int(size*w_meta.shape[1]), mode='wrap'), gaussian_filter1d(w_meta[2][idx], int(size*w_meta.shape[1]), mode='wrap'), 'k')
+ax[2].set_xlabel('PC 2')
+ax[2].set_ylabel('PC 3')
+
+for k in range(3):
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+ax[1].set_ylim(-z_lim/10, z_lim/10)
+ax[2].set_ylim(-z_lim/10, z_lim/10)
+
+plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_41.png]]
+
+#+begin_src jupyter-python
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+ax.plot(gaussian_filter1d(w_meta[0][idx], int(size*w_meta.shape[1]), mode='wrap'),
+           gaussian_filter1d(w_meta[1][idx], int(size*w_meta.shape[1]), mode='wrap'),
+           gaussian_filter1d(w_meta[2][idx], int(size*w_meta.shape[1]), mode='wrap'),
+           rasterized=1, color='k')
+
+
+sc = ax.scatter(w_meta[0][idx],
+                w_meta[1][idx],
+                w_meta[2][idx],
+                c=theta_norm[idx], cmap=cmap,
+                rasterized=1, alpha=0.5)
+
+ax.tick_params(axis='both', which='major', labelsize=12)  # change both x and y (and z in 3D)
+ax.tick_params(axis='z', which='major', labelsize=12)     # for the z-axis specifically
+
+ax.set_xlabel('PC 1', fontsize=12)
+ax.set_ylabel('PC 2', fontsize=12)
+ax.set_zlabel('PC 3', fontsize=12)
+
+ax.set_xlim([-z_lim, z_lim])
+ax.set_ylim([-z_lim, z_lim])
+ax.set_zlim([-z_lim/10, z_lim/10])
+
+ax.grid(False)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_42.png]]
+
+*** theta space
+
+#+begin_src jupyter-python
+nbins = 32
+theta_bins = np.linspace(0, 360, nbins+1)
+theta_digitized = np.digitize(theta_norm, theta_bins) - 1
+
+# For each bin, average w[0], w[1], and w[2]
+w_binned = np.zeros((3, nbins))
+for i in range(nbins):
+    mask = theta_digitized == i
+    for j in range(3):
+        w_binned[j, i] = np.mean(w_meta[j][mask]) if np.any(mask) else np.nan
+
+w_smooth = gaussian_filter1d(w_binned, sigma=3, axis=1, mode='wrap')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot * 180 / np.pi, w_smooth[i], lw=2)
+    ax.axhline(0, ls='--', color='k')
+    ax.set_ylabel('Weights PC %d' % (i+1))
+    ax.set_xlabel('Neuron Loc (°)')
+
+axs[-1].axvline(45)
+axs[-1].axvline(225)
+plt.savefig('./figures/pca/pca_weights_ang_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_44.png]]
+
+#+begin_src jupyter-python
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+# Compute bin centers in degrees and radians
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)  # for polar plots
+
+fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width), sharey=1)
+
+# PC1 vs PC2
+axs[0].plot(w_smooth[0], w_smooth[1], 'k-')
+axs[0].set_xlabel('PC 1')
+axs[0].set_ylabel('PC 2')
+
+# PC1 vs PC3
+axs[1].plot(w_smooth[0], w_smooth[2], 'k-')
+axs[1].set_xlabel('PC 1')
+axs[1].set_ylabel('PC 3')
+
+# PC2 vs PC3
+axs[2].plot(w_smooth[1], w_smooth[2], 'k-')
+axs[2].set_xlabel('PC 2')
+axs[2].set_ylabel('PC 3')
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_45.png]]
+
+#+begin_src jupyter-python
+import matplotlib.pyplot as plt
+from numpy import deg2rad
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+theta_plot = deg2rad(bin_centers)
+
+fig, axs = plt.subplots(1, 3, subplot_kw={'polar': True}, figsize=(n_comp*width, width))
+
+for i, ax in enumerate(axs):
+    ax.plot(theta_plot, w_smooth[i], lw=2)
+
+plt.tight_layout()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_46.png]]
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+
+** Opto
+
+#+begin_src jupyter-python
+# laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18', 'ChRM04', 'ChRM23']
+laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM18', 'ChRM04', 'ChRM23']
+# laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18']
+
+tasks = ['DPA'] # , 'DualNoGo', 'DualGo']
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+
+traj_mouse = []
+for i_mouse, mouse in enumerate(laser_mice):
+    idx = (y_meta.mouse==mouse) & (y_meta.laser==0)
+    X_idx = X_meta[idx]
+    y_idx = y_meta[idx]
+
+    traj_ = []
+    for i in range(2):
+        mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks))
+        traj_.append(X_idx[mask].mean(0))
+
+    traj_mouse.append(traj_)
+
+traj_mouse = np.array(traj_mouse)
+print(traj_mouse.shape)
+#+end_src
+
+#+RESULTS:
+: (6, 2, 15, 84)
+
+#+begin_src jupyter-python
+traj_opto = []
+for i_mouse, mouse in enumerate(laser_mice):
+    idx = (y_meta.mouse==mouse) & (y_meta.laser==1)
+    X_idx = X_meta[idx]
+    y_idx = y_meta[idx]
+
+    traj_ = []
+    for i in range(2):
+        mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks))
+        traj_.append(X_idx[mask].mean(0))
+
+    traj_opto.append(traj_)
+
+traj_opto = np.array(traj_opto)
+print(traj_opto.shape)
+#+end_src
+
+#+RESULTS:
+: (6, 2, 15, 84)
+
+#+begin_src jupyter-python
+fp_mouse = np.nanmean(traj_mouse[..., options['bins_LD']], -1)
+fp_opto = np.nanmean(traj_opto[..., options['bins_LD']], -1)
+
+print(fp_mouse.shape)
+
+pc1 = fp_mouse[..., 0]
+pc2 = fp_mouse[..., 1]
+
+pc1_opto = fp_opto[..., 0]
+pc2_opto = fp_opto[..., 1]
+#+end_src
+
+#+RESULTS:
+: (6, 2, 15)
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*height, height), sharey=1)
+
+for i in range(pc1.shape[0]):
+    ax[0].scatter(pc1[i], pc2[i], label=options['mice'][i])
+    ax[1].scatter(pc1_opto[i], pc2_opto[i], label=options['mice'][i])
+
+for k in range(2):
+    ax[k].axvline(0, color='k')
+    ax[k].axhline(0, color='k')
+
+    ax[k].set_xlabel('PC1')
+    ax[k].set_ylabel('PC2')
+# plt.legend(fontsize=12, frameon=0)
+plt.savefig('./figures/pca/opto_pc1_pc2_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_52.png]]
+
+#+begin_src jupyter-python
+perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor'])['performance'].mean().reset_index()
+perf_on = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==1)].groupby(['mouse', 'sample_odor'])['performance'].mean().reset_index()
+
+delta_dpa = (perf_on['performance'] - perf_off['performance']).values
+print(perf_off.shape, perf_on.shape)
+print(delta_dpa)
+#+end_src
+
+#+RESULTS:
+: (12, 3) (12, 3)
+: [ 0.00694444  0.03472222  0.0625      0.02083333  0.          0.
+:   0.00694444 -0.04166667  0.01041667  0.09375     0.00694444 -0.00694444]
+
+#+begin_src jupyter-python
+perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor'])['odr_perf'].mean().reset_index()
+perf_on = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==1)].groupby(['mouse', 'sample_odor'])['odr_perf'].mean().reset_index()
+
+delta_odr = (perf_on['odr_perf'] - perf_off['odr_perf']).values
+print(perf_off.shape, perf_on.shape)
+print(delta_odr)
+#+end_src
+
+#+RESULTS:
+: (12, 3) (12, 3)
+: [-0.05208333 -0.02083333 -0.015625   -0.0625      0.03125    -0.03125
+:  -0.02083333  0.          0.          0.015625   -0.02083333  0.02083333]
+
+#+begin_src jupyter-python
+dPC1 = (pc1_opto - pc1).reshape(-1)
+dPC2 = (pc2_opto - pc2).reshape(-1)
+print(dPC1.shape, dPC2.shape)
+#+end_src
+
+#+RESULTS:
+: (12,) (12,)
+
+#+begin_src jupyter-python
+df = perf_off[['mouse', 'sample_odor']]
+df['delta_dpa'] = delta_dpa
+df['delta_odr'] = delta_odr
+
+df['mouse'] = pd.Categorical(df['mouse'], categories=laser_mice, ordered=True)
+df = df.sort_values('mouse')
+
+df['delta_pc1'] = dPC1
+df['delta_pc2'] = dPC2
+
+# df = df[~df['mouse'].str.contains('ChR')]
+
+print(df.head())
+#+end_src
+
+#+RESULTS:
+:      mouse  sample_odor  delta_dpa  delta_odr  delta_pc1  delta_pc2
+: 4  JawsM01          0.0   0.000000   0.031250   0.022104   0.018956
+: 5  JawsM01          1.0   0.000000  -0.031250   0.002658   0.053433
+: 6  JawsM06          0.0   0.006944  -0.020833   0.002763  -0.001678
+: 7  JawsM06          1.0  -0.041667   0.000000  -0.019076   0.009967
+: 8  JawsM12          0.0   0.010417   0.000000  -0.096039   0.053336
+
+#+begin_src jupyter-python
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from scipy.stats import pearsonr
+
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1)
+
+df_ = df.copy()
+
+for i, delta_perf in enumerate(['delta_dpa', 'delta_odr']):
+    sns.regplot(data=df_, x='delta_pc1', y=delta_perf, scatter=True,
+                fit_reg=True, ci=95, ax=ax[i],
+                scatter_kws={'s': 0, 'alpha': 0.7},
+                line_kws={'color': 'k', 'lw': 2, 'ls':'--'})
+
+    sns.scatterplot(data=df_, x='delta_pc1', y=delta_perf,
+                    hue='mouse', style=None, s=80, alpha=0.8, ax=ax[i],
+                    legend=None)
+
+    corr, p_value = pearsonr(df_['delta_pc1'].dropna(), df_[delta_perf].dropna())
+
+    annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
+    ax[i].annotate(annotation, xy=(.65, 0.95), xycoords='axes fraction', fontsize=14,
+                backgroundcolor='white', verticalalignment='top', horizontalalignment='left',
+                bbox=dict(edgecolor=None, facecolor='white', boxstyle='round'))
+
+    ax[i].set_xlabel("$\\Delta$ PC1")
+    ax[i].set_ylabel("$\\Delta$ Performance")
+
+ax[0].set_ylabel("$\\Delta$ Performance")
+ax[1].set_ylabel("")
+plt.savefig('./figures/pca/opto_pc1_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_57.png]]
+
+#+begin_src jupyter-python
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+from scipy.stats import pearsonr
+
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1)
+
+df_ = df.copy()
+
+for i, delta_perf in enumerate(['delta_dpa', 'delta_odr']):
+    sns.regplot(data=df_, x='delta_pc2', y=delta_perf, scatter=True,
+                fit_reg=True, ci=95, ax=ax[i],
+                scatter_kws={'s': 0, 'alpha': 0.7},
+                line_kws={'color': 'k', 'lw': 2, 'ls':'--'})
+
+    sns.scatterplot(data=df_, x='delta_pc2', y=delta_perf,
+                    hue='mouse', style=None, s=80, alpha=0.8, ax=ax[i],
+                    legend=None)
+
+    corr, p_value = pearsonr(df_['delta_pc2'].dropna(), df_[delta_perf].dropna())
+
+    annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
+    ax[i].annotate(annotation, xy=(.65, 0.95), xycoords='axes fraction', fontsize=14,
+                backgroundcolor='white', verticalalignment='top', horizontalalignment='left',
+                bbox=dict(edgecolor=None, facecolor='white', boxstyle='round'))
+
+    ax[i].set_xlabel("$\\Delta$ PC2")
+
+ax[0].set_ylabel("$\\Delta$ Performance")
+ax[1].set_ylabel("")
+
+plt.savefig('./figures/pca/opto_pc2_%s.svg' % dum, dpi=300)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_58.png]]
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+
+** Binned Flow Fields
+*** utils
+
+#+begin_src jupyter-python
+import numpy as np
+
+def flow_field_from_trajectories(x, y, dt=1.0, bins=25, xrange=None, yrange=None,
+                                 statistic="mean", min_count=1):
+    """
+    x, y: arrays (n_trials, n_time)
+    dt: timestep
+    bins: int or (nx, ny)
+    xrange, yrange: (min, max); if None inferred from data
+    statistic: "mean" (default). (You can extend to median easily.)
+    Returns:
+      xedges, yedges
+      u, v: (nx, ny) average velocities in each spatial bin
+      count: (nx, ny) number of samples per bin
+    """
+    x = np.asarray(x); y = np.asarray(y)
+    n_trials, n_time = x.shape
+    assert y.shape == x.shape
+
+    # step velocities, shape (n_trials, n_time-1)
+    u = (x[:, 1:] - x[:, :-1]) / dt
+    v = (y[:, 1:] - y[:, :-1]) / dt
+
+    # positions to bin (start of each step)
+    xs = x[:, :-1]
+    ys = y[:, :-1]
+
+    if xrange is None:
+        xrange = (xs.min(), xs.max())
+    if yrange is None:
+        yrange = (ys.min(), ys.max())
+
+    if isinstance(bins, int):
+        nx = ny = bins
+    else:
+        nx, ny = bins
+
+    xedges = np.linspace(xrange[0], xrange[1], nx + 1)
+    yedges = np.linspace(yrange[0], yrange[1], ny + 1)
+
+    # flatten all steps across trials/time
+    xsf = xs.ravel()
+    ysf = ys.ravel()
+    uf = u.ravel()
+    vf = v.ravel()
+
+    # bin index for each sample
+    ix = np.searchsorted(xedges, xsf, side="right") - 1
+    iy = np.searchsorted(yedges, ysf, side="right") - 1
+
+    valid = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    ix = ix[valid]; iy = iy[valid]
+    uf = uf[valid]; vf = vf[valid]
+
+    # accumulate sums and counts
+    count = np.zeros((nx, ny), dtype=int)
+    usum  = np.zeros((nx, ny), dtype=float)
+    vsum  = np.zeros((nx, ny), dtype=float)
+
+    np.add.at(count, (ix, iy), 1)
+    np.add.at(usum,  (ix, iy), uf)
+    np.add.at(vsum,  (ix, iy), vf)
+
+    # mean velocity per bin
+    ugrid = np.full((nx, ny), np.nan, dtype=float)
+    vgrid = np.full((nx, ny), np.nan, dtype=float)
+    mask = count >= min_count
+    ugrid[mask] = usum[mask] / count[mask]
+    vgrid[mask] = vsum[mask] / count[mask]
+
+    return xedges, yedges, ugrid, vgrid, count
+
+
+# Example usage:
+# x, y = diffusion_2d(n_trials=200, n_time=2000, dt=0.01, D=0.5, seed=0)
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+
+def flow_field_midpoint(x, y, dt=1.0, bins=25, xrange=None, yrange=None, min_count=1):
+    """
+    Mid-point binning: each velocity sample is assigned to the bin containing
+    the segment midpoint ((x_t+x_{t+1})/2, (y_t+y_{t+1})/2).
+
+    x, y: (n_trials, n_time)
+    Returns: xedges, yedges, U, V, count with U,V,count shaped (nx, ny)
+    """
+    x = np.asarray(x); y = np.asarray(y)
+    assert x.shape == y.shape
+    n_trials, n_time = x.shape
+
+    # step velocities (n_trials, n_time-1)
+    u = (x[:, 1:] - x[:, :-1]) / dt
+    v = (y[:, 1:] - y[:, :-1]) / dt
+
+    # midpoints to bin (n_trials, n_time-1)
+    xm = 0.5 * (x[:, 1:] + x[:, :-1])
+    ym = 0.5 * (y[:, 1:] + y[:, :-1])
+
+    if xrange is None:
+        xrange = (xm.min(), xm.max())
+    if yrange is None:
+        yrange = (ym.min(), ym.max())
+
+    if isinstance(bins, int):
+        nx = ny = bins
+    else:
+        nx, ny = bins
+
+    xedges = np.linspace(xrange[0], xrange[1], nx + 1)
+    yedges = np.linspace(yrange[0], yrange[1], ny + 1)
+
+    # flatten samples
+    xf = xm.ravel()
+    yf = ym.ravel()
+    uf = u.ravel()
+    vf = v.ravel()
+
+    # bin indices
+    ix = np.searchsorted(xedges, xf, side="right") - 1
+    iy = np.searchsorted(yedges, yf, side="right") - 1
+
+    valid = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    ix = ix[valid]; iy = iy[valid]
+    uf = uf[valid]; vf = vf[valid]
+
+    # accumulate
+    count = np.zeros((nx, ny), dtype=int)
+    usum  = np.zeros((nx, ny), dtype=float)
+    vsum  = np.zeros((nx, ny), dtype=float)
+
+    np.add.at(count, (ix, iy), 1)
+    np.add.at(usum,  (ix, iy), uf)
+    np.add.at(vsum,  (ix, iy), vf)
+
+    U = np.full((nx, ny), np.nan, dtype=float)
+    V = np.full((nx, ny), np.nan, dtype=float)
+    mask = count >= min_count
+    U[mask] = usum[mask] / count[mask]
+    V[mask] = vsum[mask] / count[mask]
+
+    return xedges, yedges, U, V, count
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+
+def radial_angular_speeds(x, y, dt=1.0):
+    # step velocities at times t -> t+1
+    vx = (x[:, 1:] - x[:, :-1]) / dt
+    vy = (y[:, 1:] - y[:, :-1]) / dt
+    xs = x[:, :-1]
+    ys = y[:, :-1]
+
+    r = np.sqrt(xs**2 + ys**2)
+    theta = np.arctan2(ys, xs)  # [-pi, pi)
+
+    # avoid r=0 issues
+    eps = 1e-12
+    r_safe = np.maximum(r, eps)
+
+    vr = (xs*vx + ys*vy) / r_safe
+    omega = (xs*vy - ys*vx) / (r_safe**2)
+
+    return r, theta, vr, omega
+
+def bin_mean_1d(xvals, yvals, edges, min_count=1):
+    xvals = np.asarray(xvals).ravel()
+    yvals = np.asarray(yvals).ravel()
+
+    idx = np.searchsorted(edges, xvals, side="right") - 1
+    nbin = len(edges) - 1
+    valid = (idx >= 0) & (idx < nbin) & np.isfinite(yvals) & np.isfinite(xvals)
+    idx = idx[valid]
+    yvals = yvals[valid]
+
+    count = np.zeros(nbin, dtype=int)
+    ysum  = np.zeros(nbin, dtype=float)
+    np.add.at(count, idx, 1)
+    np.add.at(ysum,  idx, yvals)
+
+    ymean = np.full(nbin, np.nan, float)
+    m = count >= min_count
+    ymean[m] = ysum[m] / count[m]
+    centers = 0.5*(edges[:-1] + edges[1:])
+    return centers, ymean, count
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+
+def radial_angular_from_binned_uv(U, V, C, xedges, yedges, r_edges, th_edges,
+                                 min_count_bin=1, min_count_1d=1):
+    """
+    Option (2): convert binned mean velocity field (U,V) into polar components at bin centers,
+    then compute weighted 1D profiles vs radius r and angle theta using weights=C.
+
+    Inputs:
+      U,V,C: (nx, ny) arrays from flow_field_from_trajectories
+      xedges,yedges: bin edges
+      r_edges: 1D edges for radius bins
+      th_edges: 1D edges for theta bins in [-pi, pi]
+      min_count_bin: require C>=this to use a spatial bin at all
+      min_count_1d: require total weight in a 1D bin >= this
+
+    Returns:
+      r_cent, vr_r, w_r
+      th_cent, om_th, w_th
+      plus (vr_grid, om_grid) for inspection
+    """
+    U = np.asarray(U); V = np.asarray(V); C = np.asarray(C)
+    nx, ny = U.shape
+
+    xc = 0.5 * (xedges[:-1] + xedges[1:])
+    yc = 0.5 * (yedges[:-1] + yedges[1:])
+    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")  # (nx, ny)
+
+    r = np.sqrt(Xc**2 + Yc**2)
+    th = np.arctan2(Yc, Xc)
+    eps = 1e-12
+    r_safe = np.maximum(r, eps)
+
+    # polar components derived from mean flow vector in each spatial bin
+    vr_grid = np.abs(Xc*U + Yc*V) / r_safe
+    om_grid = np.abs(Xc*V - Yc*U) / (r_safe**2)   # angular speed dtheta/dt
+
+    # flatten
+    rf = r.ravel()
+    thf = th.ravel()
+    vrf = vr_grid.ravel()
+    omf = om_grid.ravel()
+    wf = C.ravel().astype(float)
+
+    # keep only bins with enough samples and finite values
+    valid = (wf >= min_count_bin) & np.isfinite(vrf) & np.isfinite(omf) & np.isfinite(rf) & np.isfinite(thf)
+    rf, thf, vrf, omf, wf = rf[valid], thf[valid], vrf[valid], omf[valid], wf[valid]
+
+    def weighted_bin_mean(xvals, yvals, wvals, edges, min_w=1.0):
+        idx = np.searchsorted(edges, xvals, side="right") - 1
+        nbin = len(edges) - 1
+        ok = (idx >= 0) & (idx < nbin) & np.isfinite(yvals) & np.isfinite(wvals)
+        idx = idx[ok]; yvals = yvals[ok]; wvals = wvals[ok]
+
+        wsum = np.zeros(nbin, float)
+        ywsum = np.zeros(nbin, float)
+        np.add.at(wsum, idx, wvals)
+        np.add.at(ywsum, idx, wvals * yvals)
+
+        ymean = np.full(nbin, np.nan, float)
+        m = wsum >= min_w
+        ymean[m] = ywsum[m] / wsum[m]
+        centers = 0.5*(edges[:-1] + edges[1:])
+        return centers, ymean, wsum
+
+    r_cent, vr_r, w_r   = weighted_bin_mean(rf,  vrf, wf, r_edges,  min_w=min_count_1d)
+    th_cent, om_th, w_th = weighted_bin_mean(thf, omf, wf, th_edges, min_w=min_count_1d)
+
+    return r_cent, vr_r, w_r, th_cent, om_th, w_th, vr_grid, om_grid
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+from scipy.ndimage import gaussian_filter1d
+
+def gaussian_filter1d_nan(x, sigma, mode="nearest", truncate=4.0):
+    x = np.asarray(x, float)
+    m = np.isfinite(x).astype(float)          # 1 where valid, 0 where NaN
+    x0 = np.where(np.isfinite(x), x, 0.0)
+
+    xs = gaussian_filter1d(x0, sigma=sigma, mode=mode, truncate=truncate)
+    ms = gaussian_filter1d(m,  sigma=sigma, mode=mode, truncate=truncate)
+
+    out = xs / ms
+    out[ms == 0] = np.nan
+    return out
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+
+def weighted_binned_mean(xvals, yvals, edges, weights=None,
+                         min_count=1, min_weight_1d=1.0):
+    """
+    Bin yvals as a function of xvals using weighted mean.
+
+    min_count: require at least this many contributing samples in each 1D bin
+    min_weight_1d: require at least this much total weight in each 1D bin
+    """
+    xvals = np.asarray(xvals).ravel()
+    yvals = np.asarray(yvals).ravel()
+
+    if weights is None:
+        weights = np.ones_like(yvals, float)
+    else:
+        weights = np.asarray(weights).ravel().astype(float)
+
+    idx = np.searchsorted(edges, xvals, side="right") - 1
+    nb = len(edges) - 1
+
+    ok = (
+        (idx >= 0) & (idx < nb) &
+        np.isfinite(xvals) & np.isfinite(yvals) &
+        np.isfinite(weights) & (weights > 0)
+    )
+    idx = idx[ok]
+    yvals = yvals[ok]
+    weights = weights[ok]
+
+    wsum  = np.zeros(nb, float)
+    ywsum = np.zeros(nb, float)
+    cnt   = np.zeros(nb, int)
+
+    np.add.at(wsum,  idx, weights)
+    np.add.at(ywsum, idx, weights * yvals)
+    np.add.at(cnt,   idx, 1)
+
+    ymean = np.full(nb, np.nan)
+    m = (cnt >= min_count) & (wsum >= min_weight_1d)
+    ymean[m] = ywsum[m] / wsum[m]
+
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    return centers, ymean, cnt, wsum
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def binned_mean_1d(xvals, yvals, edges, min_count=1):
+    xvals = np.asarray(xvals).ravel()
+    yvals = np.asarray(yvals).ravel()
+    idx = np.searchsorted(edges, xvals, side="right") - 1
+    nb = len(edges) - 1
+    ok = (idx >= 0) & (idx < nb) & np.isfinite(xvals) & np.isfinite(yvals)
+    idx = idx[ok]; yvals = yvals[ok]
+
+    cnt = np.zeros(nb, int)
+    ysum = np.zeros(nb, float)
+    np.add.at(cnt, idx, 1)
+    np.add.at(ysum, idx, yvals)
+
+    ymean = np.full(nb, np.nan)
+    m = cnt >= min_count
+    ymean[m] = ysum[m] / cnt[m]
+    centers = 0.5*(edges[:-1] + edges[1:])
+    return centers, ymean, cnt
+
+def speed_vs_r_theta(x_coor, y_coor, dt=1.0,
+                     r_edges=None, theta_edges=None,
+                     min_count=50, use_midpoint=False, nbins=32):
+    x = np.asarray(x_coor); y = np.asarray(y_coor)
+
+    vx = (x[:, 1:] - x[:, :-1]) / dt
+    vy = (y[:, 1:] - y[:, :-1]) / dt
+    speed = np.sqrt(vx**2 + vy**2)  # (n_trials, n_time-1)
+
+    if use_midpoint:
+        xs = 0.5*(x[:, 1:] + x[:, :-1])
+        ys = 0.5*(y[:, 1:] + y[:, :-1])
+    else:
+        xs = x[:, :-1]
+        ys = y[:, :-1]
+
+    r = np.sqrt(xs**2 + ys**2)
+    theta = np.arctan2(ys, xs)
+
+    eps = 1e-12
+    r_safe = np.maximum(r, eps)
+    omega = (xs*vy - ys*vx) / (r_safe**2)
+
+    if r_edges is None:
+        r_edges = np.linspace(0, np.nanmax(r), nbins)
+    if theta_edges is None:
+        theta_edges = np.linspace(-np.pi, np.pi, nbins)
+
+    r_cent, speed_r, r_cnt = binned_mean_1d(r, np.abs(speed), r_edges, min_count=min_count)
+    th_cent, speed_th, th_cnt = binned_mean_1d(theta, np.abs(speed), theta_edges, min_count=min_count)
+
+    return (r_cent, speed_r, r_cnt), (th_cent, speed_th, th_cnt)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+import matplotlib.pyplot as plt
+
+def vr_vth_omega_from_xy(x, y, dt=1.0, eps=1e-12):
+    x = np.asarray(x); y = np.asarray(y)
+    vx = (x[:, 1:] - x[:, :-1]) / dt
+    vy = (y[:, 1:] - y[:, :-1]) / dt
+    xs = x[:, :-1]; ys = y[:, :-1]
+
+    r = np.sqrt(xs**2 + ys**2)
+    th = np.arctan2(ys, xs)
+    r_safe = np.maximum(r, eps)
+
+    vr  = (xs*vx + ys*vy) / r_safe
+    vth = (-ys*vx + xs*vy) / r_safe              # = (xs*vy - ys*vx)/r
+    omega = (xs*vy - ys*vx) / (r_safe**2)        # = vth / r
+    return r, th, vr, vth, omega
+
+def binned_mean(xvals, yvals, edges, min_count=50):
+    xvals = np.asarray(xvals).ravel()
+    yvals = np.asarray(yvals).ravel()
+    idx = np.searchsorted(edges, xvals, side="right") - 1
+    nb = len(edges) - 1
+    ok = (idx >= 0) & (idx < nb) & np.isfinite(xvals) & np.isfinite(yvals)
+    idx = idx[ok]; yvals = yvals[ok]
+
+    cnt = np.zeros(nb, int)
+    ysum = np.zeros(nb, float)
+    np.add.at(cnt, idx, 1)
+    np.add.at(ysum, idx, yvals)
+
+    ymean = np.full(nb, np.nan)
+    m = cnt >= min_count
+    ymean[m] = ysum[m] / cnt[m]
+    centers = 0.5*(edges[:-1] + edges[1:])
+    return centers, ymean, cnt
+#+end_src
+
+#+RESULTS:
+
+*** all mice
+
+#+begin_src jupyter-python
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+dt = 1
+nbins = 32
+min_count = 1  # choose based on how noisy you expect things to be
+min_w=1
+sigma_r, sigma_th= 5, 5
+#+end_src
+
+#+RESULTS:
+
+**** cartesian speeds
+
+#+begin_src jupyter-python
+r_list, sp_r_list = [], []
+th_list, sp_th_list = [], []
+
+for i_mouse in range(len(options['mice'])):
+    idx = (y_meta.laser==0) & (y_meta.mouse==options['mice'][i_mouse]) & (y_meta.tasks=='DPA')
+    X_delay = X_meta[idx].copy()
+
+    x_coor = X_delay[:, 0, options['bins_DELAY']]
+    y_coor = X_delay[:, 1, options['bins_DELAY']]
+
+    (r_c, sp_r, r_cnt), (th_c, sp_th, th_cnt) = speed_vs_r_theta(x_coor, y_coor, dt=dt, min_count=min_count, use_midpoint=True)
+
+    r_c /= np.nanmax(r_c)
+
+    m_sp_r = np.nanmean(sp_r)
+    std_sp_r = np.nanstd(sp_r)
+
+    sp_r = (sp_r - m_sp_r) / std_sp_r
+
+    r_list.append(r_c)
+    th_list.append(th_c)
+
+    m_sp_th = np.nanmean(sp_th)
+    std_sp_th = np.nanstd(sp_th)
+
+    sp_th = (sp_th - m_sp_th) / std_sp_th
+
+    sp_r_list.append(sp_r)
+    sp_th_list.append(sp_th)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+from scipy.stats import circmean
+r_list = pad_list(r_list, axis=0, max_len=None)
+sp_r_list = pad_list(sp_r_list, axis=0, max_len=None)
+mean_sp_r = np.nanmean(uniform_filter1d(np.array(sp_r_list), sigma_r), 0)
+
+th_list = pad_list(th_list, axis=0, max_len=None)
+sp_th_list = pad_list(sp_th_list, axis=0, max_len=None)
+mean_sp_th = np.nanmean(uniform_filter1d(np.array(sp_th_list), sigma_th), 0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+for i in range(len(options['mice'])):
+    r_c = r_list[i]
+    sp_r = sp_r_list[i]
+
+    ax[0].plot(r_c, uniform_filter1d(sp_r, sigma_r), alpha=0.25)
+
+    th_c = th_list[i]
+    sp_th = sp_th_list[i]
+
+    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(sp_th, sigma_th, mode='wrap'), alpha=0.25)
+
+ax[0].plot(r_c, mean_sp_r, 'k')
+ax[1].plot(th_c * 180 / np.pi, mean_sp_th, 'k')
+
+ax[0].set_xlabel("r")
+ax[0].set_ylabel(r'$\langle v\rangle(r)$')
+
+ax[1].set_xlabel(r'$\theta$ (rad)')
+ax[1].set_ylabel(r'$\langle v\rangle(\theta)$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_80.png]]
+
+**** binned cartesian speeds
+
+#+begin_src jupyter-python
+r_list, sp_r_list = [], []
+th_list, sp_th_list = [], []
+
+for i_mouse in range(len(options['mice'])):
+    idx = (y_meta.laser==0) & (y_meta.mouse==options['mice'][i_mouse]) & (y_meta.tasks=='DPA')
+    X_delay = X_meta[idx].copy()
+
+    x_coor = X_delay[:, 0, options['bins_DELAY']]
+    y_coor = X_delay[:, 1, options['bins_DELAY']]
+
+    xedges, yedges, U, V, C = flow_field_midpoint(x_coor, y_coor, dt=1, bins=nbins)
+
+    speed = np.sqrt(U**2 + V**2)
+    speed = np.where(C >= min_count, speed, np.nan)
+
+    # bin centers -> R, TH
+    xc = 0.5*(xedges[:-1] + xedges[1:])
+    yc = 0.5*(yedges[:-1] + yedges[1:])
+    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
+    R  = np.sqrt(Xc**2 + Yc**2)
+    TH = np.arctan2(Yc, Xc)
+
+    # speed vs radius (weighted by C)
+    r_edges = np.linspace(0, np.nanmax(R), nbins)
+    r_c, sp_r, cnt_r, wsum_r = weighted_binned_mean(R, speed, r_edges, weights=C,min_count=min_count, min_weight_1d=min_w)
+
+    # speed vs theta (weighted by C)
+    th_edges = np.linspace(-np.pi, np.pi, nbins)
+    th_c, sp_th, cnt_th, wsum_th = weighted_binned_mean(TH, speed, th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+
+    r_c /= np.nanmax(r_c)
+
+    m_sp_r = np.nanmean(sp_r)
+    std_sp_r = np.nanstd(sp_r)
+
+    sp_r = (sp_r - m_sp_r) / std_sp_r
+
+    r_list.append(r_c)
+    th_list.append(th_c)
+
+    m_sp_th = np.nanmean(sp_th)
+    std_sp_th = np.nanstd(sp_th)
+
+    sp_th = (sp_th - m_sp_th) / std_sp_th
+
+    sp_r_list.append(sp_r)
+    sp_th_list.append(sp_th)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+from scipy.stats import circmean
+r_list = pad_list(r_list, axis=0, max_len=None)
+sp_r_list = pad_list(sp_r_list, axis=0, max_len=None)
+
+mean_sp_r = np.nanmean(sp_r_list, 0)
+std_sp_r = np.nanstd(sp_r_list, 0) / np.sqrt(len(options['mice']))
+
+
+th_list = pad_list(th_list, axis=0, max_len=None)
+sp_th_list = pad_list(sp_th_list, axis=0, max_len=None)
+mean_sp_th = circmean(sp_th_list, -np.pi, np.pi, 0)
+std_sp_th = np.nanstd(sp_th_list, 0) / np.sqrt(len(options['mice']))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+sigma_r = 5
+sigma_th = 5
+
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+for i in range(len(options['mice'])):
+    r_c = r_list[i]
+    sp_r = sp_r_list[i]
+
+    r_c /= np.nanmax(r_c)
+
+    m_sp_r = np.nanmean(sp_r)
+    std_sp_r = np.nanstd(sp_r)
+
+    sp_r = (sp_r - m_sp_r) / std_sp_r
+
+    ax[0].plot(r_c, uniform_filter1d(sp_r, sigma_r), alpha=0.25)
+
+    th_c = th_list[i]
+    sp_th = sp_th_list[i]
+
+    m_sp_th = np.nanmean(sp_th)
+    std_sp_th = np.nanstd(sp_th)
+
+    sp_th = (sp_th - m_sp_th) / std_sp_th
+
+    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(sp_th, sigma_th, mode='wrap'), alpha=0.25)
+
+ax[0].plot(r_c, uniform_filter1d(mean_sp_r, sigma_r), 'k')
+ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(mean_sp_th, sigma_th), 'k')
+
+ax[0].set_xlabel("r")
+ax[0].set_ylabel(r'$\langle v_{bin} \rangle(r)$')
+
+ax[1].set_xlabel(r'$\theta$ (rad)')
+ax[1].set_ylabel(r'$\langle v_{bin}\rangle(\theta)$')
+
+plt.savefig('./figures/pca/bin_speed_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_83.png]]
+
+#+begin_src jupyter-python
+
+
+#+end_src
+
+#+RESULTS:
+
+**** polar speeds
+
+#+begin_src jupyter-python
+r_list = []
+avr_r_list, avr_th_list = [], []
+avth_r_list, avth_th_list = [], []
+aw_r_list, aw_th_list = [], []
+
+for i_mouse in range(len(options['mice'])):
+    idx = (y_meta.laser==0) & (y_meta.mouse==options['mice'][i_mouse]) & (y_meta.tasks=='DPA')
+    X_delay = X_meta[idx].copy()
+
+    x_coor = X_delay[:, 0, options['bins_DELAY']]
+    y_coor = X_delay[:, 1, options['bins_DELAY']]
+
+    # --- compute components
+    r, th, vr, vth, omega = vr_vth_omega_from_xy(x_coor, y_coor, dt=dt)
+
+    # magnitudes
+    avr  = np.abs(vr)
+    avth = np.abs(vth)
+    aw = omega
+
+    # --- bin vs radius
+    r_edges = np.linspace(0, np.nanmax(r), nbins)
+    r_c, avr_r,  _ = binned_mean(r,  avr,  r_edges, min_count=min_count)
+    _,   avth_r, _ = binned_mean(r,  avth, r_edges, min_count=min_count)
+    _, aw_r, _ = binned_mean(r, aw, r_edges, min_count=min_count)
+
+    th_edges = np.linspace(-np.pi, np.pi, nbins)
+    th_c, avr_th,  _ = binned_mean(th, avr,  th_edges, min_count=min_count)
+    _,    avth_th, _ = binned_mean(th, avth, th_edges, min_count=min_count)
+    _, aw_th, _ = binned_mean(th, aw, th_edges, min_count=min_count)
+
+    r_c /= np.nanmax(r_c)
+
+    m_avr_r = np.nanmean(avr_r)
+    std_avr_r = np.nanstd(avr_r)
+    avr_r = (avr_r - m_avr_r) / std_avr_r
+
+    m_avr_th = np.nanmean(avr_th)
+    std_avr_th = np.nanstd(avr_th)
+    avr_th = (avr_th - m_avr_th) / std_avr_th
+
+    m_avth_r = np.nanmean(avth_r)
+    std_avth_r = np.nanstd(avth_r)
+    avth_r = (avth_r - m_avth_r) / std_avth_r
+
+    m_avth_th = np.nanmean(avth_th)
+    std_avth_th = np.nanstd(avth_th)
+    avth_th = (avth_th - m_avth_th) / std_avth_th
+
+    m_aw_r = np.nanmean(aw_r)
+    std_aw_r = np.nanstd(aw_r)
+    # aw_r = (aw_r - m_aw_r) / std_aw_r
+
+
+    m_aw_th = np.nanmean(aw_th)
+    std_aw_th = np.nanstd(aw_th)
+    # aw_th = (aw_th - m_aw_th) / std_aw_th
+
+
+    r_list.append(r_c)
+    th_list.append(th_c)
+
+    avr_r_list.append(avr_r)
+    avr_th_list.append(avr_th)
+
+    avth_r_list.append(avth_r)
+    avth_th_list.append(avth_th)
+
+    aw_r_list.append(aw_r)
+    aw_th_list.append(aw_th)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+r_list = pad_list(r_list, axis=0, max_len=None)
+
+avr_r_list = pad_list(avr_r_list, axis=0, max_len=None)
+avth_r_list = pad_list(avth_r_list, axis=0, max_len=None)
+aw_r_list = pad_list(aw_r_list, axis=0, max_len=None)
+
+mean_avr_r = np.nanmean(uniform_filter1d(avr_r_list, sigma_r, axis=-1), 0)
+mean_avth_r = np.nanmean(uniform_filter1d(avth_r_list, sigma_r, axis=-1), 0)
+mean_aw_r = np.nanmean(uniform_filter1d(aw_r_list, sigma_r, axis=-1), 0)
+
+mean_avr_r = uniform_filter1d(np.nanmean(avr_r_list, 0), sigma_r)
+mean_avth_r = uniform_filter1d(np.nanmean(avth_r_list, 0), sigma_r)
+mean_awr = uniform_filter1d(circmean(aw_r_list, low=-np.pi, high=np.pi, axis=0), sigma_r)
+
+std_avr_r = uniform_filter1d(np.nanstd(avr_r_list, 0), sigma_r) / np.sqrt(len(options['mice']))
+std_avth_r = uniform_filter1d(np.nanstd(avth_r_list, 0), sigma_r) / np.sqrt(len(options['mice']))
+std_aw_r = uniform_filter1d(np.nanstd(aw_r_list, 0), sigma_r) / np.sqrt(len(options['mice']))
+
+th_list = pad_list(th_list, axis=0, max_len=None)
+
+avr_th_list = pad_list(avr_th_list, axis=0, max_len=None)
+avth_th_list = pad_list(avth_th_list, axis=0, max_len=None)
+aw_th_list = pad_list(aw_th_list, axis=0, max_len=None)
+
+mean_avr_th = uniform_filter1d(np.mean(avr_th_list, 0), sigma_th, mode='wrap')
+mean_avth_th = uniform_filter1d(np.mean(avth_th_list, axis=0), sigma_th, mode='wrap')
+mean_aw_th = uniform_filter1d(circmean(aw_th_list, low=-np.pi, high=np.pi, axis=0), sigma_th, mode='wrap')
+
+std_avr_th = uniform_filter1d(np.nanstd(avr_th_list, 0), sigma_th) / np.sqrt(len(options['mice']))
+std_avth_th = uniform_filter1d(np.nanstd(avth_th_list, 0), sigma_th) / np.sqrt(len(options['mice']))
+std_aw_th = uniform_filter1d(np.nanstd(aw_th_list, 0), sigma_th) / np.sqrt(len(options['mice']))
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+for i in range(len(options['mice'])):
+    r_c = r_list[i]
+    th_c = th_list[i]
+
+    avr_r = avr_r_list[i]
+    avr_th = avr_th_list[i]
+
+    ax[0].plot(r_c, uniform_filter1d(avr_r, sigma_r), alpha=0.25)
+    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(avr_th, sigma_th), alpha=0.2)
+
+ax[0].plot(r_c, mean_avr_r, 'k')
+ax[1].plot(th_c*180 / np.pi, mean_avr_th, 'k')
+
+ax[0].fill_between(r_c, mean_avr_r-std_avr_r, mean_avr_r+std_avr_r, alpha=.2)
+ax[1].fill_between(th_c*180/np.pi, mean_avr_th-std_avr_th, mean_avr_th+std_avr_th, alpha=.2)
+
+ax[0].axhline(0, color='k', ls='--')
+ax[0].set_xlabel("radius r")
+ax[0].set_ylabel("$<v_r>$")
+
+ax[1].axhline(0, color='k', ls='--')
+ax[1].set_xlabel("angle θ (°)")
+ax[1].set_ylabel("$<v_r>$")
+
+plt.savefig('./figures/pca/radial_speed_%s.svg' % dum)
+
+# plt.legend()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_87.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+for i in range(len(options['mice'])):
+    r_c = r_list[i]
+    th_c = th_list[i]
+
+    avth_r = avth_r_list[i]
+    avth_th = avth_th_list[i]
+
+    ax[0].plot(r_c, uniform_filter1d(avth_r, sigma_r), alpha=0.25)
+    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(avth_th, sigma_th), alpha=0.25)
+
+ax[0].plot(r_c, mean_avth_r, 'k')
+ax[1].plot(th_c*180 / np.pi, mean_avth_th, 'k')
+
+ax[0].fill_between(r_c, mean_avth_r-std_avth_r, mean_avth_r+std_avth_r, alpha=.2)
+ax[1].fill_between(th_c*180/np.pi, mean_avth_th-std_avth_th, mean_avth_th+std_avth_th, alpha=.2)
+
+ax[0].axhline(0, color='k', ls='--')
+ax[0].set_xlabel("radius r")
+ax[0].set_ylabel("$<v_\\theta>$")
+
+ax[1].axhline(0, color='k', ls='--')
+ax[1].set_xlabel("angle θ (°)")
+ax[1].set_ylabel("$<v_\\theta>$")
+
+plt.savefig('./figures/pca/polar_speed_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_88.png]]
+
+#+begin_src jupyter-python
+sigma_th=5
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+for i in range(len(options['mice'])):
+    r_c = r_list[i]
+    th_c = th_list[i]
+
+    aw_r = aw_r_list[i]
+    aw_th = aw_th_list[i]
+
+    ax[0].plot(r_c, uniform_filter1d(aw_r, sigma_r), alpha=0.2)
+    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(aw_th, sigma_th), alpha=0.2)
+
+ax[0].plot(r_c, mean_aw_r, 'k')
+ax[1].plot(th_c * 180 / np.pi, mean_aw_th, 'k')
+
+ax[0].fill_between(r_c, mean_aw_r-std_aw_r, mean_aw_r+std_aw_r, alpha=.2)
+ax[1].fill_between(th_c*180/np.pi, mean_aw_th-std_aw_th, mean_aw_th+std_aw_th, alpha=.2)
+
+ax[0].axhline(0, color='k', ls='--')
+ax[0].set_xlabel("radius r")
+ax[0].set_ylabel("$<\\omega>$")
+
+ax[1].axhline(0, color='k', ls='--')
+ax[1].set_xlabel("angle θ (°)")
+ax[1].set_ylabel("$<\\omega>$")
+
+plt.savefig('./figures/pca/angular_speed_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_89.png]]
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+
+*** data
+**** data
+
+ #+begin_src jupyter-python
+n_comp = 3
+laser = 0
+i_mouse = 3
+
+idx_mouse = True
+if i_mouse !=-1:
+    idx_mouse = (y_meta.mouse==options['mice'][i_mouse])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+dt = 1
+nbins = 32
+min_count = 1
+min_w = 1
+sigma_r, sigma_th= 5, 5
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
+
+idx = (y_meta.tasks=='DPA') & (y_meta.laser==0) & idx_mouse
+# idx = (y_meta.laser==0) & idx_mouse
+
+X_delay = X_meta[idx].copy()
+
+x_coor = X_delay[:, 0]
+y_coor = X_delay[:, 1]
+
+# x_coor = X_delay[:, 0, :options['bins_DELAY'][-1]]
+# y_coor = X_delay[:, 1, :options['bins_DELAY'][-1]]
+
+x_coor = X_delay[:, 0, options['bins_DELAY']]
+y_coor = X_delay[:, 1, options['bins_DELAY']]
+
+# bins = np.concatenate( (options['bins_BL'], options['bins_DELAY']))
+
+# x_coor = X_delay[:, 0, bins]
+# y_coor = X_delay[:, 1, bins]
+
+print(x_coor.shape)
+#+end_src
+
+#+RESULTS:
+: (897, 36)
+
+**** binned flows
+
+#+begin_src jupyter-python
+# xedges, yedges, U, V, C = flow_field_from_trajectories(x_coor, y_coor, dt=1, bins=32)
+xedges, yedges, U, V, C = flow_field_midpoint(x_coor, y_coor, dt=dt, bins=nbins)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+from matplotlib import colors
+
+speed = np.sqrt(U**2 + V**2)
+speed = np.where(C >= min_count, speed, np.nan)
+
+vmin = np.nanpercentile(speed, 5)  # robust upper limit
+vmax = np.nanpercentile(speed, 95)  # robust upper limit
+
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1, sharex=1)
+
+ax[0].plot(x_coor.T, y_coor.T, alpha=0.3)
+
+pcm = ax[1].pcolormesh(xedges, yedges, speed.T, shading="auto", vmin=vmin, vmax=vmax)
+
+cbar = fig.colorbar(pcm, ax=ax[1])
+cbar.set_label("Speed")
+
+
+# pcm = ax[2].pcolormesh(
+#     xedges, yedges, speed.T, shading="auto",
+#     norm=colors.LogNorm(vmin=np.nanmin(speed[speed>0]), vmax=vmax)
+# )
+
+# cbar = fig.colorbar(pcm, ax=ax[2])
+# cbar.set_label("Speed (log)")
+
+# optional: overlay flow direction
+xc = 0.5*(xedges[:-1] + xedges[1:])
+yc = 0.5*(yedges[:-1] + yedges[1:])
+Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
+ax[1].quiver(Xc, Yc, U, V, color="w", angles="xy", scale_units="xy", scale=.25)
+# ax[2].quiver(Xc, Yc, U, V, color="w", angles="xy", scale_units="xy", scale=.25)
+
+# ax[0].set_xlim([-6, 6])
+# ax[0].set_ylim([-4, 4])
+ax[0].set_xlabel('PC1')
+ax[0].set_ylabel('PC2')
+
+plt.savefig('./figures/pca/pca_flow_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_95.png]]
+
+#+begin_src jupyter-python
+(r_c, sp_r, r_cnt), (th_c, sp_th, th_cnt) = speed_vs_r_theta(x_coor, y_coor, dt=dt, min_count=min_count, use_midpoint=True)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].plot(r_c, sp_r)
+ax[0].plot(r_c, uniform_filter1d(sp_r, sigma_r), color='k')
+
+ax[0].set_xlabel("r")
+ax[0].set_ylabel(r'$\langle \sqrt{v_x^2+v_y^2}\rangle(r)$')
+
+ax[1].plot(th_c * 180 / np.pi, sp_th)
+ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(sp_th, sigma_th, mode='wrap'), color='k')
+
+ax[1].set_xlabel(r'$\theta$ (rad)')
+ax[1].set_ylabel(r'$\langle \sqrt{v_x^2+v_y^2}\rangle(\theta)$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_97.png]]
+
+
+#+begin_src jupyter-python
+import numpy as np
+
+# per (x,y) bin:
+speed = np.sqrt(U**2 + V**2)
+speed = np.where(C >= min_count, speed, np.nan)  # optional mask low-occupancy bins
+
+# bin centers -> R, TH
+xc = 0.5*(xedges[:-1] + xedges[1:])
+yc = 0.5*(yedges[:-1] + yedges[1:])
+Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
+R  = np.sqrt(Xc**2 + Yc**2)
+TH = np.arctan2(Yc, Xc)
+
+# speed vs radius (weighted by C)
+r_edges = np.linspace(0, np.nanmax(R), nbins)
+r_c, speed_r, cnt_r, wsum_r = weighted_binned_mean(
+    R, speed, r_edges, weights=C,
+    min_count=min_count, min_weight_1d=min_w
+)
+
+# speed vs theta (weighted by C)
+th_edges = np.linspace(-np.pi, np.pi, nbins)
+th_c, speed_th, cnt_th, wsum_th = weighted_binned_mean(
+    TH, speed, th_edges, weights=C,
+    min_count=min_count, min_weight_1d=min_w
+)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].plot(r_c, speed_r)
+ax[0].plot(r_c, uniform_filter1d(speed_r, sigma_r), color='k')
+
+ax[0].set_xlabel("r")
+ax[0].set_ylabel(r'$\langle |\mathbf{v}| \rangle(r)$')
+
+
+ax[1].plot(th_c, speed_th)
+ax[1].plot(th_c, uniform_filter1d(speed_th, sigma_th, mode='wrap'), color='k')
+
+ax[1].set_xlabel(r'$\theta$ (rad)')
+ax[1].set_ylabel(r'$\langle |\mathbf{v}| \rangle(\theta)$')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_99.png]]
+
+#+begin_src jupyter-python
+import numpy as np
+
+def polar_components_from_steps(x, y, dt=1.0, eps=1e-12):
+    vx = (x[:,1:] - x[:,:-1]) / dt
+    vy = (y[:,1:] - y[:,:-1]) / dt
+    xs = x[:,:-1]; ys = y[:,:-1]
+    r = np.sqrt(xs**2 + ys**2)
+    th = np.arctan2(ys, xs)
+    r_safe = np.maximum(r, eps)
+    vr  = (xs*vx + ys*vy) / r_safe
+    vth = (-ys*vx + xs*vy) / r_safe
+    return r, th, vr, vth
+
+def bin2d_mean(r, th, val, r_edges, th_edges, min_count=50):
+    r = r.ravel(); th = th.ravel(); val = val.ravel()
+    ir = np.searchsorted(r_edges, r, side="right") - 1
+    it = np.searchsorted(th_edges, th, side="right") - 1
+    nr = len(r_edges)-1; nt = len(th_edges)-1
+    ok = (ir>=0)&(ir<nr)&(it>=0)&(it<nt)&np.isfinite(val)
+    ir = ir[ok]; it = it[ok]; val = val[ok]
+
+    cnt = np.zeros((nr, nt), int)
+    s   = np.zeros((nr, nt), float)
+    np.add.at(cnt, (ir, it), 1)
+    np.add.at(s,   (ir, it), val)
+
+    mean = np.full((nr, nt), np.nan)
+    m = cnt >= min_count
+    mean[m] = s[m] / cnt[m]
+    return mean, cnt
+
+def angular_anisotropy(mean_rt, eps=1e-12):
+    # mean_rt: (nr, nt) array of mean quantity vs (r,theta)
+    mu = np.nanmean(mean_rt, axis=1)          # mean over theta for each r
+    sd = np.nanstd(mean_rt, axis=1)           # std over theta for each r
+    A = sd / (np.abs(mu) + eps)               # relative angular modulation
+    return A, mu, sd
+
+# Example usage:
+r, th, vr, vth = polar_components_from_steps(x_coor, y_coor, dt=dt)
+r_edges  = np.linspace(0, np.nanmax(r), nbins)
+th_edges = np.linspace(-np.pi, np.pi, nbins)
+vr_rt, vr_cnt = bin2d_mean(r, th, np.abs(vr), r_edges, th_edges, min_count=min_w)
+A_vr, vr_mu, vr_sd = angular_anisotropy(vr_rt)
+vth_rt, vth_cnt = bin2d_mean(r, th, np.abs(vth), r_edges, th_edges, min_count=min_w)
+#+end_src
+
+#+RESULTS:
+
+**** counts
+
+ #+begin_src jupyter-python
+import numpy as np
+import matplotlib.pyplot as plt
+
+r_cent  = 0.5*(r_edges[:-1] + r_edges[1:])
+th_cent = 0.5*(th_edges[:-1] + th_edges[1:])
+
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].pcolormesh(th_edges, r_edges, vr_rt, shading="auto")
+ax[0].set_xlabel(r'$\theta$ (rad)')
+ax[0].set_ylabel('r')
+
+ax[1].pcolormesh(th_edges, r_edges, vth_rt, shading="auto")
+ax[1].set_xlabel(r'$\theta$ (rad)')
+ax[1].set_ylabel('r')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_101.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].pcolormesh(th_edges, r_edges, vr_cnt, shading="auto")
+ax[0].set_xlabel(r'$\theta$ (rad)')
+ax[0].set_ylabel('r')
+
+ax[1].pcolormesh(th_edges, r_edges, vth_cnt, shading="auto")
+ax[1].set_xlabel(r'$\theta$ (rad)')
+ax[1].set_ylabel('r')
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_102.png]]
+
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+
+**** speeds
+
+#+begin_src jupyter-python
+# --- compute components
+r, th, vr, vth, omega = vr_vth_omega_from_xy(x_coor, y_coor, dt=dt)
+
+# magnitudes
+avr  = np.abs(vr)
+avth = np.abs(vth)
+aw = omega
+
+# --- bin vs radius
+r_edges = np.linspace(0, np.nanmax(r), nbins)
+r_c, avr_r,  _ = binned_mean(r,  avr,  r_edges, min_count=min_count)
+_,   avth_r, _ = binned_mean(r,  avth, r_edges, min_count=min_count)
+_, aw_r, _ = binned_mean(r, aw, r_edges, min_count=min_count)
+
+th_edges = np.linspace(-np.pi, np.pi, nbins)  # ~5 degree bins
+th_c, avr_th,  _ = binned_mean(th, avr,  th_edges, min_count=min_count)
+_,    avth_th, _ = binned_mean(th, avth, th_edges, min_count=min_count)
+_, aw_th, _ = binned_mean(th, aw, th_edges, min_count=min_count)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].plot(r_c, avr_r,  label=r'$\langle|v_r|\rangle(r)$')
+ax[0].plot(r_c, avth_r, label=r'$\langle|v_\theta|\rangle(r)$')
+ax[0].axhline(0, color='k', ls='--')
+ax[0].set_xlabel("radius r")
+ax[0].set_ylabel("$<v_r>, <v_\\theta>$")
+
+ax[1].plot(th_c * 180 / np.pi, avr_th,  label=r'$\langle|v_r|\rangle(\theta)$')
+ax[1].plot(th_c * 180 / np.pi, avth_th, label=r'$\langle|v_\theta|\rangle(\theta)$')
+ax[1].axhline(0, color='k', ls='--')
+ax[1].set_xlabel("angle θ (°)")
+ax[1].set_ylabel("$<v_r>, <v_\\theta>$")
+
+# plt.legend()
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_105.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].plot(r_c, aw_r,  label=r'$\langle|v_r|\rangle(r)$')
+ax[0].axhline(0, color='k', ls='--')
+ax[0].set_xlabel("radius r")
+ax[0].set_ylabel("$<\\omega>$")
+
+
+ax[1].plot(th_c* 180 / np.pi, aw_th,  label=r'$\langle|v_r|\rangle(\theta)$')
+ax[1].plot(th_c* 180 / np.pi, uniform_filter1d(aw_th, sigma_th, mode='wrap'), color='k')
+ax[1].axhline(0, color='k', ls='--')
+ax[1].set_xlabel("angle θ (°)")
+ax[1].set_ylabel("$<\\omega>$")
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_106.png]]
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+
+**** speeds from binned field
+
+#+begin_src jupyter-python
+import numpy as np
+
+def binned_velocity_and_speed(
+    x, y, dt,
+    xedges, yedges,
+    min_count=1,
+    nan_empty=True,
+):
+    """
+    Compute per-bin:
+      U,V  = mean(vx), mean(vy)               (mean velocity components)
+      S    = mean(speed) = mean(sqrt(vx^2+vy^2))  (mean speed; NOT sqrt(U^2+V^2))
+      C    = counts per bin (# velocity samples falling in bin)
+
+    x,y: arrays (n_trials, n_time)
+    dt:  scalar timestep
+    xedges,yedges: bin edges
+    """
+    x = np.asarray(x); y = np.asarray(y)
+    assert x.shape == y.shape
+    n_trials, n_time = x.shape
+    if n_time < 2:
+        raise ValueError("Need at least 2 timepoints per trial to compute velocity.")
+
+    # per-sample velocities (n_trials, n_time-1)
+    vx = np.diff(x, axis=1) / dt
+    vy = np.diff(y, axis=1) / dt
+    sp = np.sqrt(vx * vx + vy * vy)
+
+    # position associated with each velocity sample: midpoint of segment
+    xm = 0.5 * (x[:, 1:] + x[:, :-1])
+    ym = 0.5 * (y[:, 1:] + y[:, :-1])
+
+    # flatten all samples
+    xm = xm.ravel()
+    ym = ym.ravel()
+    vx = vx.ravel()
+    vy = vy.ravel()
+    sp = sp.ravel()
+
+    # keep finite
+    ok = np.isfinite(xm) & np.isfinite(ym) & np.isfinite(vx) & np.isfinite(vy) & np.isfinite(sp)
+    xm, ym, vx, vy, sp = xm[ok], ym[ok], vx[ok], vy[ok], sp[ok]
+
+    nx = len(xedges) - 1
+    ny = len(yedges) - 1
+
+    # bin indices
+    ix = np.searchsorted(xedges, xm, side="right") - 1
+    iy = np.searchsorted(yedges, ym, side="right") - 1
+    inside = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+
+    ix, iy = ix[inside], iy[inside]
+    vx, vy, sp = vx[inside], vy[inside], sp[inside]
+
+    # accumulate sums and counts
+    C = np.zeros((nx, ny), dtype=np.int64)
+    sum_vx = np.zeros((nx, ny), dtype=float)
+    sum_vy = np.zeros((nx, ny), dtype=float)
+    sum_sp = np.zeros((nx, ny), dtype=float)
+
+    np.add.at(C, (ix, iy), 1)
+    np.add.at(sum_vx, (ix, iy), vx)
+    np.add.at(sum_vy, (ix, iy), vy)
+    np.add.at(sum_sp, (ix, iy), sp)
+
+    # means
+    with np.errstate(invalid="ignore", divide="ignore"):
+        U = sum_vx / C
+        V = sum_vy / C
+        S = sum_sp / C  # <-- mean speed per bin (the "fixed" part)
+
+    if nan_empty:
+        mask = C >= min_count
+        U = np.where(mask, U, np.nan)
+        V = np.where(mask, V, np.nan)
+        S = np.where(mask, S, np.nan)
+
+    return U, V, S, C
+
+
+def polar_from_binned_field(xedges, yedges, U, V, C=None, min_count=1, eps=1e-12, mask_r0=None):
+    """
+    Convert mean velocity components (U,V) defined at bin centers to polar components.
+    Optionally mask low-count bins and optionally mask a central disk (mask_r0).
+    """
+    U = np.asarray(U); V = np.asarray(V)
+    nx, ny = U.shape
+
+    xc = 0.5 * (xedges[:-1] + xedges[1:])
+    yc = 0.5 * (yedges[:-1] + yedges[1:])
+    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
+
+    R = np.sqrt(Xc**2 + Yc**2)
+    TH = np.arctan2(Yc, Xc)
+    R_safe = np.maximum(R, eps)
+
+    Vr  = (Xc*U + Yc*V) / R_safe
+    Vth = (-Yc*U + Xc*V) / R_safe
+    Omega = (Xc*V - Yc*U) / (R_safe**2)
+
+    mask = np.isfinite(U) & np.isfinite(V)
+    if C is not None:
+        mask &= (C >= min_count)
+    if mask_r0 is not None:
+        mask &= (R >= mask_r0)
+
+    Vr    = np.where(mask, Vr, np.nan)
+    Vth   = np.where(mask, Vth, np.nan)
+    Omega = np.where(mask, Omega, np.nan)
+
+    return Xc, Yc, R, TH, Vr, Vth, Omega
+
+
+# -------------------------
+# Example usage:
+# U,V are mean velocity components; S is mean speed (recommended for "speed map")
+# -------------------------
+# U, V, S, C = binned_velocity_and_speed(x, y, dt, xedges, yedges, min_count=10)
+# Xc, Yc, R, TH, Vr, Vth, Omega = polar_from_binned_field(xedges, yedges, U, V, C=C, min_count=10, mask_r0=1e-6)
+# speed_of_mean_flow = np.sqrt(U**2 + V**2)   # different quantity than S
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+
+def polar_from_binned_field(xedges, yedges, U, V, C=None, min_count=1, eps=1e-12):
+    """
+    xedges, yedges: bin edges (nx+1), (ny+1)
+    U, V: mean velocity per bin, shape (nx, ny)
+    C: counts per bin, shape (nx, ny) (optional but recommended)
+    Returns:
+      Xc, Yc, R, TH (nx, ny)
+      Vr, Vth, Omega (nx, ny) with NaNs where invalid/low count
+    """
+    U = np.asarray(U); V = np.asarray(V)
+    nx, ny = U.shape
+
+    xc = 0.5 * (xedges[:-1] + xedges[1:])
+    yc = 0.5 * (yedges[:-1] + yedges[1:])
+    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")  # (nx, ny)
+
+    R = np.sqrt(Xc**2 + Yc**2)
+    TH = np.arctan2(Yc, Xc)
+    R_safe = np.maximum(R, eps)
+
+    Vr  = (Xc*U + Yc*V) / R_safe
+    Vth = (-Yc*U + Xc*V) / R_safe
+    Omega = (Xc*V - Yc*U) / (R_safe**2)
+
+    # mask out empty/low-sample bins
+    if C is not None:
+        mask = (C >= min_count) & np.isfinite(U) & np.isfinite(V)
+        Vr    = np.where(mask, Vr, np.nan)
+        Vth   = np.where(mask, Vth, np.nan)
+        Omega = np.where(mask, Omega, np.nan)
+
+    return Xc, Yc, R, TH, Vr, Vth, Omega
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+min_w = 1
+U, V, S, C = binned_velocity_and_speed(x_coor, y_coor, dt, xedges, yedges, min_count=1)
+Xc, Yc, R, TH, Vr, Vth, Om = polar_from_binned_field(xedges, yedges, U, V, C=C, min_count=1)
+
+# magnitudes per bin
+aVr  = np.abs(Vr)
+aVth = np.abs(Vth)
+aOm  = Om
+
+# vs radius (weighted by C)
+r_edges = np.linspace(0, np.nanmax(R), nbins)
+r_c, aVr_r,  _, _ = weighted_binned_mean(R,  aVr,  r_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+_,   aVth_r, _, _ = weighted_binned_mean(R,  aVth, r_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+_,   aOm_r,  _, _ = weighted_binned_mean(R,  aOm,  r_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+
+th_edges = np.linspace(-np.pi, np.pi, nbins)
+th_c, aVr_th,  _, _ = weighted_binned_mean(TH, aVr,  th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+_,    aVth_th, _, _ = weighted_binned_mean(TH, aVth, th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+_,    aOm_th,  _, _ = weighted_binned_mean(TH, aOm,  th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].plot(r_c, aVr_r,  label=r'$\langle|v_r|\rangle(r)$')
+ax[0].plot(r_c, aVth_r, label=r'$\langle|v_\theta|\rangle(r)$')
+ax[0].axhline(0, color='k', ls='--')
+ax[0].set_xlabel("radius r")
+ax[0].set_ylabel("$<v_r>, <v_\\theta>$")
+
+
+ax[1].plot(th_c * 180 / np.pi, aVr_th,  label=r'$\langle|v_r|\rangle(\theta)$')
+ax[1].plot(th_c * 180 / np.pi, aVth_th, label=r'$\langle|v_\theta|\rangle(\theta)$')
+ax[1].axhline(0, color='k', ls='--')
+ax[1].set_xlabel("angle θ (°)")
+ax[1].set_ylabel("$<v_r>, <v_\\theta>$")
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_111.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+
+ax[0].plot(r_c, aOm_r,  label=r'$\langle|v_r|\rangle(r)$')
+ax[0].axhline(0, color='k', ls='--')
+ax[0].set_xlabel("radius r")
+ax[0].set_ylabel("$<\\omega>$")
+
+ax[1].plot(th_c * 180 / np.pi, aOm_th,  label=r'$\langle|v_r|\rangle(\theta)$')
+ax[1].axhline(0, color='k', ls='--')
+ax[1].set_xlabel("angle θ (°)")
+ax[1].set_ylabel("$<\\omega>$")
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_112.png]]
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:
+: eb84f4a1-69e6-4c3b-97a6-913256e4aacc
