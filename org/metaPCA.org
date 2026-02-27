@@ -65,7 +65,7 @@
 import numpy as np
 
 class StandardScaler:
-    def __init__(self, axis=0, if_scale=1):
+    def __init__(self, axis=0, if_scale=0):
         self.axis = axis
         self.center_ = None
         self.scale_ = None
@@ -73,9 +73,11 @@ class StandardScaler:
 
     def fit(self, X):
         self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
-        self.scale_ = np.nanstd(X, axis=(0, -1), keepdims=True)
+        self.scale_ = np.nanstd(X, axis=0, keepdims=True)
+        std_floor = np.percentile(self.scale_, 5)
+        self.scale_ = np.maximum(self.scale_, std_floor)
         # Prevent division by zero
-        self.scale_ = np.where(self.scale_==0, 1, self.scale_)
+        # self.scale_ = np.where(self.scale_==0, 1, self.scale_)
         # self.scale_ = np.where(np.abs(self.scale_)<1e-3, 1, self.scale_)
         return self
 
@@ -301,17 +303,16 @@ def build_padded_X(options, n_neurons_total=3319, SCALE=0):
 
         if SCALE:
             for day in range(1, options_mouse["n_days"] + 1):
-                idx0 = (y.day == day) & (y.laser == 0)
+                idx0 = (y.day == day) & (y.laser == 0) # & (y.tasks=='DPA')
 
                 mean_ = np.nanmean(X[idx0], axis=0, keepdims=True)               # (1, n_m, time)
-                std_  = np.nanstd(X[idx0], axis=0, ddof=0, keepdims=True)          # (1, n_m, 1)
-                # std_  = np.where(std_ <= 0, 1.0, std_)
-                std_floor = np.percentile(std_, 5)
-                std_safe = np.maximum(std_, std_floor)
+                # std_  = np.nanstd(X[idx0], axis=0, ddof=0, keepdims=True)          # (1, n_m, 1)
+                # std_floor = np.percentile(std_, 5)
+                # std_safe = np.maximum(std_, std_floor)
 
                 # apply same mean/std to laser 0 and 1
                 idx = (y.day == day)
-                X_scale[idx] = (X[idx] - mean_) / std_safe
+                X_scale[idx] = (X[idx] - mean_) # / std_safe
 
                 # for tasks in ['DPA', 'DualGo', 'DualNoGo']:
                 #     idx = (y.day==day) & (y.laser==0) & (y.tasks==tasks)
@@ -346,23 +347,17 @@ def build_padded_X(options, n_neurons_total=3319, SCALE=0):
 #+RESULTS:
 
 #+begin_src jupyter-python
-X_all, y_all, mouse_slices = build_padded_X(options, n_neurons_total=3319)
+X_all, y_all, mouse_slices = build_padded_X(options, n_neurons_total=3319, SCALE=1)
 print(X_all.shape, y_all.shape)
 #+end_src
 
 #+RESULTS:
-#+begin_example
-JawsM01 (768, 184, 84) (768, 16)
-JawsM06 (1152, 201, 84) (1152, 16)
-JawsM12 (960, 423, 84) (960, 16)
-JawsM15 (1152, 693, 84) (1152, 16)
-JawsM18 (1152, 444, 84) (1152, 16)
-ChRM04 (1152, 668, 84) (1152, 16)
-ChRM23 (960, 232, 84) (960, 16)
-ACCM03 (960, 361, 84) (960, 16)
-ACCM04 (960, 113, 84) (960, 16)
-(9216, 3319, 84) (9216, 16)
-#+end_example
+: JawsM18 (1152, 444, 84) (1152, 16)
+: ChRM04 (1152, 668, 84) (1152, 16)
+: ChRM23 (960, 232, 84) (960, 16)
+: ACCM03 (960, 361, 84) (960, 16)
+: ACCM04 (960, 113, 84) (960, 16)
+: (9216, 3319, 84) (9216, 16)
 
 #+begin_src jupyter-python
 pkl_save(X_all, 'X_all', path="../data/pca")
@@ -540,19 +535,6 @@ def _project_trials(X_trials, pca, mean_w, gain_vec):
     return Z.reshape(X_trials.shape[0], X_trials.shape[-1], -1)
 
 
-def scaler(X, std_=0):
-    mean_ = np.nanmean(X, axis=0)
-    # mean_ = np.nanmean(X, axis=(0, -1))[:, np.newaxis]
-
-    if std_:
-        std = np.nanstd(X, axis=0)
-        std_floor = np.percentile(std, 5)
-        std_safe = np.maximum(std, std_floor)
-        return (X - mean_) / std_safe, mean_, std_safe
-
-    return (X - mean_), mean_, 1
-
-
 # ----------------------------
 # main CV PCA
 # ----------------------------
@@ -561,6 +543,9 @@ def cv_pca(
     epoch=None,               # used ONLY for fitting if not None
     group_col=None,
     levels=None,
+    learning='Expert',
+    scale=0,
+    scale_test=0,
     mouse_slices=None,
     mouse_gain_mode="equal_mouse",  # "equal_mouse" | "equal_neuron" | None
     show_pbar=True,
@@ -581,12 +566,16 @@ def cv_pca(
     gain_vec = compute_gain_vector(n_neurons_total, mouse_slices, mode=mouse_gain_mode)
 
     # clean subset for fitting/CV splits
-    m_clean = (y.laser == 0) & (y.tasks=='DPA') # & (y.performance == 1) & ((y.tasks=='DPA') | (y.odr_perf==1))
+    m_clean = (y.laser == 0) & (y.learning==learning) & (y.tasks=='DPA') #  & ((y.tasks=='DPA') | (y.odr_perf==1)) #
     Xc = X[m_clean]
     yc = y.loc[m_clean].reset_index(drop=True)
 
-    # global scaling based on clean data (applied to all splits)
-    Xc_scaled, mean_global, std_global = scaler(Xc)
+    Xc_scaled = Xc
+    if scale:
+        scaler = StandardScaler()
+        # scaler.fit(Xc)
+        scaler.fit(Xc[yc.tasks=='DPA'])
+        Xc_scaled = scaler.transform(Xc)
 
     # ---- fit reference space on ALL clean data (optionally epoch-restricted)
     Xc_fit = Xc_scaled if epoch is None else Xc_scaled[..., epoch]
@@ -599,7 +588,8 @@ def cv_pca(
     if np.any(m_pert):
         Xp = X[m_pert]
 
-        Xp = (Xp - mean_global) / std_global
+        if scale and scale_test:
+            Xp = scaler.transform(Xp)
 
         yp = y.loc[m_pert].reset_index(drop=True)
 
@@ -617,6 +607,7 @@ def cv_pca(
         + "_" + yc["mouse"].astype(str)
         + "_" + yc["day"].astype(str)
         + "_" + yc["tasks"].astype(str)
+
     ).to_numpy()
 
     splitter = folds.split(Xc_scaled, strata, groups=groups)
@@ -633,9 +624,13 @@ def cv_pca(
         X_train, y_train = Xc[train_idx], yc.iloc[train_idx].reset_index(drop=True)
         X_test,  y_test  = Xc[test_idx],  yc.iloc[test_idx].reset_index(drop=True)
 
-        # per-fold scaling (optional). If you want strictly global scaling, remove next 2 lines.
-        X_train, mean_fold, std_fold = scaler(X_train)
-        X_test = (X_test - mean_fold) / std_fold
+        if scale:
+            # scaler.fit(X_train)
+            scaler.fit(X_train[y_train.tasks=='DPA'])
+            X_train = scaler.transform(X_train)
+
+            if scale_test:
+                X_test = scaler.transform(X_test)
 
         X_train_fit = X_train if epoch is None else X_train[..., epoch]
 
@@ -683,7 +678,7 @@ def cv_pca(
 #+RESULTS:
 
 #+begin_src jupyter-python
-options['learning'] = 'Expert'
+options['learning'] = None
 
 options['epochs'] = ['TEST']
 epoch = options['bins_' + options['epochs'][0]]
@@ -703,7 +698,7 @@ print(dum)
 #+end_src
 
 #+RESULTS:
-: TEST_Expert
+: TEST
 
 #+begin_src jupyter-python
 if options['learning'] is not None:
@@ -722,7 +717,7 @@ print(X_pca.shape, y_pca.shape)
 #+end_src
 
 #+RESULTS:
-: (4032, 3319, 84) (4032, 18)
+: (9216, 3319, 84) (9216, 18)
 
 #+begin_src jupyter-python
 n_splits = 5
@@ -731,23 +726,24 @@ n_comp = 15
 
 pca = PCA(n_components=n_comp, svd_solver='randomized')
 folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+# folds = LeaveOneOut()
 #+end_src
 
 #+RESULTS:
 
 #+begin_src jupyter-python
-X_cv, y_cv, w_cv, w_all, evr_cv = cv_pca(X_pca, y_pca, pca, folds, factors, epoch, mouse_slices=mouse_slices, mouse_gain_mode=None)
+X_cv, y_cv, w_cv, w_all, evr_cv = cv_pca(X_pca, y_pca, pca, folds, factors, epoch, mouse_slices=mouse_slices, mouse_gain_mode=None, scale=0, scale_test=0)
 #+end_src
 
 #+RESULTS:
-: cv_pca: 100% 5/5 [00:07<00:00,  1.56s/it]
+: cv_pca: 100% 5/5 [00:03<00:00,  1.53it/s]
 
 #+begin_src jupyter-python
 print(X_cv.shape, y_cv.shape, w_cv.shape, w_all.shape, evr_cv.shape)
 #+end_src
 
 #+RESULTS:
-: (4032, 84, 15) (4032, 18) (15, 3319) (15, 3319) (5, 15)
+: (9216, 84, 15) (9216, 18) (15, 3319) (15, 3319) (5, 15)
 
 #+begin_src jupyter-python
 E = pc_mouse_energy(w_cv, mouse_slices)  # DataFrame: PC x mouse
@@ -755,15 +751,15 @@ E.loc[0].sort_values(ascending=False)     # PC1 distribution across mice
 #+end_src
 
 #+RESULTS:
-: ACCM03     0.330411
-: JawsM15    0.219794
-: ChRM04     0.111827
-: JawsM18    0.105704
-: ChRM23     0.061207
-: JawsM12    0.024795
-: ACCM04     0.017268
-: JawsM06    0.013711
-: JawsM01    0.004859
+: ACCM03     0.337724
+: JawsM15    0.218505
+: ChRM04     0.109921
+: JawsM18    0.103437
+: ChRM23     0.059905
+: JawsM12    0.024162
+: ACCM04     0.016815
+: JawsM06    0.013174
+: JawsM01    0.004701
 : Name: 0, dtype: float32
 
 #+begin_src jupyter-python
@@ -777,7 +773,7 @@ print(X_meta.shape, y_meta.shape, w_meta.shape)
 #+end_src
 
 #+RESULTS:
-: (4032, 15, 84) (4032, 18) (15, 3319)
+: (9216, 15, 84) (9216, 18) (15, 3319)
 
 #+begin_src jupyter-python
 print(evr_meta.shape)
@@ -795,11 +791,9 @@ plt.show()
 [[file:./figures/pca/figure_26.png]]
 :END:
 
- #+begin_src jupyter-python
+#+begin_src jupyter-python
 
 #+end_src
-
-#+RESULTS:
 
 ** Save/Load
 
@@ -811,10 +805,10 @@ pkl_save(evr_meta, 'meta_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/pca//meta_traj_TEST_Expert.pkl
-: saving to ../data/pca//meta_labels_TEST_Expert.pkl
-: saving to ../data/pca//meta_weights_TEST_Expert.pkl
-: saving to ../data/pca//meta_evr_TEST_Expert.pkl
+: saving to ../data/pca//meta_traj_TEST.pkl
+: saving to ../data/pca//meta_labels_TEST.pkl
+: saving to ../data/pca//meta_weights_TEST.pkl
+: saving to ../data/pca//meta_evr_TEST.pkl
 
  #+begin_src jupyter-python
 X_meta = pkl_load('meta_traj_' + dum, path="../data/pca/")
@@ -824,10 +818,10 @@ evr_meta = pkl_load( 'meta_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: loading from ../data/pca//meta_traj_all_Expert.pkl
-: loading from ../data/pca//meta_labels_all_Expert.pkl
-: loading from ../data/pca//meta_weights_all_Expert.pkl
-: loading from ../data/pca//meta_evr_all_Expert.pkl
+: loading from ../data/pca//meta_traj_TEST.pkl
+: loading from ../data/pca//meta_labels_TEST.pkl
+: loading from ../data/pca//meta_weights_TEST.pkl
+: loading from ../data/pca//meta_evr_TEST.pkl
 
 ** Trajectories
 
@@ -837,7 +831,7 @@ laser = 0
 i_mouse = -1
 
 idx_tasks = 1 # (y_meta.tasks == 'DPA')
-idx_correct = 1 # (y_meta.performance==1) # & (y_meta.odr_perf==1)
+idx_correct = 1# (y_meta.learning=='Naive') #   (y_meta.performance==1) # & (y_meta.odr_perf==1)
 idx_mouse = True
 if i_mouse !=-1:
     idx_mouse = (y_meta.mouse==options['mice'][i_mouse])
@@ -868,10 +862,10 @@ for i in range(4):
         ax[k].axhline(0, ls='--', color='k')
         ax[k].set_xlabel('Time')
         ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=1)
+        add_vlines(ax[k], if_dpa=0)
 
         ax[k].legend(fontsize=12, frameon=0, loc='best')
-
+        ax[k].set_xlim(0, 14)
 plt.savefig('./figures/pca/pca_odor_%s.svg' % dum)
 plt.show()
 #+end_src
@@ -945,7 +939,7 @@ plt.show()
 #+RESULTS:
 [[file:./figures/pca/figure_33.png]]
 
-#+begin_src jupyter-python
+ #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
 color = ["#377eb8",  "#ffae19"]
@@ -1041,14 +1035,14 @@ plt.show()
 [[file:./figures/pca/figure_36.png]]
 
 #+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
+fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharey=1, sharex=1)
 
 pair = ['AC', 'AD', 'BD', 'BC']
 
 color = ['#332288', '#88CCEE', '#117733', '#44AA99']
 
 for i in range(4):
-    idx = (y_meta.odor_pair==i) & (y_meta.laser==laser) & idx_mouse & idx_correct
+    idx = (y_meta.odor_pair==i) & (y_meta.laser==laser) & idx_mouse & idx_correct & idx_tasks
 
     X_avg = (X_meta[idx].mean(0))[:, :66]
 
@@ -1093,6 +1087,8 @@ theta = np.arctan2(w_meta[1], w_meta[0]) * 180 / np.pi
 idx = np.argsort(theta)
 
 theta_norm = (theta+ 360) % (360)
+
+fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(1*width, height))
 
 counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
 
@@ -1307,16 +1303,16 @@ plt.show()
 
 #+begin_src jupyter-python
 # laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18', 'ChRM04', 'ChRM23']
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM18', 'ChRM04', 'ChRM23']
-# laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18']
+# laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM18', 'ChRM04', 'ChRM23']
+laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15',  'JawsM18']
 
-tasks = ['DPA'] # , 'DualNoGo', 'DualGo']
+tasks = ['DPA']
+stages= ['Naive', 'Expert']
 #+end_src
 
 #+RESULTS:
 
 #+begin_src jupyter-python
-
 traj_mouse = []
 for i_mouse, mouse in enumerate(laser_mice):
     idx = (y_meta.mouse==mouse) & (y_meta.laser==0)
@@ -1324,9 +1320,12 @@ for i_mouse, mouse in enumerate(laser_mice):
     y_idx = y_meta[idx]
 
     traj_ = []
+
+
     for i in range(2):
-        mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks))
-        traj_.append(X_idx[mask].mean(0))
+        for j in stages:
+            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) & (y_idx.performance==1)
+            traj_.append(X_idx[mask].mean(0))
 
     traj_mouse.append(traj_)
 
@@ -1335,7 +1334,7 @@ print(traj_mouse.shape)
 #+end_src
 
 #+RESULTS:
-: (6, 2, 15, 84)
+: (5, 4, 15, 84)
 
 #+begin_src jupyter-python
 traj_opto = []
@@ -1345,9 +1344,11 @@ for i_mouse, mouse in enumerate(laser_mice):
     y_idx = y_meta[idx]
 
     traj_ = []
+
     for i in range(2):
-        mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks))
-        traj_.append(X_idx[mask].mean(0))
+        for j in stages:
+            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) & (y_idx.performance==1)
+            traj_.append(X_idx[mask].mean(0))
 
     traj_opto.append(traj_)
 
@@ -1356,7 +1357,7 @@ print(traj_opto.shape)
 #+end_src
 
 #+RESULTS:
-: (6, 2, 15, 84)
+: (5, 4, 15, 84)
 
 #+begin_src jupyter-python
 fp_mouse = np.nanmean(traj_mouse[..., options['bins_LD']], -1)
@@ -1372,7 +1373,7 @@ pc2_opto = fp_opto[..., 1]
 #+end_src
 
 #+RESULTS:
-: (6, 2, 15)
+: (5, 4, 15)
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*height, height), sharey=1)
@@ -1397,8 +1398,11 @@ plt.show()
 [[file:./figures/pca/figure_52.png]]
 
 #+begin_src jupyter-python
-perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor'])['performance'].mean().reset_index()
-perf_on = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==1)].groupby(['mouse', 'sample_odor'])['performance'].mean().reset_index()
+perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
+perf_on = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==1)].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
+
+perf_off = perf_off[perf_off.learning.isin(stages)]
+perf_on = perf_on[perf_on.learning.isin(stages)]
 
 delta_dpa = (perf_on['performance'] - perf_off['performance']).values
 print(perf_off.shape, perf_on.shape)
@@ -1406,13 +1410,18 @@ print(delta_dpa)
 #+end_src
 
 #+RESULTS:
-: (12, 3) (12, 3)
-: [ 0.00694444  0.03472222  0.0625      0.02083333  0.          0.
-:   0.00694444 -0.04166667  0.01041667  0.09375     0.00694444 -0.00694444]
+: (20, 4) (20, 4)
+: [ 0.          0.04166667  0.         -0.00694444  0.00694444  0.08333333
+:  -0.04166667 -0.02777778  0.01041667  0.0625      0.09375     0.04166667
+:  -0.10416667 -0.02083333 -0.02777778 -0.01388889  0.00694444 -0.02777778
+:  -0.00694444  0.04861111]
 
 #+begin_src jupyter-python
-perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor'])['odr_perf'].mean().reset_index()
-perf_on = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==1)].groupby(['mouse', 'sample_odor'])['odr_perf'].mean().reset_index()
+perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor', 'learning'])['odr_perf'].mean().reset_index()
+perf_on = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==1)].groupby(['mouse', 'sample_odor', 'learning'])['odr_perf'].mean().reset_index()
+
+perf_off = perf_off[perf_off.learning.isin(stages)]
+perf_on = perf_on[perf_on.learning.isin(stages)]
 
 delta_odr = (perf_on['odr_perf'] - perf_off['odr_perf']).values
 print(perf_off.shape, perf_on.shape)
@@ -1420,9 +1429,11 @@ print(delta_odr)
 #+end_src
 
 #+RESULTS:
-: (12, 3) (12, 3)
-: [-0.05208333 -0.02083333 -0.015625   -0.0625      0.03125    -0.03125
-:  -0.02083333  0.          0.          0.015625   -0.02083333  0.02083333]
+: (20, 4) (20, 4)
+: [ 0.03125     0.02083333 -0.03125     0.05208333 -0.02083333  0.
+:   0.          0.          0.          0.02083333  0.015625    0.0625
+:   0.07291667  0.07291667  0.0625      0.0625     -0.02083333  0.
+:   0.02083333  0.03125   ]
 
 #+begin_src jupyter-python
 dPC1 = (pc1_opto - pc1).reshape(-1)
@@ -1431,7 +1442,7 @@ print(dPC1.shape, dPC2.shape)
 #+end_src
 
 #+RESULTS:
-: (12,) (12,)
+: (20,) (20,)
 
 #+begin_src jupyter-python
 df = perf_off[['mouse', 'sample_odor']]
@@ -1444,18 +1455,17 @@ df = df.sort_values('mouse')
 df['delta_pc1'] = dPC1
 df['delta_pc2'] = dPC2
 
-# df = df[~df['mouse'].str.contains('ChR')]
-
 print(df.head())
 #+end_src
 
 #+RESULTS:
 :      mouse  sample_odor  delta_dpa  delta_odr  delta_pc1  delta_pc2
-: 4  JawsM01          0.0   0.000000   0.031250   0.022104   0.018956
-: 5  JawsM01          1.0   0.000000  -0.031250   0.002658   0.053433
-: 6  JawsM06          0.0   0.006944  -0.020833   0.002763  -0.001678
-: 7  JawsM06          1.0  -0.041667   0.000000  -0.019076   0.009967
-: 8  JawsM12          0.0   0.010417   0.000000  -0.096039   0.053336
+: 0  JawsM01          0.0   0.000000   0.031250   0.049023   0.078525
+: 1  JawsM01          0.0   0.041667   0.020833   0.037745   0.025046
+: 2  JawsM01          1.0   0.000000  -0.031250   0.050728   0.065925
+: 3  JawsM01          1.0  -0.006944   0.052083   0.022110   0.036534
+: 4  JawsM06          0.0   0.006944  -0.020833  -0.003318   0.010897
+
 
 #+begin_src jupyter-python
 import matplotlib.pyplot as plt
@@ -1497,6 +1507,7 @@ plt.show()
 #+RESULTS:
 [[file:./figures/pca/figure_57.png]]
 
+
 #+begin_src jupyter-python
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -1535,6 +1546,7 @@ plt.show()
 
 #+RESULTS:
 [[file:./figures/pca/figure_58.png]]
+
 
 #+begin_src jupyter-python
 
