@@ -65,7 +65,7 @@
 import numpy as np
 
 class StandardScaler:
-    def __init__(self, axis=0, if_scale=1):
+    def __init__(self, axis=0, if_scale=0):
         self.axis = axis
         self.center_ = None
         self.scale_ = None
@@ -75,11 +75,12 @@ class StandardScaler:
         self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
         self.scale_ = np.nanstd(X, axis=self.axis, keepdims=True)
 
-        # p5 = np.nanpercentile(self.scale_, 5)
-        # std_floor = 1.0 if (not np.isfinite(p5) or p5 < 1e-4) else p5
-        # self.scale_ = np.maximum(self.scale_, std_floor)
+        std_floor = np.nanpercentile(self.scale_, 25)
+        self.scale_ = np.maximum(self.scale_, std_floor)
 
-        self.scale_ = np.where(self.scale_ < 1e-4, 1, self.scale_)
+        # Prevent division by zero
+        # self.scale_ = np.where(self.scale_==0, 1, self.scale_)
+        # self.scale_ = np.where(self.scale_<1e-3, 1, self.scale_)
 
         return self
 
@@ -196,45 +197,10 @@ def pad_with_nans(array, target_shape):
 
 #+RESULTS:
 
-** cv pca
-
-#+begin_src jupyter-python
-from scipy.linalg import orthogonal_procrustes
-
-def align_fold_to_ref(W_fold, W_ref, X_pca_fold):
-    """
-    Align W_fold to W_ref using orthogonal Procrustes and
-    rotate fold's projected data accordingly.
-
-    W_ref, W_fold: (n_comp, n_neurons)
-    X_pca_fold: (n_trials, T, n_comp)
-
-    Returns: X_pca_aligned, W_fold_aligned
-    """
-    if W_ref is None:
-        W_ref = W_fold
-    # Procrustes finds R that best maps W_fold -> W_ref:  W_fold @ R ≈ W_ref
-    R, _ = orthogonal_procrustes(W_fold.T, W_ref.T)  # shapes (n_neurons, n_comp)
-
-    # R is (n_neurons, n_comp), so mapping in component space is R_comp = R.T
-    R_comp = R.T  # (n_comp, n_neurons) is W-aligned space; rotation in PC space is R_comp.T
-
-    # rotate projections: (n_trials * T, n_comp) @ (n_comp, n_comp)
-    n_trials, T, n_comp = X_pca_fold.shape
-    X_flat = X_pca_fold.reshape(-1, n_comp)
-    X_aligned = X_flat @ R_comp.T
-    X_aligned = X_aligned.reshape(n_trials, T, n_comp)
-
-    W_aligned = (W_fold.T @ R).T  # still (n_comp, n_neurons)
-    return X_aligned, W_aligned
-#+end_src
-
-#+RESULTS:
-
 * Parameters
 
 #+begin_src jupyter-python
-SCALE = None
+
 
 old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
 Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
@@ -315,11 +281,10 @@ def build_padded_X(options, n_neurons_total=3319, SCALE=None):
                 if SCALE == 'std':
                     std_  = np.nanstd(X[idx0], axis=0, ddof=0, keepdims=True)
 
-                    # p5 = np.nanpercentile(std_, 5)
-                    # std_floor = 1.0 if (not np.isfinite(p5) or p5 < 1e-4) else p5
-                    # std_safe = np.maximum(std_, std_floor)
+                    std_floor = np.nanpercentile(std_, 25)
+                    std_safe = np.maximum(std_, std_floor)
 
-                    std_safe = np.where(std_ < 1e-4, 1, std_)
+                    # std_safe = np.where(std_ < 1e-4, 1, std_)
 
                 idx = (y.day == day)
                 X_scale[idx] = (X[idx] - mean_) / std_safe
@@ -357,23 +322,22 @@ def build_padded_X(options, n_neurons_total=3319, SCALE=None):
 #+RESULTS:
 
 #+begin_src jupyter-python
+SCALE = 'std'
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
 X_all, y_all, mouse_slices = build_padded_X(options, n_neurons_total=3319, SCALE=SCALE)
 print(X_all.shape, y_all.shape)
 #+end_src
 
 #+RESULTS:
-#+begin_example
-JawsM01 (768, 184, 84) (768, 16)
-JawsM06 (1152, 201, 84) (1152, 16)
-JawsM12 (960, 423, 84) (960, 16)
-JawsM15 (1152, 693, 84) (1152, 16)
-JawsM18 (1152, 444, 84) (1152, 16)
-ChRM04 (1152, 668, 84) (1152, 16)
-ChRM23 (960, 232, 84) (960, 16)
-ACCM03 (960, 361, 84) (960, 16)
-ACCM04 (960, 113, 84) (960, 16)
-(9216, 3319, 84) (9216, 16)
-#+end_example
+: ChRM04 (1152, 668, 84) (1152, 16)
+: ChRM23 (960, 232, 84) (960, 16)
+: ACCM03 (960, 361, 84) (960, 16)
+: ACCM04 (960, 113, 84) (960, 16)
+: (9216, 3319, 84) (9216, 16)
 
 #+begin_src jupyter-python
 dum = ''
@@ -386,8 +350,8 @@ pkl_save(mouse_slices, 'mouse_slices', path="../data/pca")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/pca/X_all_.pkl
-: saving to ../data/pca/y_all_.pkl
+: saving to ../data/pca/X_all_std.pkl
+: saving to ../data/pca/y_all_std.pkl
 : saving to ../data/pca/mouse_slices.pkl
 
 #+begin_src jupyter-python
@@ -410,8 +374,8 @@ mouse_slices = pkl_load('mouse_slices', path="../data/pca")
 #+end_src
 
 #+RESULTS:
-: loading from ../data/pca/X_all_.pkl
-: loading from ../data/pca/y_all_.pkl
+: loading from ../data/pca/X_all_std.pkl
+: loading from ../data/pca/y_all_std.pkl
 : loading from ../data/pca/mouse_slices.pkl
 
 #+begin_src jupyter-python
@@ -597,7 +561,7 @@ def cv_pca(
     gain_vec = compute_gain_vector(n_neurons_total, mouse_slices, mode=mouse_gain_mode)
 
     # clean subset for fitting/CV splits
-    m_clean = (y.laser == 0) & (y.learning==learning) & (y.tasks=='DPA') # & (y.performance==1) # & ((y.tasks=='DPA') | (y.odr_perf==1))
+    m_clean = (y.laser == 0) & (y.learning==learning) # & (y.performance==1) & ((y.tasks=='DPA') | (y.odr_perf==1))
     Xc = X[m_clean]
     yc = y.loc[m_clean].reset_index(drop=True)
 
@@ -709,7 +673,7 @@ def cv_pca(
 #+begin_src jupyter-python
 options['learning'] = None
 
-options['epochs'] = ['all']
+options['epochs'] = ['TEST']
 epoch = options['bins_' + options['epochs'][0]]
 
 factors = 'odor_pair'
@@ -731,13 +695,13 @@ print(dum)
 #+end_src
 
 #+RESULTS:
-: all
+: TEST_std
 
 #+begin_src jupyter-python
 if options['learning'] is not None:
     idx = (y_all.learning == options['learning'])
 
-    X_pca = X_all[idx] # - np.nanmean(X_all[idx], -1, keepdims=True)
+    X_pca = X_all[idx]
     y_pca = y_all[idx]
 
     # pca_mask = np.isnan(X_pca)
@@ -770,11 +734,11 @@ folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
 #+RESULTS:
 
 #+begin_src jupyter-python
-X_cv, y_cv, w_cv, w_all, evr_cv = cv_pca(X_pca, y_pca, pca, folds, factors, epoch, mouse_slices=mouse_slices, mouse_gain_mode=None, scale=1, scale_test=1)
+X_cv, y_cv, w_cv, w_all, evr_cv = cv_pca(X_pca, y_pca, pca, folds, factors, epoch, mouse_slices=mouse_slices, mouse_gain_mode=None, scale=0, scale_test=0)
 #+end_src
 
 #+RESULTS:
-: cv_pca: 100% 5/5 [03:19<00:00, 39.91s/it]
+: cv_pca: 100% 5/5 [05:02<00:00, 60.44s/it]
 
 #+begin_src jupyter-python
 print(X_cv.shape, y_cv.shape, w_cv.shape, w_all.shape, evr_cv.shape)
@@ -789,15 +753,15 @@ E.loc[0].sort_values(ascending=False)     # PC1 distribution across mice
 #+end_src
 
 #+RESULTS:
-: ACCM03     0.389019
-: JawsM15    0.263609
-: ChRM04     0.094532
-: JawsM18    0.081021
-: ChRM23     0.047820
-: ACCM04     0.016846
-: JawsM12    0.016592
-: JawsM06    0.008871
-: JawsM01    0.003372
+: ACCM03     0.226613
+: JawsM15    0.219111
+: ChRM04     0.173271
+: JawsM18    0.097545
+: JawsM12    0.055312
+: ChRM23     0.050703
+: JawsM06    0.040065
+: ACCM04     0.023377
+: JawsM01    0.007999
 : Name: 0, dtype: float32
 
 #+begin_src jupyter-python
@@ -834,10 +798,10 @@ pkl_save(evr_meta, 'meta_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/pca//meta_traj_all.pkl
-: saving to ../data/pca//meta_labels_all.pkl
-: saving to ../data/pca//meta_weights_all.pkl
-: saving to ../data/pca//meta_evr_all.pkl
+: saving to ../data/pca//meta_traj_TEST_std.pkl
+: saving to ../data/pca//meta_labels_TEST_std.pkl
+: saving to ../data/pca//meta_weights_TEST_std.pkl
+: saving to ../data/pca//meta_evr_TEST_std.pkl
 
 #+begin_src jupyter-python
 
@@ -855,10 +819,10 @@ evr_meta = pkl_load( 'meta_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: loading from ../data/pca//meta_traj_all_scale.pkl
-: loading from ../data/pca//meta_labels_all_scale.pkl
-: loading from ../data/pca//meta_weights_all_scale.pkl
-: loading from ../data/pca//meta_evr_all_scale.pkl
+: loading from ../data/pca//meta_traj_TEST_std.pkl
+: loading from ../data/pca//meta_labels_TEST_std.pkl
+: loading from ../data/pca//meta_weights_TEST_std.pkl
+: loading from ../data/pca//meta_evr_TEST_std.pkl
 
 ** Trajectories
 
@@ -867,8 +831,8 @@ n_comp = 3
 laser = 0
 i_mouse = -1
 
-idx_tasks = 1 # (y_meta.tasks == 'DPA')
-idx_correct =  (y_meta.performance==1) & ( (y_meta.tasks == 'DPA') | (y_meta.odr_perf==1))
+idx_tasks = (y_meta.tasks == 'DPA') & (y_meta.learning=='Expert')
+idx_correct =  (y_meta.performance==1) # & ( (y_meta.tasks == 'DPA') | (y_meta.odr_perf==1))
 idx_mouse = True
 if i_mouse !=-1:
     idx_mouse = (y_meta.mouse==options['mice'][i_mouse])
@@ -976,6 +940,38 @@ plt.show()
 #+RESULTS:
 [[file:./figures/pca/figure_34.png]]
 
+  #+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+color = ["#377eb8", "#984ea3", "#4daf4a", "#ffae19"]
+
+pair = ['A', 'B']
+xtime = np.linspace(0, 14, 84)
+
+for i in range(2):
+    mask = (y_meta.sample_odor==i) & (y_meta.laser==laser) & idx_mouse & idx_correct & idx_tasks
+    X_sel = X_meta[mask]          # Subselect rows
+    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=1)
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+
+plt.savefig('./figures/pca/pca_sample_%s.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_35.png]]
+
  #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
@@ -1005,7 +1001,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_35.png]]
+[[file:./figures/pca/figure_36.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1037,7 +1033,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_36.png]]
+[[file:./figures/pca/figure_37.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1069,7 +1065,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_37.png]]
+[[file:./figures/pca/figure_38.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height), sharey=1, sharex=1)
@@ -1102,13 +1098,427 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_38.png]]
+[[file:./figures/pca/figure_39.png]]
+
+#+begin_src jupyter-python
+y_meta.keys()
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response', 'laser',
+:        'day', 'choice', 'pair', 'odr_perf', 'odr_choice', 'odr_response',
+:        'odor_pair', 'learning', 'performance', 'mouse', 'sample', 'test'],
+:       dtype='object')
+
+** Comparison
+
+#+begin_src jupyter-python
+# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set_theme(style="white", context="talk")
+
+assert isinstance(y_meta, pd.DataFrame)
+assert X_meta.shape[0] == len(y_meta)
+
+pcs = [0, 1, 2]
+pc_names = [f"PC{p+1}" for p in pcs]
+
+# ---- build trial table + filter ----
+df = y_meta.reset_index(drop=True).copy()
+
+# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
+df["traj"] = list(X_meta[:, pcs, :])
+
+df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
+# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
+bins = options["bins_ED"]
+
+rows = []
+for (mouse, odor, learning), g in df.groupby(["mouse", "sample_odor", "learning"], sort=False):
+    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
+    mean_traj = T.mean(axis=0) / (np.linalg.norm(T, axis=0) + 1e-12)
+    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
+    for i, pc in enumerate(pc_names):
+        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
+
+plot_df = pd.DataFrame(rows)
+
+# make mouse categorical for stable order
+mouse_order = sorted(plot_df["mouse"].unique())
+plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
+
+# ---- BAR FIGURE ----
+g = sns.catplot(
+    data=plot_df, kind="bar",
+    x="mouse", y="value",
+    col="pc", col_order=pc_names,
+    hue="learning",
+    height=3.4, aspect=1.15,
+    sharey=True, errorbar=None
+)
+g.set_titles("{col_name}")
+g.set_axis_labels("Mouse", "Abs(mean traj)")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(45)
+        lab.set_rotation_mode("anchor")
+        lab.set_ha("right")
+        lab.set_va("top")
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+
+# legend outside
+g._legend.set_title("Learning")
+g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
+g._legend.set_bbox_to_anchor((0.98, 0.5))
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_41.png]]
+
+#+begin_src jupyter-python
+# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# sns.set_theme(style="white", context="talk")
+
+df = plot_df.copy()
+
+# normalize learning labels -> stage in {"Naive","Expert"}
+if np.issubdtype(df["learning"].dtype, np.number):
+    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
+else:
+    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
+                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
+
+df = df[df["stage"].isin(["Naive", "Expert"])]
+
+# average across odors -> one value per (mouse, stage, pc)
+mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
+
+wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
+        .reset_index()
+        .dropna(subset=["Naive", "Expert"]))
+
+mice = pd.Index(wide["mouse"].unique()).sort_values()
+palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
+
+g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=3.2, aspect=1.0, sharex=True, sharey=True)
+g.map_dataframe(
+    sns.scatterplot,
+    x="Naive", y="Expert",
+    hue="mouse", palette=palette,
+    s=70, edgecolor="black", linewidth=0.3,
+    legend=False
+)
+
+g.set_titles("{col_name}")
+g.set_xlabels("")
+g.set_ylabels("")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    lo, hi = min(x0, y0), max(x1, y1)
+    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+
+g.fig.supxlabel("Naive")
+g.fig.supylabel("Expert")
+g.fig.tight_layout()
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_42.png]]
+
+#+begin_src jupyter-python
+# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set_theme(style="white", context="talk")
+
+assert isinstance(y_meta, pd.DataFrame)
+assert X_meta.shape[0] == len(y_meta)
+
+pcs = [0, 1, 2]
+pc_names = [f"PC{p+1}" for p in pcs]
+
+# ---- build trial table + filter ----
+df = y_meta.reset_index(drop=True).copy()
+
+# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
+df["traj"] = list(X_meta[:, pcs, :])
+
+df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
+# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
+bins = options["bins_CHOICE"]
+
+rows = []
+for (mouse, odor, learning), g in df.groupby(["mouse", "choice", "learning"], sort=False):
+    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
+    mean_traj = T.mean(axis=0) / (np.linalg.norm(T, axis=0) + 1e-12)
+    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
+    for i, pc in enumerate(pc_names):
+        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
+
+plot_df = pd.DataFrame(rows)
+
+# make mouse categorical for stable order
+mouse_order = sorted(plot_df["mouse"].unique())
+plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
+
+# ---- BAR FIGURE ----
+g = sns.catplot(
+    data=plot_df, kind="bar",
+    x="mouse", y="value",
+    col="pc", col_order=pc_names,
+    hue="learning",
+    height=3.4, aspect=1.15,
+    sharey=True, errorbar=None
+)
+g.set_titles("{col_name}")
+g.set_axis_labels("Mouse", "Abs(mean traj)")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(45)
+        lab.set_rotation_mode("anchor")
+        lab.set_ha("right")
+        lab.set_va("top")
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+
+# legend outside
+g._legend.set_title("Learning")
+g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
+g._legend.set_bbox_to_anchor((0.98, 0.5))
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_43.png]]
+
+#+begin_src jupyter-python
+# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set_theme(style="white", context="talk")
+
+df = plot_df.copy()
+
+# normalize learning labels -> stage in {"Naive","Expert"}
+if np.issubdtype(df["learning"].dtype, np.number):
+    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
+else:
+    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
+                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
+
+df = df[df["stage"].isin(["Naive", "Expert"])]
+
+# average across odors -> one value per (mouse, stage, pc)
+mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
+
+wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
+        .reset_index()
+        .dropna(subset=["Naive", "Expert"]))
+
+mice = pd.Index(wide["mouse"].unique()).sort_values()
+palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
+
+g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=3.2, aspect=1.0, sharex=True, sharey=True)
+g.map_dataframe(
+    sns.scatterplot,
+    x="Naive", y="Expert",
+    hue="mouse", palette=palette,
+    s=70, edgecolor="black", linewidth=0.3,
+    legend=False
+)
+
+g.set_titles("{col_name}")
+g.set_xlabels("")
+g.set_ylabels("")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    lo, hi = min(x0, y0), max(x1, y1)
+    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+
+g.fig.supxlabel("Naive")
+g.fig.supylabel("Expert")
+g.fig.tight_layout()
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_44.png]]
+
+
+#+begin_src jupyter-python
+# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set_theme(style="white", context="talk")
+
+assert isinstance(y_meta, pd.DataFrame)
+assert X_meta.shape[0] == len(y_meta)
+
+pcs = [0, 1, 2]
+pc_names = [f"PC{p+1}" for p in pcs]
+
+# ---- build trial table + filter ----
+df = y_meta.reset_index(drop=True).copy()
+
+# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
+df["traj"] = list(X_meta[:, pcs, :])
+
+df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
+# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
+bins = options["bins_CHOICE"]
+
+rows = []
+for (mouse, odor, learning), g in df.groupby(["mouse", "test_odor", "learning"], sort=False):
+    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
+    mean_traj = T.mean(axis=0) / (np.linalg.norm(T, axis=0) + 1e-12)
+    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
+    for i, pc in enumerate(pc_names):
+        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
+
+plot_df = pd.DataFrame(rows)
+
+# make mouse categorical for stable order
+mouse_order = sorted(plot_df["mouse"].unique())
+plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
+
+# ---- BAR FIGURE ----
+g = sns.catplot(
+    data=plot_df, kind="bar",
+    x="mouse", y="value",
+    col="pc", col_order=pc_names,
+    hue="learning",
+    height=3.4, aspect=1.15,
+    sharey=True, errorbar=None
+)
+g.set_titles("{col_name}")
+g.set_axis_labels("Mouse", "Abs(mean traj)")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(45)
+        lab.set_rotation_mode("anchor")
+        lab.set_ha("right")
+        lab.set_va("top")
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+
+# legend outside
+g._legend.set_title("Learning")
+g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
+g._legend.set_bbox_to_anchor((0.98, 0.5))
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_45.png]]
+
+#+begin_src jupyter-python
+# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.set_theme(style="white", context="talk")
+
+df = plot_df.copy()
+
+# normalize learning labels -> stage in {"Naive","Expert"}
+if np.issubdtype(df["learning"].dtype, np.number):
+    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
+else:
+    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
+                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
+
+df = df[df["stage"].isin(["Naive", "Expert"])]
+
+# average across odors -> one value per (mouse, stage, pc)
+mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
+
+wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
+        .reset_index()
+        .dropna(subset=["Naive", "Expert"]))
+
+mice = pd.Index(wide["mouse"].unique()).sort_values()
+palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
+
+g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=3.2, aspect=1.0, sharex=True, sharey=True)
+g.map_dataframe(
+    sns.scatterplot,
+    x="Naive", y="Expert",
+    hue="mouse", palette=palette,
+    s=70, edgecolor="black", linewidth=0.3,
+    legend=False
+)
+
+g.set_titles("{col_name}")
+g.set_xlabels("")
+g.set_ylabels("")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    lo, hi = min(x0, y0), max(x1, y1)
+    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+
+g.fig.supxlabel("Naive")
+g.fig.supylabel("Expert")
+g.fig.tight_layout()
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/pca/figure_46.png]]
 
 #+begin_src jupyter-python
 
 #+end_src
 
-#+RESULTS:
 
 ** Embeddings
 *** spatial filter
@@ -1143,7 +1553,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_40.png]]
+[[file:./figures/pca/figure_42.png]]
 
  #+begin_src jupyter-python
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
@@ -1164,7 +1574,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_41.png]]
+[[file:./figures/pca/figure_43.png]]
 
 #+begin_src jupyter-python
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
@@ -1277,7 +1687,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_45.png]]
+[[file:./figures/pca/figure_47.png]]
 
 #+begin_src jupyter-python
 import matplotlib.pyplot as plt
@@ -1340,8 +1750,8 @@ plt.show()
 
 #+begin_src jupyter-python
 laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18', 'ChRM04', 'ChRM23']
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM18', 'ChRM04', 'ChRM23']
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+# laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM18', 'ChRM04', 'ChRM23']
+# laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
 
 tasks = ['DPA']
 stages= ['Naive', 'Expert']
@@ -1358,9 +1768,10 @@ for i_mouse, mouse in enumerate(laser_mice):
 
     traj_ = []
 
-    for i in range(2):
-        for j in stages:
-            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) & (y_idx.performance==1)
+
+    for j in stages:
+        for i in range(2):
+            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) # & (y_idx.performance==1)
             traj_.append(X_idx[mask].mean(0))
 
     traj_mouse.append(traj_)
@@ -1370,7 +1781,7 @@ print(traj_mouse.shape)
 #+end_src
 
 #+RESULTS:
-: (5, 4, 3, 84)
+: (7, 4, 3, 84)
 
 #+begin_src jupyter-python
 traj_opto = []
@@ -1381,9 +1792,9 @@ for i_mouse, mouse in enumerate(laser_mice):
 
     traj_ = []
 
-    for i in range(2):
-        for j in stages:
-            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) & (y_idx.performance==1)
+    for j in stages:
+        for i in range(2):
+            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) # & (y_idx.performance==1)
             traj_.append(X_idx[mask].mean(0))
 
     traj_opto.append(traj_)
@@ -1393,11 +1804,11 @@ print(traj_opto.shape)
 #+end_src
 
 #+RESULTS:
-: (5, 4, 3, 84)
+: (7, 4, 3, 84)
 
 #+begin_src jupyter-python
-fp_mouse = np.nanmean(traj_mouse[..., options['bins_LD']], -1)
-fp_opto = np.nanmean(traj_opto[..., options['bins_LD']], -1)
+fp_mouse = np.nanmean(traj_mouse[..., options['bins_ED']], -1)
+fp_opto = np.nanmean(traj_opto[..., options['bins_ED']], -1)
 
 print(fp_mouse.shape)
 
@@ -1409,7 +1820,7 @@ pc2_opto = fp_opto[..., 1]
 #+end_src
 
 #+RESULTS:
-: (5, 4, 3)
+: (7, 4, 3)
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*height, height), sharey=1)
@@ -1431,7 +1842,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_53.png]]
+[[file:./figures/pca/figure_61.png]]
 
 #+begin_src jupyter-python
 perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
@@ -1446,11 +1857,12 @@ print(delta_dpa)
 #+end_src
 
 #+RESULTS:
-: (20, 4) (20, 4)
-: [ 0.          0.04166667  0.         -0.00694444  0.00694444  0.08333333
-:  -0.04166667 -0.02777778  0.01041667  0.0625      0.09375     0.04166667
-:  -0.10416667 -0.02083333 -0.02777778 -0.01388889  0.00694444 -0.02777778
-:  -0.00694444  0.04861111]
+: (28, 4) (28, 4)
+: [ 0.00694444 -0.01388889  0.03472222  0.00694444  0.0625     -0.02777778
+:   0.02083333 -0.06944444  0.          0.04166667  0.         -0.00694444
+:   0.00694444  0.08333333 -0.04166667 -0.02777778  0.01041667  0.0625
+:   0.09375     0.04166667 -0.10416667 -0.02083333 -0.02777778 -0.01388889
+:   0.00694444 -0.02777778 -0.00694444  0.04861111]
 
 #+begin_src jupyter-python
 perf_off = y_meta[y_meta['mouse'].isin(laser_mice) & (y_meta.laser==0)].groupby(['mouse', 'sample_odor', 'learning'])['odr_perf'].mean().reset_index()
@@ -1465,11 +1877,12 @@ print(delta_odr)
 #+end_src
 
 #+RESULTS:
-: (20, 4) (20, 4)
-: [ 0.03125     0.02083333 -0.03125     0.05208333 -0.02083333  0.
-:   0.          0.          0.          0.02083333  0.015625    0.0625
-:   0.07291667  0.07291667  0.0625      0.0625     -0.02083333  0.
-:   0.02083333  0.03125   ]
+: (28, 4) (28, 4)
+: [-0.05208333  0.01041667 -0.02083333  0.07291667 -0.015625   -0.02083333
+:  -0.0625      0.          0.03125     0.02083333 -0.03125     0.05208333
+:  -0.02083333  0.          0.          0.          0.          0.02083333
+:   0.015625    0.0625      0.07291667  0.07291667  0.0625      0.0625
+:  -0.02083333  0.          0.02083333  0.03125   ]
 
 #+begin_src jupyter-python
 dPC1 = (pc1_opto - pc1).reshape(-1)
@@ -1478,7 +1891,7 @@ print(dPC1.shape, dPC2.shape)
 #+end_src
 
 #+RESULTS:
-: (20,) (20,)
+: (28,) (28,)
 
 #+begin_src jupyter-python
 df = perf_off[['mouse', 'sample_odor']]
@@ -1495,12 +1908,12 @@ print(df.head())
 #+end_src
 
 #+RESULTS:
-:      mouse  sample_odor  delta_dpa  delta_odr  delta_pc1  delta_pc2
-: 0  JawsM01          0.0   0.000000   0.031250  -0.036933   0.070300
-: 1  JawsM01          0.0   0.041667   0.020833  -0.023818   0.045946
-: 2  JawsM01          1.0   0.000000  -0.031250  -0.041590   0.060454
-: 3  JawsM01          1.0  -0.006944   0.052083   0.001180   0.052342
-: 4  JawsM06          0.0   0.006944  -0.020833  -0.004883  -0.003746
+:       mouse  sample_odor  delta_dpa  delta_odr  delta_pc1  delta_pc2
+: 8   JawsM01          0.0   0.000000   0.031250  -0.052462  -0.032581
+: 11  JawsM01          1.0  -0.006944   0.052083  -0.024329  -0.041578
+: 10  JawsM01          1.0   0.000000  -0.031250   0.015256   0.011389
+: 9   JawsM01          0.0   0.041667   0.020833   0.013286   0.079578
+: 15  JawsM06          1.0  -0.027778   0.000000   0.017598   0.040960
 
 #+begin_src jupyter-python
 import matplotlib.pyplot as plt
@@ -1540,7 +1953,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_58.png]]
+[[file:./figures/pca/figure_68.png]]
 
 #+begin_src jupyter-python
 import matplotlib.pyplot as plt
@@ -1566,8 +1979,8 @@ for i, delta_perf in enumerate(['delta_dpa', 'delta_odr']):
 
     annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
     ax[i].annotate(annotation, xy=(.65, 0.15), xycoords='axes fraction', fontsize=14,
-                backgroundcolor='white', verticalalignment='bottom', horizontalalignment='left',
-                bbox=dict(edgecolor=None, facecolor='white', boxstyle='round'))
+                backgroundcolor='None', verticalalignment='bottom', horizontalalignment='left',
+                bbox=dict(edgecolor='None', facecolor='None', boxstyle='round'))
 
     ax[i].set_xlabel("$\\Delta$ PC2")
 
@@ -1579,14 +1992,13 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/pca/figure_59.png]]
+[[file:./figures/pca/figure_69.png]]
 
 #+begin_src jupyter-python
 
 #+end_src
 
 #+RESULTS:
-
 
 ** Binned Flow Fields
 *** utils
