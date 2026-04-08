@@ -111,6 +111,8 @@ def get_classification(model, RETURN='overlaps', **options):
     X_flat = avg_epochs(X, **options).astype('float32')
     y_flat = y.copy()
 
+    print(X_flat.shape, y_flat.shape)
+
     # X_task = X[..., options['bins_' + options['epochs'][0]]]
     # y_flat = np.repeat(y, X_task.shape[-1])
     # X_flat = X_task.transpose(0, 2, 1).reshape(-1, X_task.shape[1])
@@ -197,6 +199,7 @@ def get_classification(model, RETURN='overlaps', **options):
         output = coefs, bias
 
     else:
+        print('fit model')
         model.fit(X_flat, y_flat)
 
     if 'scores' in RETURN:

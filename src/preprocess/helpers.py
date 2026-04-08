@@ -69,6 +69,9 @@ def standard_scaler_BL(X, center=None, scale=None, avg_mean=0, avg_noise=0):
 
         scale = _handle_zeros_in_scale(scale, copy=False)
 
+        lo, hi = np.nanpercentile(scale.ravel(), [5, 95])
+        scale = np.clip(scale, lo, hi)
+
     if avg_mean and avg_noise:
         X_scale = (X - center[np.newaxis, ..., np.newaxis]) / scale[
             np.newaxis, ..., np.newaxis

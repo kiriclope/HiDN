@@ -303,6 +303,8 @@ def set_options(**kwargs):
 
     opts["bins_TEST"] = opts["bins"][int((t_TEST[0] + opts['T_WINDOW']) * frame_rate) : int((t_TEST[1]) * frame_rate)]
 
+    opts["bins_TEST_CHOICE"] = opts["bins"][int((t_TEST[0] + opts['T_WINDOW']) * frame_rate) : int((t_RWD[0]) * frame_rate)]
+
     opts["bins_CHOICE"] = opts["bins"][int((t_TEST[1] - opts['T_WINDOW']) * frame_rate) : int((t_RWD2[0] - opts['T_WINDOW']) * frame_rate)]
 
     # opts["bins_TASK"] = opts["bins"][: int((t_RWD2[1]) * frame_rate)]

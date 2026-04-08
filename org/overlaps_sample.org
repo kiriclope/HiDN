@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:ipython :results both :exports both :async yes :session sample_overlaps :kernel dual_data :output-dir ./figures/sample_overlaps :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:ipython :results both :exports both :async yes :session sample_overlaps :kernel dual :output-dir ./figures/sample_overlaps :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -17,7 +17,7 @@
 : The autoreload extension is already loaded. To reload it, use:
 :   %reload_ext autoreload
 : Python exe
-: /home/leon/mambaforge/envs/dual_data/bin/python
+: /home/leon/mambaforge/envs/dual/bin/python
 
 * Imports
 
@@ -153,25 +153,28 @@ def pad_with_nans(array, target_shape):
 
 #+begin_src ipython
 def overlaps_scorer(estimator, X_test, y_test, IF_SIGN=0):
-    try:
-        coef = estimator.named_steps["model"].coef_.flatten()
-        clf = estimator #.named_steps["model"]
-    except:
-        coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
-        clf = estimator.best_estimator_.named_steps["model"]
+    # try:
+    #     coef = estimator.named_steps["model"].coef_.flatten()
+    #     clf = estimator #.named_steps["model"]
+    # except:
+    #     coef = estimator.base_estimator.named_steps["best_model_"].coef_.flatten()
+    #     clf = estimator.base_estimator.named_steps["best_model_"]
 
-    norm_w = np.linalg.norm(coef) + 1e-6
+    #     # coef = estimator.best_estimator_.named_steps["model"].coef_.flatten()
+    #     # clf = estimator.best_estimator_.named_steps["model"]
+
+    # norm_w = np.linalg.norm(coef) + 1e-6
 
     if IF_SIGN:
         # dot_product = (2*y_test -1) * np.dot(X_test, coef)
         # dot_product = (2*y_test -1) * clf.named_steps["model"].decision_function(X_test)
-        dot_product = (2*y_test -1) * clf.decision_function(X_test)
+        dot_product = (2*y_test -1) * estimator.decision_function(X_test)
     else:
-        dot_product = clf.decision_function(X_test)
+        dot_product = estimator.decision_function(X_test)
         # dot_product = clf.named_steps["model"].decision_function(X_test)
         # dot_product = np.dot(X_test, coef)
 
-    return np.nanmean(dot_product) / norm_w
+    return np.nanmean(dot_product) # / norm_w
 #+end_src
 
 #+RESULTS:
@@ -206,18 +209,17 @@ from pymer4.models import Lmer
 #+end_src
 
 #+RESULTS:
-#+begin_example
-During startup - Warning messages:
-1: package ‘methods’ was built under R version 4.4.2
-2: package ‘datasets’ was built under R version 4.4.2
-3: package ‘utils’ was built under R version 4.4.2
-4: package ‘grDevices’ was built under R version 4.4.2
-5: package ‘graphics’ was built under R version 4.4.2
-6: package ‘stats’ was built under R version 4.4.2
-R[write to console]: In addition:
-R[write to console]: Warning message:
-R[write to console]: package ‘tools’ was built under R version 4.4.2
-#+end_example
+:RESULTS:
+# [goto error]
+: ---------------------------------------------------------------------------
+: ModuleNotFoundError                       Traceback (most recent call last)
+: Cell In[11], line 1
+: ----> 1 import rpy2.robjects as robjects
+:       2 from rpy2.robjects.packages import importr
+:       4 # Set the .libPaths in R
+:
+: ModuleNotFoundError: No module named 'rpy2'
+:END:
 
 #+begin_src ipython
 def plot_overlaps(df, day, epoch, ax, title='', y0=0.5, size=84, if_proba=0, ls='-', label=None, colors=None, cis=None, **kwargs):
@@ -442,7 +444,7 @@ from src.classificationCV import ClassificationCV
 
 #+begin_src ipython
 from sklearn.linear_model import LogisticRegression
-net = LogisticRegression(penalty='l1', solver='liblinear', class_weight='balanced', n_jobs=None)
+net = LogisticRegression(penalty='l2', solver='liblinear', class_weight='balanced', n_jobs=None)
 # net = LogisticRegression(penalty='elasticnet', solver='saga', n_jobs=None, l1_ratio=0.95,  tol=0.001, class_weight='balanced')
 
 params = {'model__C': np.logspace(-3, 3, 10)} # , 'net__l1_ratio': np.linspace(0, 1, 10)}
@@ -509,13 +511,13 @@ for mouse in mice:
         for day in days:
             options['day'] = day
 
-            try:
-            # if 0==0:
+            # try:
+            if 1:
                 overlaps = get_classification(model, RETURN='df_scores', **options)
                 options['reload'] = 0
                 df_mouse.append(overlaps)
-            except:
-                pass
+            # except:
+            #     pass
 
     df_mouse = pd.concat(df_mouse)
     df_mouse['mouse'] = mouse
@@ -529,114 +531,161 @@ print(df_sample.shape)
 #+begin_example
 ['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 13)
+X_days (768, 184, 84) y_days (768, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (216, 14) ['DualNoGo' 'DualGo' 'DPA']
-X (216, 184, 84) nans 0.0 y (216,) [0. 1.]
-scores (216, 84, 84) 0.009806400632271468
-df_A (216, 15) scores (216, 7056) labels (216, 14)
-df (216, 15)
+first [1 2 3] [1. 0.]
+Training set: X (216, 184, 84) y_labels (216, 17) ['DualNoGo' 'DualGo' 'DPA'] (216,)
+(216, 184) (216,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (216, 15540)
+scores (216, 84, 84) 1.0120203539105446
+perm_scores (216, 84, 84) nan
+probas (216, 1, 84, 84, 2)
+df_A (216, 19) scores (216, 7056) labels (216, 17)
+df (216, 19)
+Elapsed (with compilation) = 0h 0m 30s
 Loading files from /storage/leon/dual_task/data/JawsM01
-X_days (768, 184, 84) y_days (768, 13)
+X_days (768, 184, 84) y_days (768, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (91, 14) ['DPA' 'DualGo' 'DualNoGo']
-X (91, 184, 84) nans 0.0 y (91,) [0. 1.]
-scores (91, 84, 84) -0.011901851473847994
-df_A (91, 15) scores (91, 7056) labels (91, 14)
-df (91, 15)
+last [4] [1. 0.]
+Training set: X (91, 184, 84) y_labels (91, 17) ['DPA' 'DualGo' 'DualNoGo'] (91,)
+(91, 184) (91,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (91, 15540)
+scores (91, 84, 84) -0.4630267333226492
+perm_scores (91, 84, 84) nan
+probas (91, 1, 84, 84, 2)
+df_A (91, 19) scores (91, 7056) labels (91, 17)
+df (91, 19)
+Elapsed (with compilation) = 0h 0m 13s
 ['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 13)
+X_days (1152, 201, 84) y_days (1152, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (183, 14) ['DualNoGo' 'DualGo' 'DPA']
-X (183, 201, 84) nans 0.0 y (183,) [0. 1.]
-scores (183, 84, 84) 0.022756132646877775
-df_A (183, 15) scores (183, 7056) labels (183, 14)
-df (183, 15)
+first [1 2 3] [1. 0.]
+Training set: X (183, 201, 84) y_labels (183, 17) ['DualNoGo' 'DualGo' 'DPA'] (183,)
+(183, 201) (183,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (183, 16968)
+scores (183, 84, 84) 0.9078978414196441
+perm_scores (183, 84, 84) nan
+probas (183, 1, 84, 84, 2)
+df_A (183, 19) scores (183, 7056) labels (183, 17)
+df (183, 19)
+Elapsed (with compilation) = 0h 0m 22s
 Loading files from /storage/leon/dual_task/data/JawsM06
-X_days (1152, 201, 84) y_days (1152, 13)
+X_days (1152, 201, 84) y_days (1152, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (248, 14) ['DualGo' 'DualNoGo' 'DPA']
-X (248, 201, 84) nans 0.0 y (248,) [0. 1.]
-scores (248, 84, 84) 0.011344295224675902
-df_A (248, 15) scores (248, 7056) labels (248, 14)
-df (248, 15)
+last [4 5 6] [1. 0.]
+Training set: X (248, 201, 84) y_labels (248, 17) ['DualGo' 'DualNoGo' 'DPA'] (248,)
+(248, 201) (248,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (248, 16968)
+scores (248, 84, 84) 1.3903513951864674
+perm_scores (248, 84, 84) nan
+probas (248, 1, 84, 84, 2)
+df_A (248, 19) scores (248, 7056) labels (248, 17)
+df (248, 19)
+Elapsed (with compilation) = 0h 0m 35s
 ['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 13)
+X_days (960, 423, 84) y_days (960, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (182, 14) ['DPA' 'DualGo' 'DualNoGo']
-X (182, 423, 84) nans 0.0 y (182,) [0. 1.]
-scores (182, 84, 84) 0.003044829680169619
-df_A (182, 15) scores (182, 7056) labels (182, 14)
-df (182, 15)
+first [1 2 3] [1. 0.]
+Training set: X (182, 423, 84) y_labels (182, 17) ['DPA' 'DualGo' 'DualNoGo'] (182,)
+(182, 423) (182,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (182, 35616)
+scores (182, 84, 84) 0.2705392064096969
+perm_scores (182, 84, 84) nan
+probas (182, 1, 84, 84, 2)
+df_A (182, 19) scores (182, 7056) labels (182, 17)
+df (182, 19)
+Elapsed (with compilation) = 0h 0m 34s
 Loading files from /storage/leon/dual_task/data/JawsM12
-X_days (960, 423, 84) y_days (960, 13)
+X_days (960, 423, 84) y_days (960, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (141, 14) ['DPA' 'DualGo' 'DualNoGo']
-X (141, 423, 84) nans 0.0 y (141,) [0. 1.]
-scores (141, 84, 84) -0.018991863324651664
-df_A (141, 15) scores (141, 7056) labels (141, 14)
-df (141, 15)
+last [4 5] [1. 0.]
+Training set: X (141, 423, 84) y_labels (141, 17) ['DPA' 'DualGo' 'DualNoGo'] (141,)
+(141, 423) (141,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (141, 35616)
+scores (141, 84, 84) -0.39926168375701343
+perm_scores (141, 84, 84) nan
+probas (141, 1, 84, 84, 2)
+df_A (141, 19) scores (141, 7056) labels (141, 17)
+df (141, 19)
+Elapsed (with compilation) = 0h 0m 25s
 ['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
+X_days (1152, 693, 84) y_days (1152, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (195, 16) ['DualGo' 'DualNoGo' 'DPA']
-X (195, 693, 84) nans 0.0 y (195,) [0. 1.]
-scores (195, 84, 84) 0.017342370954290066
-df_A (195, 17) scores (195, 7056) labels (195, 16)
-df (195, 17)
+first [1. 2. 3.] [1. 0.]
+Training set: X (195, 693, 84) y_labels (195, 17) ['DualGo' 'DualNoGo' 'DPA'] (195,)
+(195, 693) (195,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (195, 58296)
+scores (195, 84, 84) 0.7274316229806573
+perm_scores (195, 84, 84) nan
+probas (195, 1, 84, 84, 2)
+df_A (195, 19) scores (195, 7056) labels (195, 17)
+df (195, 19)
+Elapsed (with compilation) = 0h 1m 2s
 Loading files from /storage/leon/dual_task/data/JawsM15
-X_days (1152, 693, 84) y_days (1152, 15)
+X_days (1152, 693, 84) y_days (1152, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (249, 16) ['DualGo' 'DualNoGo' 'DPA']
-X (249, 693, 84) nans 0.0 y (249,) [0. 1.]
-scores (249, 84, 84) -0.006231142787683797
-df_A (249, 17) scores (249, 7056) labels (249, 16)
-df (249, 17)
+last [4. 5. 6.] [1. 0.]
+Training set: X (249, 693, 84) y_labels (249, 17) ['DualGo' 'DualNoGo' 'DPA'] (249,)
+(249, 693) (249,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (249, 58296)
+scores (249, 84, 84) -0.6411551671130284
+perm_scores (249, 84, 84) nan
+probas (249, 1, 84, 84, 2)
+df_A (249, 19) scores (249, 7056) labels (249, 17)
+df (249, 19)
+Elapsed (with compilation) = 0h 1m 24s
 ['first', 'last']
 Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
+X_days (1152, 444, 84) y_days (1152, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS first LASER 0
-y_labels (235, 16) ['DualNoGo' 'DualGo' 'DPA']
-X (235, 444, 84) nans 0.0 y (235,) [0. 1.]
-scores (235, 84, 84) -0.018919600627296723
-df_A (235, 17) scores (235, 7056) labels (235, 16)
-df (235, 17)
+first [1. 2. 3.] [1. 0.]
+Training set: X (235, 444, 84) y_labels (235, 17) ['DualNoGo' 'DualGo' 'DPA'] (235,)
+(235, 444) (235,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (235, 37380)
+scores (235, 84, 84) 0.09308705819840601
+perm_scores (235, 84, 84) nan
+probas (235, 1, 84, 84, 2)
+df_A (235, 19) scores (235, 7056) labels (235, 17)
+df (235, 19)
+Elapsed (with compilation) = 0h 0m 51s
 Loading files from /storage/leon/dual_task/data/JawsM18
-X_days (1152, 444, 84) y_days (1152, 15)
+X_days (1152, 444, 84) y_days (1152, 16)
 DATA: FEATURES sample TASK all TRIALS correct DAYS last LASER 0
-y_labels (283, 16) ['DPA' 'DualNoGo' 'DualGo']
-X (283, 444, 84) nans 0.0 y (283,) [0. 1.]
-scores (283, 84, 84) -0.054164297654174486
-df_A (283, 17) scores (283, 7056) labels (283, 16)
-df (283, 17)
-(2023, 18)
+last [4. 5. 6.] [1. 0.]
+Training set: X (283, 444, 84) y_labels (283, 17) ['DPA' 'DualNoGo' 'DualGo'] (283,)
+(283, 444) (283,)
+fit model
+<bound method GeneralizingEstimator.score of <GeneralizingEstimator(base_estimator=Pipeline(steps=[('model', LogisticRegression(C=np.float64(1000.0), class_weight='balanced', penalty='l2', solver='liblinear'))]), scoring=<function overlaps_scorer at 0x7f6850637c10>, verbose=False)>>
+coefs (283, 37380)
+scores (283, 84, 84) -0.9116931324536391
+perm_scores (283, 84, 84) nan
+probas (283, 1, 84, 84, 2)
+df_A (283, 19) scores (283, 7056) labels (283, 17)
+df (283, 19)
+Elapsed (with compilation) = 0h 1m 9s
+(2023, 20)
 #+end_example
-
-#+begin_src ipython
-print(df_sample.keys())
-#+end_src
-
-#+RESULTS:
-:        'laser', 'day', 'choice', 'pair', 'odr_perf', 'odr_choice',
-:        'odr_response', 'idx', 'overlaps', 'mouse', 'performance', 'odor_pair'],
-:       dtype='object')
-: Index(['index', 'sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response',
-:        'laser', 'day', 'choice', 'pair', 'odr_perf', 'odr_choice',
-:        'odr_response', 'idx', 'overlaps', 'mouse', 'performance', 'odor_pair'],
-:       dtype='object')
-
-#+begin_src ipython
-print(df_sample.mouse.unique())
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-:
-: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18']
-:END:
 
 #+begin_src ipython
 df_sample['performance'] = df_sample['response'].apply(lambda x: 0 if 'incorrect' in x else 1)
@@ -677,7 +726,6 @@ else:
 #+end_src
 
 #+RESULTS:
-: 92a06121-371d-4144-9f21-aaa9d4ad2d0c
 
 * Data
 
@@ -705,16 +753,14 @@ print(df_sample.mouse.unique(), df_sample.shape)
 #+end_src
 
 #+RESULTS:
-: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23'
-:  'ACCM03' 'ACCM04'] (5568, 17)
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18'] (2023, 20)
 
 #+begin_src ipython
 print(df_sample.mouse.unique())
 #+end_src
 
 #+RESULTS:
-: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18' 'ChRM04' 'ChRM23'
-:  'ACCM03' 'ACCM04']
+: ['JawsM01' 'JawsM06' 'JawsM12' 'JawsM15' 'JawsM18']
 
 #+begin_src ipython
 
@@ -728,8 +774,9 @@ print(df_sample.keys())
 
 #+RESULTS:
 : Index(['index', 'sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response',
-:        'laser', 'day', 'choice', 'odr_perf', 'odr_choice', 'odr_response',
-:        'idx', 'overlaps', 'mouse', 'performance', 'pair'],
+:        'laser', 'day', 'choice', 'pair', 'odr_perf', 'odr_choice',
+:        'odr_response', 'odor_pair', 'learning', 'performance', 'idx',
+:        'overlaps', 'perm_overlaps', 'mouse'],
 :       dtype='object')
 
 #+begin_src ipython
@@ -815,10 +862,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-: No artists with labels found to put in legend.  Note that artists whose label start with an underscore are ignored when legend() is called with no argument.
-[[./figures/sample_overlaps/figure_34.png]]
-:END:
+[[file:./figures/sample_overlaps/figure_32.png]]
 
  #+begin_src ipython
 n_ = len(options['days'])+1
@@ -856,7 +900,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/sample_overlaps/figure_35.png]]
+[[file:./figures/sample_overlaps/figure_33.png]]
 
 #+begin_src ipython
 df = df_sample.copy()
@@ -869,7 +913,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[./figures/sample_overlaps/figure_35.png]]
+[[file:./figures/sample_overlaps/figure_34.png]]
 
 #+begin_src ipython
 import pingouin as pg
