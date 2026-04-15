@@ -4,7 +4,7 @@ from scipy.stats import circmean, norm
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
 # from caiman.source_extraction.cnmf.deconvolution import constrained_foopsi
-from oasis.functions import deconvolve
+# from oasis.functions import deconvolve
 from src.common import constants as gv
 from joblib import Parallel, delayed
 from scipy.signal import butter, filtfilt

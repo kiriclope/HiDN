@@ -1,2434 +1,3 @@
-:PROPERTIES:
-:GPTEL_MODEL: gpt-5.4
-:GPTEL_BACKEND: OpenAI
-:GPTEL_SYSTEM: You are a large language model living in Emacs and a helpful assistant. Respond concisely.
-:GPTEL_TOOLS:
-:GPTEL_BOUNDS: ((response (124900 137415)))
-:END:
-#+STARTUP: fold
-#+PROPERTY: header-args:jupyter-python :results both :exports both :async yes :session singleClass2 :kernel dual :output-dir ./figures/singleClass :file (lc/org-babel-tangle-figure-filename)
-
-* Notebook Settings
-
-#+begin_src jupyter-python
-%load_ext autoreload
-%autoreload 2
-%reload_ext autoreload
-
-%run /home/leon/dual_task/dual_data/notebooks/setup.py
-%config InlineBackend.figure_format = 'png'
-#+end_src
-
-#+RESULTS:
-: The autoreload extension is already loaded. To reload it, use:
-:   %reload_ext autoreload
-: Python exe
-: /home/leon/mambaforge/envs/dual/bin/python
-
-* Imports
-
-#+begin_src jupyter-python
-  from sklearn.exceptions import ConvergenceWarning
-  warnings.filterwarnings("ignore")
-  import traceback
-
-  import sys
-  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
-
-  import os
-  if not sys.warnoptions:
-    warnings.simplefilter("ignore")
-    os.environ["PYTHONWARNINGS"] = "ignore"
-
-  import pickle as pkl
-  import numpy as np
-  import matplotlib.pyplot as plt
-  import pandas as pd
-  import seaborn as sns
-
-  from time import perf_counter
-
-  from sklearn.base import clone
-  from sklearn.metrics import make_scorer, roc_auc_score
-  from sklearn.preprocessing import StandardScaler, RobustScaler
-  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
-
-  from src.common.plot_utils import add_vlines, add_vdashed
-  from src.common.options import set_options
-  from src.stats.bootstrap import my_boots_ci
-  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
-  from src.preprocess.helpers import avg_epochs
-  from src.decode.bump import circcvl
-  from src.torch.classificationCV import ClassificationCV
-  from src.torch.classify import get_classification
-#+end_src
-
-#+RESULTS:
-
-* Helpers
-** scalers
-
-#+begin_src jupyter-python
-import numpy as np
-
-class StandardScaler:
-    def __init__(self, axis=0, if_scale=0):
-        self.axis = axis
-        self.center_ = None
-        self.scale_ = None
-        self.if_scale_ = if_scale
-
-    def fit(self, X):
-        self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
-        self.scale_ = np.nanstd(X, axis=(self.axis, -1), keepdims=True)
-
-        lo, hi = np.nanpercentile(self.scale_.ravel(), [5, 95])
-        self.scale_ = np.clip(self.scale_, lo, hi)
-
-        return self
-
-    def transform(self, X):
-        if self.if_scale_:
-            return (X - self.center_) / self.scale_
-        return (X - self.center_)
-
-    def fit_transform(self, X):
-        self.fit(X)
-        return self.transform(X)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-
-class RobustScaler:
-    def __init__(self, axis=0):
-        self.axis = axis
-        self.center_ = None
-        self.scale_ = None
-
-    def fit(self, X):
-        self.center_ = np.nanmedian(X, axis=self.axis, keepdims=True)
-        q75 = np.nanpercentile(X, 75, axis=self.axis, keepdims=True)
-        q25 = np.nanpercentile(X, 25, axis=self.axis, keepdims=True)
-        self.scale_ = q75 - q25
-        # Prevent division by zero
-        self.scale_ = np.where(self.scale_ == 0, 1, self.scale_)
-        return self
-
-    def transform(self, X):
-        return (X - self.center_) / self.scale_
-
-    def fit_transform(self, X):
-        self.fit(X)
-        return self.transform(X)
-#+end_src
-
-#+RESULTS:
-
-** pad
-
-#+begin_src jupyter-python
-def pad_list(arrays, axis=0, max_len=None):
-    """
-    Pads a list of arrays along the specified axis with NaNs so all have the same size along that axis.
-    Returns a list of padded arrays.
-    """
-    # Find maximum size along specified axis
-    if max_len is None:
-        max_len = max(arr.shape[axis] for arr in arrays)
-
-    padded = []
-    for arr in arrays:
-        pad_width = [(0, 0)] * arr.ndim
-
-
-        n_pad = max_len - arr.shape[axis]
-
-        if n_pad > 0:
-            pad_width[axis] = (0, n_pad)
-            arr_padded = np.pad(arr, pad_width, mode='constant', constant_values=np.nan)
-        else:
-            arr_padded = arr
-        padded.append(arr_padded)
-
-    return padded
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-def pad_with_nans(array, target_shape):
-    result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
-    print(result.shape)
-    slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
-    result[slices] = array[slices]
-    return result
-#+end_src
-
-#+RESULTS:
-
-** save
-
-#+begin_src jupyter-python
-  def convert_seconds(seconds):
-      h = seconds // 3600
-      m = (seconds % 3600) // 60
-      s = seconds % 60
-      return h, m, s
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-  import pickle as pkl
-
-  def pkl_save(obj, name, path="."):
-      os.makedirs(path, exist_ok=True)
-      destination = path + "/" + name + ".pkl"
-      print("saving to", destination)
-      pkl.dump(obj, open(destination, "wb"))
-
-
-  def pkl_load(name, path="."):
-      source = path + "/" + name + '.pkl'
-      print('loading from', source)
-      return pkl.load(open( source, "rb"))
-
-#+end_src
-
-#+RESULTS:
-
-** cv pca
-
-#+begin_src jupyter-python
-def cv_avg_cond(X, y, condition='odor_pair', levels=None):
-    if isinstance(condition, str):
-        condition = [condition]
-
-    # fixed levels (recommended): dict {col: [ordered levels]}
-    if levels is None:
-        levels = {c: np.sort(y[c].astype(str).unique()) for c in condition}
-    else:
-        levels = {c: np.array(levels[c]).astype(str) for c in condition}
-
-    combos = list(itertools.product(*[levels[c] for c in condition]))
-
-    X_avg = []
-    for combo in combos:
-        idx = np.ones(len(y), dtype=bool)
-        for c, v in zip(condition, combo):
-            idx &= (y[c].astype(str).values == str(v))
-
-        if not idx.any():
-            raise ValueError(f"Missing condition combo in this split: {dict(zip(condition, combo))}")
-
-        X_avg.append(np.nanmean(X[idx], axis=0))
-
-    return np.stack(X_avg, axis=0)
-#+end_src
-
-#+RESULTS:
-: 8f4a0c81-46e2-4a8e-968b-81c4b4793800
-
-#+begin_src jupyter-python
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.interpolate import griddata
-from scipy.ndimage import gaussian_filter
-
-def polar_velocities(x, y, sigma_r=1, sigma_t=1, sigma_time=1):
-    """
-    x, y: (n_traj, n_points)
-    sigma: gaussian smoothing in time (in points)
-    Returns:
-      dr_s, dtheta_s: (n_traj, n_points): smoothed radial and angular velocities
-      r, theta: positions at each point, for later conversion
-    """
-
-    r = np.sqrt(x**2 + y**2)
-    theta = np.arctan2(y, x)
-    theta_u = np.unwrap(theta, axis=1)
-
-    # r_s = gaussian_filter1d(r, sigma=sigma_r)
-    # theta_s = gaussian_filter1d(theta_u, sigma=sigma_t)
-
-    r_s = gaussian_filter(r, sigma=(sigma_r, sigma_time))
-    theta_s = gaussian_filter(theta_u, sigma=(sigma_t, sigma_time))
-
-    dr_s = np.gradient(r_s, axis=1)
-    dtheta_s = np.gradient(theta_s, axis=1)
-
-    return dr_s, dtheta_s, r_s, theta_s
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-def pol2cart(dr, dtheta, r, theta):
-    """
-    Converts smoothed polar velocities to Cartesian velocities.
-    All arrays shape: (n_traj, n_points)
-    """
-    u = dr * np.cos(theta) - r * dtheta * np.sin(theta)
-    v = dr * np.sin(theta) + r * dtheta * np.cos(theta)
-    return u, v
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
-    """
-    Interpolate velocity field to a regular grid.
-    Inputs: x,y,u,v all (n_samples,) or (n_traj, n_points) -- flatten them first.
-    Returns: xi, yi, ui, vi: all (grid_size, grid_size) arrays.
-    """
-    x_flat = x.flatten()
-    y_flat = y.flatten()
-    u_flat = u.flatten()
-    v_flat = v.flatten()
-
-    # xi, yi = np.meshgrid(
-    #     np.linspace(np.min(x_flat), np.max(x_flat), grid_size),
-    #     np.linspace(np.min(y_flat), np.max(y_flat), grid_size),
-    # )
-
-    x_min, x_max = np.min(x_flat)-1, np.max(x_flat)+1
-    y_min, y_max = np.min(y_flat)-1, np.max(y_flat)+1
-
-    if z_lim is 0:
-        z_min = np.min((x_min, y_min))
-        z_max = np.min((x_max, y_max))
-    else:
-        z_min = -z_lim
-        z_max = z_lim
-
-    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
-                         np.linspace(z_min, z_max, grid_size))
-
-
-    ui = griddata((x_flat, y_flat), u_flat, (xi, yi), method=method, fill_value=np.nan)
-    vi = griddata((x_flat, y_flat), v_flat, (xi, yi), method=method, fill_value=np.nan)
-
-    # Fill nans with nearest
-    mask = np.isnan(ui)
-    if np.any(mask):
-        ui[mask] = griddata((x_flat, y_flat), u_flat, (xi, yi), method='nearest')[mask]
-        vi[mask] = griddata((x_flat, y_flat), v_flat, (xi, yi), method='nearest')[mask]
-
-    return xi, yi, ui, vi
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
-    speed = np.sqrt(ui**2 + vi**2)
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(5,5))
-    # Normalize for coloring
-    import matplotlib as mpl
-    vmin, vmax = np.nanpercentile(speed, [5, 95])
-    norm = mpl.colors.Normalize(vmin, vmax)
-    # strm = ax.streamplot(xi, yi, ui, vi, density=density, color=speed, cmap='coolwarm', norm=norm)
-    heatmap = ax.pcolormesh(xi, yi, speed, cmap='coolwarm', shading='gouraud', norm=norm)
-
-    if show_cbar:
-        plt.colorbar(strm.lines, ax=ax, label='Speed')
-
-    ax.set_aspect('equal')
-    ax.set_xlabel('x')
-    ax.set_ylabel('y')
-    return ax
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-
-from scipy.ndimage import gaussian_filter1d, gaussian_filter
-from scipy.interpolate import Rbf
-
-def create_field_rbf(
-    x, y, u, v,
-    grid_size=32,
-    z_lim=5,
-    method='multiquadric',
-    epsilon=None,
-    smooth=0.0
-):
-    """
-    Interpolate velocity field to a regular grid using RBFs.
-
-    Inputs:
-      x, y, u, v: (n_traj, n_points) or (n_samples,) arrays
-      grid_size: number of grid points per dimension
-      z_lim: if 0, use bounding box of data; otherwise [-z_lim, z_lim]^2
-      function: RBF type ('multiquadric', 'inverse', 'gaussian', 'linear', etc.)
-      epsilon: shape parameter; if None, Rbf chooses something heuristic
-      smooth: smoothing parameter passed to Rbf (regularization)
-
-    Returns:
-      xi, yi, ui, vi: all (grid_size, grid_size) arrays
-    """
-    x_flat = x.flatten()
-    y_flat = y.flatten()
-    u_flat = u.flatten()
-    v_flat = v.flatten()
-
-    # Domain limits
-    if z_lim == 0:
-        x_min, x_max = x_flat.min() - 1, x_flat.max() + 1
-        y_min, y_max = y_flat.min() - 1, y_flat.max() + 1
-        z_min = min(x_min, y_min)
-        z_max = max(x_max, y_max)
-    else:
-        z_min, z_max = -z_lim, z_lim
-
-    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
-                         np.linspace(z_min, z_max, grid_size))
-
-    # One RBF for u, one for v
-    rbfu = Rbf(
-        x_flat, y_flat, u_flat,
-        function=method,
-        epsilon=epsilon,
-        smooth=smooth
-    )
-    rbfv = Rbf(
-        x_flat, y_flat, v_flat,
-        function=method,
-        epsilon=epsilon,
-        smooth=smooth
-    )
-
-    ui = rbfu(xi, yi)
-    vi = rbfv(xi, yi)
-
-    return xi, yi, ui, vi
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-
-from scipy.ndimage import gaussian_filter1d, gaussian_filter
-from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
-
-def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
-    """
-    Interpolate velocity field to a regular grid.
-
-    Inputs:
-      x, y, u, v: (n_traj, n_points) or (n_samples,) arrays
-      grid_size: number of grid points per dimension
-      method: 'linear' (via LinearNDInterpolator) or any method supported
-              by griddata ('linear', 'nearest', 'cubic') if not 'linear' here.
-      z_lim: if 0, use bounding box of data; otherwise domain = [-z_lim, z_lim]^2
-
-    Returns:
-      xi, yi, ui, vi: all (grid_size, grid_size) arrays
-    """
-    x_flat = x.flatten()
-    y_flat = y.flatten()
-    u_flat = u.flatten()
-    v_flat = v.flatten()
-
-    # Domain limits
-    if z_lim == 0:
-        x_min, x_max = x_flat.min() - 1, x_flat.max() + 1
-        y_min, y_max = y_flat.min() - 1, y_flat.max() + 1
-        z_min = min(x_min, y_min)
-        z_max = max(x_max, y_max)
-    else:
-        z_min, z_max = -z_lim, z_lim
-
-    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
-                         np.linspace(z_min, z_max, grid_size))
-
-    # Interpolation
-    if method == 'linear':
-        # Use LinearNDInterpolator + NearestNDInterpolator fallback
-        pts = np.column_stack((x_flat, y_flat))
-        lin_u = LinearNDInterpolator(pts, u_flat)
-        lin_v = LinearNDInterpolator(pts, v_flat)
-
-        ui = lin_u(xi, yi)
-        vi = lin_v(xi, yi)
-
-        mask = np.isnan(ui)
-        if np.any(mask):
-            near_u = NearestNDInterpolator(pts, u_flat)
-            near_v = NearestNDInterpolator(pts, v_flat)
-            ui[mask] = near_u(xi[mask], yi[mask])
-            vi[mask] = near_v(xi[mask], yi[mask])
-    else:
-        from scipy.interpolate import griddata
-        ui = griddata((x_flat, y_flat), u_flat, (xi, yi),
-                      method=method, fill_value=np.nan)
-        vi = griddata((x_flat, y_flat), v_flat, (xi, yi),
-                      method=method, fill_value=np.nan)
-
-        mask = np.isnan(ui)
-        if np.any(mask):
-            ui[mask] = griddata((x_flat, y_flat), u_flat, (xi, yi),
-                                method='nearest')[mask]
-            vi[mask] = griddata((x_flat, y_flat), v_flat, (xi, yi),
-                                method='nearest')[mask]
-
-    return xi, yi, ui, vi
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-def get_mean_velo(r_s, dr_s, n_bins=32, z_lim=10):
-
-    r_all  = r_s.flatten()
-    dr_all = dr_s.flatten()
-
-    bins = np.linspace(np.nanmin(r_all), np.nanmax(r_all), n_bins)
-
-    bin_centers = 0.5*(bins[:-1] + bins[1:])
-    digitized = np.digitize(r_all, bins)
-
-    dr_mean = np.array([np.nanmean(dr_all[digitized == i]) for i in range(1, len(bins))])
-
-    return dr_mean, bins, bin_centers, digitized
-#+end_src
-
-#+RESULTS:
-
-* Parameters
-
-#+begin_src jupyter-python
-old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
-Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
-
-mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
-# mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
-# mice = ['JawsM15', 'JawsM18', 'ChRM04']
-
-tasks = ['Dual'] # all
-
-kwargs = {
-   'mice': mice,
-   'tasks': tasks,
-   'mouse': mice[0], 'laser': 0,
-   'trials': '', 'reload': 0, 'data_type': 'dF',
-   'prescreen': None, 'pval': 0.05,
-   'preprocess': True, 'scaler_BL': 'standard_BL',
-   'avg_noise': False, 'unit_var_BL': False,
-   'random_state': None, 'T_WINDOW': 0.0,
-   'l1_ratio': 0.95,
-   'n_comp': 3, 'pca': 'pca',
-   'scaler': None,
-   'bootstrap': 1, 'n_boots': 128,
-   'n_splits': 5, 'n_repeats': 10,
-   'class_weight': 0,
-   'multilabel': 0,
-   'mne_estimator':'generalizing', # sliding or generalizing
-   'n_jobs': 64,
-}
-
-# kwargs['days'] = ['first', 'middle', 'last']
-kwargs['days'] = ['first', 'last']
-# kwargs['days'] = 'all'
-options = set_options(**kwargs)
-options['cv_B'] = False
-#+end_src
-
-#+RESULTS:
-
-* Load Data
-
-#+begin_src jupyter-python
-SCALE=None
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-X_trials, y_trials = [], []
-
-n_neurons = 3319
-counter = 0
-for mouse in options['mice']:
-
-    options['mouse'] = mouse
-    options = set_options(**options)
-    X, y = get_X_y_days(**options)
-
-    print(mouse, X.shape, y.shape, options['n_days'])
-
-    X_scale = X.copy()
-    std_=1
-    for day in range(1, options['n_days']+1):
-        idx0 = (y.day==day) & (y.laser==0)
-
-        mean_ = 1
-        if SCALE is not None:
-            mean_ = np.nanmean(X[idx0], 0, keepdims=1)
-
-        if SCALE=='std':
-
-            std_ = np.nanstd(X[idx0], (0, 2), ddof=0, keepdims=1)
-
-            lo, hi = np.percentile(std_.ravel(), [5, 95])
-            std_ = np.clip(std_, lo, hi)
-
-        if SCALE == 'mad':
-            med = np.nanmedian(X[idx0], axis=(0,2), keepdims=True)  # often ~0
-            mad = np.nanmedian(np.abs(X[idx0] - med), axis=(0, 2), keepdims=True)
-            std_ = 1.4826 * mad + 1e-4
-
-            lo, hi = np.percentile(std_.ravel(), [5, 95])
-            std_ = np.clip(std_, lo, hi)
-
-        if SCALE=='std_trial':
-
-            std_ = np.nanstd(X[idx0], 0, ddof=0, keepdims=1)
-
-            lo, hi = np.percentile(std_.ravel(), [5, 95])
-            std_ = np.clip(std_, lo, hi)
-
-        if SCALE == 'mad_trial':
-            med = np.nanmedian(X[idx0], axis=0, keepdims=True)  # often ~0
-            mad = np.nanmedian(np.abs(X[idx0] - med), axis=0, keepdims=True)
-            std_ = 1.4826 * mad + 1e-4
-
-            lo, hi = np.percentile(std_.ravel(), [5, 95])
-            std_ = np.clip(std_, lo, hi)
-
-        idx = (y.day==day)
-        X_scale[idx] = (X[idx] - mean_) / std_
-
-    X_trial = np.zeros((X.shape[0], n_neurons, X.shape[-1])) * np.nan
-    X_trial[:, counter:X.shape[1]+counter, :] = X_scale
-
-    counter += X.shape[1]
-
-    X_trials.append(X_trial)
-
-    y['mouse'] = mouse
-    y_trials.append(y)
-
-X_trials = np.array(X_trials, dtype=object)
-y_trials = np.array(y_trials, dtype=object)
-#+end_src
-
-#+RESULTS:
-: JawsM01 (768, 184, 84) (768, 15) 4
-: JawsM06 (1152, 201, 84) (1152, 15) 6
-: JawsM12 (960, 423, 84) (960, 15) 5
-: JawsM15 (1152, 693, 84) (1152, 15) 6
-: JawsM18 (1152, 444, 84) (1152, 15) 6
-: ChRM04 (1152, 668, 84) (1152, 15) 6
-: ChRM23 (960, 232, 84) (960, 15) 5
-: ACCM03 (960, 361, 84) (960, 15) 5
-: ACCM04 (960, 113, 84) (960, 15) 5
-
-#+begin_src jupyter-python
-X_all = np.concatenate(X_trials, 0)
-y_all = pd.concat(y_trials)
-print(X_all.shape, y_all.shape)
-#+end_src
-
-#+RESULTS:
-: (9216, 3319, 84) (9216, 16)
-
-#+begin_src jupyter-python
-dum = ''
-if SCALE is not None:
-    dum = SCALE
-
-pkl_save(X_all, 'X_all_nan_%s' % dum, path="../data/pca")
-pkl_save(y_all, 'y_all_nan_%s' % dum, path="../data/pca")
-#+end_src
-
-#+RESULTS:
-: saving to ../data/pca/X_all_nan_.pkl
-: saving to ../data/pca/y_all_nan_.pkl
-
-* Single mouse
-** Load
-
-#+begin_src jupyter-python
-dum = ''
-if SCALE is not None:
-    dum = SCALE
-
-X_all = pkl_load('X_all_nan_%s' % dum, path="../data/pca")
-y_all = pkl_load('y_all_nan_%s' % dum, path="../data/pca")
-#+end_src
-
-#+RESULTS:
-: loading from ../data/pca/X_all_nan_.pkl
-: loading from ../data/pca/y_all_nan_.pkl
-
-#+begin_src jupyter-python
-y_all['sample'] = y_all.sample_odor
-y_all['test'] = y_all.test_odor
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-print(y_all.keys())
-#+end_src
-
-#+RESULTS:
-: Index(['sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response', 'laser',
-:        'day', 'choice', 'pair', 'odr_perf', 'odr_choice', 'odr_response',
-:        'odor_pair', 'learning', 'performance', 'mouse', 'sample', 'test'],
-:       dtype='object')
-
-** CV Scores
-*** utils
-
-#+begin_src jupyter-python
-def _get_base_estimator(estimator):
-    est = getattr(estimator, "best_estimator_", estimator)
-    if hasattr(est, "named_steps"):  # Pipeline
-        return list(est.named_steps.values())[-1]
-    return est
-
-
-def overlaps_scorer(estimator, X, y, IF_SIGN=0, eps=1e-6):
-    clf = getattr(estimator, "best_estimator_", estimator)
-
-    if not hasattr(clf, "decision_function"):
-        raise AttributeError("Resolved estimator has no decision_function method.")
-
-    model = _get_base_estimator(estimator)
-
-    if not hasattr(model, "coef_"):
-        raise AttributeError("Underlying model has no coef_ attribute.")
-
-    norm_w = np.linalg.norm(np.ravel(model.coef_)) + eps
-    # scores = clf.decision_function(X) / norm_w
-    scores = np.dot(X, model.coef_[0]) / norm_w
-
-    if IF_SIGN:
-        scores = (2 * y - 1) * scores
-
-    return np.nanmean(scores)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
-from sklearn.pipeline import Pipeline
-from mne.decoding import SlidingEstimator, GeneralizingEstimator
-from tqdm.auto import tqdm
-from joblib import Parallel, delayed
-
-import numpy as np
-from sklearn.pipeline import Pipeline
-
-def _unwrap_to_coef_estimator(est):
-    """Return an estimator that exposes coef_, unwrapping common sklearn wrappers."""
-    seen = set()
-    while True:
-        if id(est) in seen:
-            raise RuntimeError(f"Cycle detected while unwrapping {est!r}")
-        seen.add(id(est))
-
-        if hasattr(est, "coef_"):
-            return est
-
-        # GridSearchCV / RandomizedSearchCV
-        if hasattr(est, "best_estimator_"):
-            est = est.best_estimator_
-            continue
-
-        # Pipeline: take final step
-        if isinstance(est, Pipeline) or hasattr(est, "named_steps") or hasattr(est, "steps"):
-            steps = est.steps if hasattr(est, "steps") else list(est.named_steps.items())
-            est = steps[-1][1]
-            continue
-
-        # generic meta-estimator pattern
-        if hasattr(est, "estimator_"):
-            est = est.estimator_
-            continue
-
-        raise AttributeError(f"Cannot find coef_ in {type(est)}")
-
-def _get_coefs(estimator):
-    coefs = []
-    for est_t in estimator.estimators_:
-        est_c = _unwrap_to_coef_estimator(est_t)
-        coefs.append(est_c.coef_)
-    return np.stack(coefs, axis=0)
-
-def cross_val_score(
-    X,
-    y,
-    clf=None,
-    label_col="sample_odor",
-    cv=None,
-    groups=None,
-    scoring="accuracy",
-    mode="generalizing",
-    scaler=None,
-    n_jobs=128,
-):
-
-    start = perf_counter()
-
-    if isinstance(y, pd.DataFrame):
-        y_df = y.reset_index(drop=True)
-        labels = y_df[label_col].to_numpy()
-    else:
-        labels = np.asarray(y)
-        y_df = pd.DataFrame({label_col: labels})
-
-    m_clean = (
-        (y_df.laser == 0)
-        & (y_df.learning == "Expert")
-        & (y_df.performance == 1)
-        # & ((y_df.tasks == "DPA") | (y_df.odr_perf == 1))
-        & (y_df.tasks == "DPA")
-    )
-
-    Xc = X[m_clean]
-    yc = y_df.loc[m_clean].reset_index(drop=True)
-    yc_labels = yc[label_col].to_numpy()
-
-    if clf is None:
-        clf = LogisticRegressionCV(cv=5, solver="liblinear", max_iter=100, class_weight="balanced", n_jobs=None)
-        # clf = LogisticRegression(solver="liblinear", max_iter=100, class_weight="balanced", n_jobs=None)
-        # clf = LinearDiscriminantAnalysis()
-
-    pipeline = []
-    if scaler is not None:
-        if scaler == 'standard':
-            pipeline.append(("scaler", StandardScaler()))
-        elif self.scaler == 'center':
-            pipeline.append(("scaler", StandardScaler(with_std=False)))
-
-    pipeline.append(("model", clf))
-    pipe = Pipeline(pipeline)
-
-    if mode == "sliding":
-        estimator = SlidingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-    else:
-        estimator = GeneralizingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-
-    if cv is None:
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-
-    cv_scores, y_cv, cv_coefs = [], [], []
-    split_groups = None if groups is None else np.asarray(groups)[m_clean]
-
-    for train_idx, test_idx in cv.split(Xc, yc_labels, split_groups):
-
-        X_train, X_test = Xc[train_idx], Xc[test_idx]
-        y_train, y_test = yc_labels[train_idx], yc_labels[test_idx]
-
-        est = clone(estimator)
-        est.fit(X_train, y_train)
-
-        cv_coefs.append(_get_coefs(est))
-
-        # if folds == LeaveOneOut():
-        cv_score = est.score(X_test, y_test)
-        cv_scores.append(cv_score)
-        # else:
-
-        # for i in range(X_test.shape[0]):
-        #     cv_score = est.score(X_test[i:i+1], y_test[i:i+1])
-        #     cv_scores.append(cv_score)
-
-        # cv_scores = np.asarray(
-        #     Parallel(n_jobs=-1, backend="loky")(
-        #         delayed(est.score)(X_test[i:i+1], y_test[i:i+1])
-        #         for i in range(X_test.shape[0])
-        #     )
-        # )
-
-        y_cv.append(yc.iloc[test_idx].reset_index(drop=True))
-
-    cv_scores = np.asarray(cv_scores)
-    cv_coefs = np.asarray(cv_coefs)
-    y_cv = pd.concat(y_cv, axis=0, ignore_index=True)
-
-    print(cv_scores.shape, cv_coefs.shape, y_cv.shape)
-
-    est = clone(estimator)
-    est.fit(Xc, yc_labels)
-    coefs = _get_coefs(est)
-
-    m_pert = ~m_clean
-    if m_pert.mean() != 0:
-        Xp = X[m_pert]
-        yp = y.loc[m_pert].reset_index(drop=True)
-        yp_labels = yp[label_col].to_numpy()
-
-        print(Xp.shape, yp_labels.shape)
-
-        pert_scores = np.asarray(
-            Parallel(n_jobs=-1, backend="loky")(
-                delayed(est.score)(Xp[i:i+1], yp_labels[i:i+1])
-                for i in range(Xp.shape[0])
-            )
-        )
-
-        print(pert_scores.shape, cv_scores.shape)
-
-        Z_all = np.concatenate([cv_scores, pert_scores], axis=0)
-        y_all = pd.concat([y_cv, yp], axis=0, ignore_index=True)
-
-        end = perf_counter()
-        print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-        return Z_all, y_all, coefs
-
-    return cv_scores, y_cv, cv_coefs
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-def _unwrap_to_final_estimator(est):
-    seen = set()
-    while True:
-        if id(est) in seen:
-            raise RuntimeError("Cycle detected while unwrapping estimator.")
-        seen.add(id(est))
-
-        if hasattr(est, "best_estimator_"):
-            est = est.best_estimator_
-            continue
-
-        if isinstance(est, Pipeline) or hasattr(est, "steps") or hasattr(est, "named_steps"):
-            steps = est.steps if hasattr(est, "steps") else list(est.named_steps.items())
-            est = steps[-1][1]
-            continue
-
-        if hasattr(est, "estimator_"):
-            est = est.estimator_
-            continue
-
-        return est
-
-
-def _get_coef_single(est):
-    model = _unwrap_to_final_estimator(est)
-    if not hasattr(model, "coef_"):
-        raise AttributeError(f"{type(model)} has no coef_ attribute.")
-    return np.asarray(model.coef_)
-
-
-def _get_intercept_single(est):
-    model = _unwrap_to_final_estimator(est)
-    if not hasattr(model, "intercept_"):
-        raise AttributeError(f"{type(model)} has no intercept_ attribute.")
-    return np.asarray(model.intercept_)
-
-
-def _get_coefs(estimator):
-    return np.stack([_get_coef_single(est_t) for est_t in estimator.estimators_], axis=0)
-
-
-def _get_intercepts(estimator):
-    return np.stack([_get_intercept_single(est_t) for est_t in estimator.estimators_], axis=0)
-
-
-def _normalize_decision_function(dec, coefs, eps=1e-6):
-    norms = np.linalg.norm(coefs.reshape(coefs.shape[0], -1), axis=1) + eps
-
-    if dec.ndim == 2:
-        return dec / norms[None, :]
-    elif dec.ndim == 3:
-        return dec / norms[None, :, None]
-    else:
-        raise ValueError(f"Unexpected decision_function shape: {dec.shape}")
-#+end_src
-
-#+RESULTS:
-
-
-#+begin_src jupyter-python
-def overlaps_scorer(estimator, X, y, IF_SIGN=0, eps=1e-6):
-    """
-    Custom scorer called by MNE on a single fitted estimator, typically a Pipeline.
-    """
-    if not hasattr(estimator, "decision_function"):
-        raise AttributeError("Estimator has no decision_function method.")
-
-    dec = np.asarray(estimator.decision_function(X))
-
-    coef = _get_coef_single(estimator)
-    norm = np.linalg.norm(np.ravel(coef)) + eps
-    dec_norm = dec / norm
-
-    if IF_SIGN:
-        sgn = 2 * np.asarray(y) - 1
-        dec_norm = sgn * dec_norm
-
-    return np.nanmean(dec_norm)
-#+end_src
-
-#+RESULTS:
-
-
-#+begin_src jupyter-python
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-
-def cross_val_score(
-    X,
-    y,
-    clf=None,
-    label_col="sample_odor",
-    cv=None,
-    groups=None,
-    scoring="accuracy",
-    mode="generalizing",
-    scaler='standard',
-    n_jobs=128,
-    return_decision_function=False,
-    normalize_decision_function=False,
-):
-    start = perf_counter()
-
-    if isinstance(y, pd.DataFrame):
-        y_df = y.reset_index(drop=True)
-    else:
-        y_df = pd.DataFrame({label_col: np.asarray(y)})
-
-    m_clean = (
-        (y_df.laser == 0)
-        & (y_df.learning == "Expert")
-        & (y_df.performance == 1)
-        & (y_df.tasks == "DPA")
-    )
-
-    Xc = X[m_clean]
-    yc = y_df.loc[m_clean].reset_index(drop=True)
-    yc_labels = yc[label_col].to_numpy()
-
-    if clf is None:
-        clf = LogisticRegressionCV(
-            cv=5,
-            solver="liblinear",
-            max_iter=100,
-            class_weight="balanced",
-            n_jobs=None,
-        )
-
-        clf = LinearDiscriminantAnalysis(shrinkage='auto', solver='lsqr')
-
-    pipeline = []
-    if scaler is not None:
-        if scaler == "standard":
-            pipeline.append(("scaler", StandardScaler()))
-        elif scaler == "center":
-            pipeline.append(("scaler", StandardScaler(with_std=False)))
-
-    pipeline.append(("model", clf))
-    pipe = Pipeline(pipeline)
-
-    if mode == "sliding":
-        estimator = SlidingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-    else:
-        estimator = GeneralizingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-
-    if cv is None:
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-
-    cv_scores, y_cv, cv_coefs, cv_intercepts = [], [], [], []
-    cv_decisions = [] if return_decision_function else None
-
-    split_groups = None if groups is None else np.asarray(groups)[m_clean]
-
-    for train_idx, test_idx in cv.split(Xc, yc_labels, split_groups):
-        X_train, X_test = Xc[train_idx], Xc[test_idx]
-        y_train, y_test = yc_labels[train_idx], yc_labels[test_idx]
-
-        est = clone(estimator)
-        est.fit(X_train, y_train)
-
-        coefs_fold = _get_coefs(est)
-        cv_coefs.append(coefs_fold)
-        cv_intercepts.append(_get_intercepts(est))
-
-        cv_scores.append(est.score(X_test, y_test))
-
-        if return_decision_function:
-            dec = np.asarray(est.decision_function(X_test))
-            if normalize_decision_function:
-                dec = _normalize_decision_function(dec, coefs_fold)
-            cv_decisions.append(dec)
-
-        y_cv.append(yc.iloc[test_idx].reset_index(drop=True))
-
-    cv_scores = np.asarray(cv_scores)
-    cv_coefs = np.asarray(cv_coefs)
-    cv_intercepts = np.asarray(cv_intercepts)
-    y_cv = pd.concat(y_cv, axis=0, ignore_index=True)
-
-    print(cv_scores.shape, cv_coefs.shape, cv_intercepts.shape, y_cv.shape)
-
-    est = clone(estimator)
-    est.fit(Xc, yc_labels)
-    coefs = _get_coefs(est)
-    intercepts = _get_intercepts(est)
-
-    m_pert = ~m_clean
-    if m_pert.mean() != 0:
-        Xp = X[m_pert]
-        yp = y_df.loc[m_pert].reset_index(drop=True)
-        yp_labels = yp[label_col].to_numpy()
-
-        print(Xp.shape, yp_labels.shape)
-
-        pert_scores = np.asarray(
-            Parallel(n_jobs=-1, backend="loky")(
-                delayed(est.score)(Xp[i:i+1], yp_labels[i:i+1])
-                for i in range(Xp.shape[0])
-            )
-        )
-
-        Z_all = np.concatenate([cv_scores, pert_scores], axis=0)
-        y_all = pd.concat([y_cv, yp], axis=0, ignore_index=True)
-
-        if return_decision_function:
-            pert_decisions = np.asarray(est.decision_function(Xp))
-            if normalize_decision_function:
-                pert_decisions = _normalize_decision_function(pert_decisions, coefs)
-
-            end = perf_counter()
-            print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-            return Z_all, y_all, coefs, intercepts, cv_decisions, pert_decisions
-
-        end = perf_counter()
-        print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-        return Z_all, y_all, coefs, intercepts
-
-    if return_decision_function:
-        end = perf_counter()
-        print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-        return cv_scores, y_cv, cv_coefs, cv_intercepts, cv_decisions
-
-    end = perf_counter()
-    print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-    return cv_scores, y_cv, cv_coefs, cv_intercepts
-#+end_src
-
-#+RESULTS:
-
-
-
-*** model
-
- #+begin_src jupyter-python
-import mne
-mne.set_log_level("ERROR")
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-options['epochs'] = ['TEST']
-epoch = options['bins_' + options['epochs'][0]]
-
-dum = options['epochs'][0]
-options['learning'] = None
-if options['learning'] is not None:
-    dum += '_' + options['learning']
-
-dum += '_DPA'
-print(dum)
-#+end_src
-
-#+RESULTS:
-: TEST_DPA
-
-#+begin_src jupyter-python
-def smooth_and_bin2(X, sigma=1.0):
-    X_s = gaussian_filter1d(X, sigma=sigma, axis=-1, mode='nearest')
-    T = X_s.shape[-1]
-    assert T % 2 == 0
-    return X_s.reshape(*X_s.shape[:-1], T//2, 2).mean(-1)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-mne_estimator = "generalizing"
-scoring = "overlaps"
-dum += '_' + scoring
-
-if scoring=="overlaps":
-    scoring = overlaps_scorer
-
-# n_splits = 5
-# n_repeats = 1
-# folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
-folds = LeaveOneOut()
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-print(options['mice'])
-#+end_src
-
-#+RESULTS:
-: ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
-
-#+begin_src jupyter-python
-X_mice, y_mice, w_mice = [], [], []
-
-for mouse in [options['mice'][3]]:
-    idx = (y_all['mouse'] == mouse)
-    if options['learning'] is not None:
-        idx &= (y_all.learning == options['learning'])
-
-    X_pca = X_all[idx]
-    y_pca = y_all.loc[idx].reset_index(drop=True)
-
-    # drop padded neurons for this mouse
-    valid_neurons = ~np.all(np.isnan(X_pca), axis=(0, 2))
-    X_pca = X_pca[:, valid_neurons, :]
-    X_pca = smooth_and_bin2(X_pca, sigma=1.0)
-
-    print('mouse', mouse)
-
-    Z_sample, y_sample, w_sample, _ = cross_val_score(X_pca, y_pca, clf=None, label_col="sample_odor", cv=folds, scoring=scoring, mode=mne_estimator)
-    Z_choice, y_choice, w_choice, _ = cross_val_score(X_pca, y_pca, clf=None, label_col="choice", cv=folds, scoring=scoring, mode=mne_estimator)
-    Z_test, y_test, w_test, _ = cross_val_score(X_pca, y_pca, clf=None, label_col="test_odor", cv=folds, scoring=scoring, mode=mne_estimator)
-
-    Z_mouse = np.stack([Z_sample, Z_choice, Z_test], axis=1)
-    w_mouse = np.stack([w_sample, w_choice, w_test], axis=1)
-    y_mouse = y_sample
-
-    X_mice.append(Z_mouse)
-    y_mice.append(y_mouse)
-    w_mice.append(w_mouse)
-#+end_src
-
-#+RESULTS:
-: mouse JawsM15
-
-
-#+begin_src jupyter-python
-print(w_mice[0].shape)
-w_single = np.concatenate(w_mice, axis=-1)
-w_single = np.nanmean(w_single[:, :, 0], 0)
-print(w_single.shape)
-#+end_src
-
-#+RESULTS:
-: (42, 3, 1, 693)
-: (3, 693)
-
-#+begin_src jupyter-python
-X_single = np.concatenate(X_mice, axis=0)
-# w_single = np.concatenate(w_mice, axis=0)
-# w_single = w_single.mean(0)[:, 0]
-y_single = pd.concat(y_mice, ignore_index=True)
-
-print(X_single.shape, y_single.shape) # w_single.shape)
-#+end_src
-
-#+RESULTS:
-: (1152, 3, 42, 42) (1152, 18)
-
-#+begin_src jupyter-python
-pkl_save(X_single, 'single_traj_' + dum, path="../data/class/")
-pkl_save(y_single, 'single_labels_' + dum, path="../data/class/")
-pkl_save(w_mice, 'single_coefs_' + dum, path="../data/class/")
-#+end_src
-
-#+RESULTS:
-: saving to ../data/class//single_traj_TEST_DPA_overlaps.pkl
-: saving to ../data/class//single_labels_TEST_DPA_overlaps.pkl
-: saving to ../data/class//single_coefs_TEST_DPA_overlaps.pkl
-
-** Load
-
- #+begin_src jupyter-python
-X_single = pkl_load('single_traj_' + dum, path="../data/class/")
-y_single = pkl_load( 'single_labels_' + dum, path="../data/class/")
-w_single = pkl_load( 'single_coefs_' + dum, path="../data/class/")
-#+end_src
-
-#+RESULTS:
-: loading from ../data/class//single_traj_TEST_overlaps.pkl
-: loading from ../data/class//single_labels_TEST_overlaps.pkl
-: loading from ../data/class//single_coefs_TEST_overlaps.pkl
-
-
-#+begin_src jupyter-python
-print(X_single.shape, y_single.shape, w_single.shape)
-#+end_src
-
-#+RESULTS:
-: (768, 3, 42, 42) (768, 18) (3, 184)
-
-** Trajectories
-
-#+begin_src jupyter-python
-# X_epoch = np.diagonal(X_single, axis1=-2, axis2=-1)
-X_epoch = X_single[..., options['bins_LD'] // 2, :].mean(-2)
-X_epoch -= X_epoch[..., options['bins_BL']//2].mean(-1, keepdims=True)
-print(X_epoch.shape)
-#+end_src
-
-#+RESULTS:
-: (1152, 3, 42)
-
-#+begin_src jupyter-python
-n_comp = 3
-laser = 0
-i_mouse= -1
-
-idx_correct = (y_single.learning=='Expert') & (y_single.performance==1) & (y_single.tasks=='DPA')
-idx_mouse = True
-if i_mouse !=-1:
-    idx_mouse = (y_single.mouse==options['mice'][i_mouse])
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ['#332288', '#88CCEE', '#117733', '#44AA99']
-
-pair = ['AC', 'AD', 'BD', 'BC']
-xtime = np.linspace(0, 14, 42)
-
-for i in range(4):
-    mask = (y_single.odor_pair==i) & (y_single.laser==laser) & idx_mouse & idx_correct
-    X_sel = X_epoch[mask]
-
-    X_avg = np.mean(X_sel, 0) # / np.linalg.norm(X_sel, axis=0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = np.std(X_sel, 0) / np.sqrt(X_sel.shape[0])  # SEM
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        y_sem = X_sem[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        add_vlines(ax[k], if_dpa=0)
-
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-        ax[k].set_xlim([0, 14])
-        # ax[k].set_ylim([-2.5, 2.5])
-        ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-ax[0].set_ylabel('Sample Code')
-ax[1].set_ylabel('Choice Code')
-ax[2].set_ylabel('Test Code')
-
-plt.savefig('./figures/single/pca_traj_%s.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_42.png]]
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-palette = sns.color_palette("muted")
-color = [palette[2], palette[0], palette[3]]
-
-pair = y_single.tasks.unique()
-xtime = np.linspace(0, 14, 42)
-
-for i in range(len(pair)):
-    mask = (y_single.tasks==y_single.tasks.unique()[i]) & (y_single.laser==laser) & idx_mouse & idx_correct & ((y_single.tasks=='DPA') | (y_single.odr_perf==1))
-    X_sel = X_epoch[mask]
-
-    X_avg = X_sel.mean(0)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        y_sem = X_sem[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=0)
-
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-        ax[k].set_xlim([0, 14])
-        # ax[k].set_ylim([-4, 4])
-        ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-ax[0].set_ylabel('Sample Code')
-ax[1].set_ylabel('Choice Code')
-ax[2].set_ylabel('Test Code')
-
-plt.savefig('./figures/single/pca_traj_%s_tasks.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_43.png]]
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ['#332288',  '#44AA99']
-
-pair = ['A', 'B']
-xtime = np.linspace(0, 14, 42)
-
-for i in range(2):
-    mask = (y_single.sample_odor==i) & (y_single.laser==laser) & idx_mouse & idx_correct
-    X_sel = X_epoch[mask]         # Subselect rows
-    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        y_sem = X_sem[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=0)
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-
-        ax[k].set_xlim([0, 14])
-        # ax[k].set_ylim([-2.5, 2.5])
-        ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-ax[0].set_ylabel('Sample Code')
-ax[1].set_ylabel('Choice Code')
-ax[2].set_ylabel('Test Code')
-plt.savefig('./figures/single/pca_traj_%s_sample.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_44.png]]
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ["#377eb8", "#4daf4a"]
-
-pair = ['No Lick', 'Lick']
-xtime = np.linspace(0, 14, 42)
-
-for i in range(2):
-    mask = (y_single.choice==i) & (y_single.laser==laser) & idx_mouse & idx_correct
-    X_sel = X_epoch[mask]         # Subselect rows
-    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        y_sem = X_sem[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=0)
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-
-        ax[k].set_xlim([0, 14])
-        # ax[k].set_ylim([-2, 2])
-        ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-ax[0].set_ylabel('Sample Code')
-ax[1].set_ylabel('Choice Code')
-ax[2].set_ylabel('Test Code')
-plt.savefig('./figures/single/pca_traj_%s_licks.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_45.png]]
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-
-color = ["#377eb8", "#4daf4a"]
-
-pair = ['Odor C', 'Odor D']
-xtime = np.linspace(0, 14, 42)
-
-for i in range(2):
-    mask = (y_single.test_odor==i) & (y_single.laser==0) & idx_mouse & idx_correct
-    X_sel = X_epoch[mask]
-    X_avg = X_sel.mean(0)    # Mean over trials/samples, shape: (n_comp, n_time)
-    X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
-
-    for k in range(n_comp):
-        y_avg = X_avg[k]
-        y_sem = X_sem[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
-        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-        ax[k].axhline(0, ls='--', color='k')
-        ax[k].set_xlabel('Time')
-        ax[k].set_ylabel('PC %d' % (k+1))
-        add_vlines(ax[k], if_dpa=0)
-        ax[k].legend(fontsize=12, frameon=0, loc='best')
-
-        ax[k].set_xlim([0, 14])
-        # ax[k].set_ylim([-8, 8])
-        ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-ax[0].set_ylabel('Sample Code')
-ax[1].set_ylabel('Choice Code')
-ax[2].set_ylabel('Test Code')
-plt.savefig('./figures/single/pca_traj_%s_test.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_46.png]]
-
-#+begin_src jupyter-python
-
-#+end_src
-
-#+RESULTS:
-
-** Comparison
-
-#+begin_src jupyter-python
-# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
-import numpy as np
-import pandas as pd
-# import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-assert isinstance(y_single, pd.DataFrame)
-assert X_epoch.shape[0] == len(y_single)
-
-pcs = [0, 1, 2]
-pc_names = [f"PC{p+1}" for p in pcs]
-
-# ---- build trial table + filter ----
-df = y_single.reset_index(drop=True).copy()
-
-# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
-df["traj"] = list(X_epoch[:, pcs, :]*10)
-
-df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
-# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
-bins = options["bins_DELAY"] // 2
-
-rows = []
-for (mouse, odor, learning), g in df.groupby(["mouse", "sample_odor", "learning"], sort=False):
-    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
-    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
-    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
-    for i, pc in enumerate(pc_names):
-        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
-
-plot_df = pd.DataFrame(rows)
-
-# make mouse categorical for stable order
-mouse_order = sorted(plot_df["mouse"].unique())
-plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
-
-# ---- BAR FIGURE ----
-g = sns.catplot(
-    data=plot_df, kind="bar",
-    x="mouse", y="value",
-    col="pc", col_order=pc_names,
-    hue="learning",
-    height=3.4, aspect=1.15,
-    errorbar=None,
-)
-g.set_titles("{col_name}")
-g.set_axis_labels("Mouse", "Sample Code")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    for lab in ax.get_xticklabels():
-        lab.set_rotation(45)
-        lab.set_rotation_mode("anchor")
-        lab.set_ha("right")
-        lab.set_va("top")
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-    ax.set_ylim([0, 0.5])
-    ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
-
-# legend outside
-g._legend.set_title("Learning")
-g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
-g._legend.set_bbox_to_anchor((0.98, 0.5))
-
-plt.savefig('./figures/pca/pca_bars_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_46.png]]
-
-
-#+begin_src jupyter-python
-# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
-import numpy as np
-import pandas as pd
-
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-df = plot_df.copy()
-
-# normalize learning labels -> stage in {"Naive","Expert"}
-if np.issubdtype(df["learning"].dtype, np.number):
-    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
-else:
-    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
-                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
-
-df = df[df["stage"].isin(["Naive", "Expert"])]
-
-# average across odors -> one value per (mouse, stage, pc)
-mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
-
-wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
-        .reset_index()
-        .dropna(subset=["Naive", "Expert"]))
-
-mice = pd.Index(wide["mouse"].unique()).sort_values()
-palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
-
-g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
-g.map_dataframe(
-    sns.scatterplot,
-    x="Naive", y="Expert",
-    hue="mouse", palette=palette,
-    s=70, edgecolor="black", linewidth=0.3,
-    legend=False
-)
-
-g.set_titles("{col_name}")
-g.set_xlabels("")
-g.set_ylabels("")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    x0, x1 = ax.get_xlim()
-    y0, y1 = ax.get_ylim()
-    lo, hi = min(x0, y0), max(x1, y1)
-    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-
-    ax.set_xlim([0, 0.3])
-    ax.set_ylim([0, 0.3])
-
-    ax.set_xticks([0, 0.1, 0.2, 0.3])
-    ax.set_yticks([0, 0.1, 0.2, 0.3])
-    ax.set_xlabel('Naive')
-    ax.set_ylabel('Expert')
-    ax.set_title('Sample Code')
-# g.fig.supxlabel("Naive")
-# g.fig.supylabel("Expert")
-g.fig.tight_layout()
-
-plt.savefig('./figures/single/pca_scatter_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_47.png]]
-
-#+begin_src jupyter-python
-# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-assert isinstance(y_single, pd.DataFrame)
-assert X_epoch.shape[0] == len(y_single)
-
-pcs = [0, 1, 2]
-pc_names = [f"PC{p+1}" for p in pcs]
-
-# ---- build trial table + filter ----
-df = y_single.reset_index(drop=True).copy()
-
-# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
-df["traj"] = list(X_epoch[:, pcs, :]*10)
-
-df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
-# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
-bins = options["bins_POSTTASK"] // 2
-
-rows = []
-for (mouse, odor, learning), g in df.groupby(["mouse", "choice", "learning"], sort=False):
-    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
-
-    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
-    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
-
-    for i, pc in enumerate(pc_names):
-        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
-
-plot_df = pd.DataFrame(rows)
-
-# make mouse categorical for stable order
-mouse_order = sorted(plot_df["mouse"].unique())
-plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
-
-# ---- BAR FIGURE ----
-g = sns.catplot(
-    data=plot_df, kind="bar",
-    x="mouse", y="value",
-    col="pc", col_order=pc_names,
-    hue="learning",
-    height=3.4, aspect=1.15,
-    errorbar=None,
-)
-g.set_titles("{col_name}")
-g.set_axis_labels("Mouse", "Choice Code")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    for lab in ax.get_xticklabels():
-        lab.set_rotation(45)
-        lab.set_rotation_mode("anchor")
-        lab.set_ha("right")
-        lab.set_va("top")
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-    # ax.set_ylim([0, 0.5])
-    # ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
-
-# legend outside
-g._legend.set_title("Learning")
-g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
-g._legend.set_bbox_to_anchor((0.98, 0.5))
-
-plt.savefig('./figures/pca/pca_bars_choice_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_48.png]]
-
-#+begin_src jupyter-python
-# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-df = plot_df.copy()
-
-# normalize learning labels -> stage in {"Naive","Expert"}
-if np.issubdtype(df["learning"].dtype, np.number):
-    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
-else:
-    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
-                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
-
-df = df[df["stage"].isin(["Naive", "Expert"])]
-
-# average across odors -> one value per (mouse, stage, pc)
-mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
-
-wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
-        .reset_index()
-        .dropna(subset=["Naive", "Expert"]))
-
-mice = pd.Index(wide["mouse"].unique()).sort_values()
-palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
-
-g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
-g.map_dataframe(
-    sns.scatterplot,
-    x="Naive", y="Expert",
-    hue="mouse", palette=palette,
-    s=70, edgecolor="black", linewidth=0.3,
-    legend=False
-)
-
-g.set_titles("{col_name}")
-g.set_xlabels("")
-g.set_ylabels("")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    x0, x1 = ax.get_xlim()
-    y0, y1 = ax.get_ylim()
-    lo, hi = min(x0, y0), max(x1, y1)
-    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-
-    ax.set_xlim([0, 0.3])
-    ax.set_ylim([0, 0.3])
-
-    ax.set_xticks([0, 0.1, 0.2, 0.3])
-    ax.set_yticks([0, 0.1, 0.2, 0.3])
-    ax.set_xlabel('Naive')
-    ax.set_ylabel('Expert')
-    ax.set_title('Choice Code')
-
-# g.fig.supxlabel("Naive")
-# g.fig.supylabel("Expert")
-g.fig.tight_layout()
-
-plt.savefig('./figures/single/pca_scatter_choice_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_49.png]]
-
-#+begin_src jupyter-python
-# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-assert isinstance(y_single, pd.DataFrame)
-assert X_epoch.shape[0] == len(y_single)
-
-pcs = [0, 1, 2]
-pc_names = [f"PC{p+1}" for p in pcs]
-
-# ---- build trial table + filter ----
-df = y_single.reset_index(drop=True).copy()
-
-# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
-df["traj"] = list(X_epoch[:, pcs, :]*10)
-
-df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
-# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
-bins = options["bins_POSTTASK"]//2
-
-rows = []
-for (mouse, odor, learning), g in df.groupby(["mouse", "test_odor", "learning"], sort=False):
-    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
-
-    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
-    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
-
-    for i, pc in enumerate(pc_names):
-        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
-
-plot_df = pd.DataFrame(rows)
-
-# make mouse categorical for stable order
-mouse_order = sorted(plot_df["mouse"].unique())
-plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
-
-# ---- BAR FIGURE ----
-g = sns.catplot(
-    data=plot_df, kind="bar",
-    x="mouse", y="value",
-    col="pc", col_order=pc_names,
-    hue="learning",
-    height=3.4, aspect=1.15,
-    errorbar=None,
-)
-g.set_titles("{col_name}")
-g.set_axis_labels("Mouse", "Test Code")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    for lab in ax.get_xticklabels():
-        lab.set_rotation(45)
-        lab.set_rotation_mode("anchor")
-        lab.set_ha("right")
-        lab.set_va("top")
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-    # ax.set_ylim([0, 0.5])
-    # ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
-
-# legend outside
-g._legend.set_title("Learning")
-g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
-g._legend.set_bbox_to_anchor((0.98, 0.5))
-
-plt.savefig('./figures/pca/pca_bars_test_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_50.png]]
-
-#+begin_src jupyter-python
-# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-df = plot_df.copy()
-
-# normalize learning labels -> stage in {"Naive","Expert"}
-if np.issubdtype(df["learning"].dtype, np.number):
-    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
-else:
-    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
-                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
-
-df = df[df["stage"].isin(["Naive", "Expert"])]
-
-# average across odors -> one value per (mouse, stage, pc)
-mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
-
-wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
-        .reset_index()
-        .dropna(subset=["Naive", "Expert"]))
-
-mice = pd.Index(wide["mouse"].unique()).sort_values()
-palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
-
-g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
-g.map_dataframe(
-    sns.scatterplot,
-    x="Naive", y="Expert",
-    hue="mouse", palette=palette,
-    s=70, edgecolor="black", linewidth=0.3,
-    legend=False
-)
-
-g.set_titles("{col_name}")
-g.set_xlabels("")
-g.set_ylabels("")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    x0, x1 = ax.get_xlim()
-    y0, y1 = ax.get_ylim()
-    lo, hi = min(x0, y0), max(x1, y1)
-    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-
-    ax.set_xlim([0, 0.3])
-    ax.set_ylim([0, 0.3])
-
-    ax.set_xticks([0, 0.1, 0.2, 0.3])
-    ax.set_yticks([0, 0.1, 0.2, 0.3])
-    ax.set_xlabel('Naive')
-    ax.set_ylabel('Expert')
-    ax.set_title('Test Code')
-
-# g.fig.supxlabel("Naive")
-# g.fig.supylabel("Expert")
-g.fig.tight_layout()
-
-plt.savefig('./figures/single/pca_scatter_test_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_51.png]]
-
-#+begin_src jupyter-python
-
-#+end_src
-
-#+RESULTS:
-
-** Embeddings
-*** spatial filter
-
-#+begin_src jupyter-python
-print(w_single.shape)
-
-#+end_src
-
-#+RESULTS:
-: (3, 3319)
-
-#+begin_src jupyter-python
-z_lim =.5
-size = 0.1
-
-import cmocean
-cmap=cmocean.cm.phase
-
-theta = np.arctan2(w_single[1], w_single[0]) * 180 / np.pi
-idx = np.argsort(theta)
-
-theta_norm = (theta+ 360) % (360)
-
-counts, bins, patches = plt.hist(theta_norm, bins='auto', range=(0, 360), density=1)
-
-bin_centers = 0.5*(bins[:-1] + bins[1:])
-colors = [cmap(center/(360)) for center in bin_centers]
-
-for patch, color in zip(patches, colors):
-    patch.set_facecolor(color)
-
-plt.xlabel('Neuron Loc (°)')
-plt.ylabel('Density')
-plt.savefig('./figures/single/pca_weights_%s_hist.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_53.png]]
-
-#+begin_src jupyter-python
-from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
-
-for k in range(n_comp):
-    sc = ax[k].scatter(theta[idx], w_single[k][idx], alpha=0.5, c=theta_norm[idx], cmap=cmap, rasterized=1)
-    ax[k].plot(theta[idx], gaussian_filter1d(w_single[k][idx], int(size*w_single.shape[1]), mode='wrap'), 'k')
-    ax[k].axhline(0, ls='--', color='k')
-    ax[k].set_ylabel('Weights PC %d' % (k+1))
-    ax[k].set_xlabel('Neuron Loc (°)')
-    ax[k].set_ylim([-z_lim, z_lim])
-
-ax[-1].set_ylim([-z_lim/10, z_lim/10])
-plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
-plt.savefig('./figures/single/pca_weights_%s.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_54.png]]
-
-#+begin_src jupyter-python
-from scipy.ndimage import gaussian_filter1d, uniform_filter1d
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, width))
-
-ax[0].scatter(w_single[0][idx], w_single[1][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5, rasterized=1)
-ax[0].plot(gaussian_filter1d(w_single[0][idx], int(size*w_single.shape[1]), mode='wrap'), gaussian_filter1d(w_single[1][idx], int(size*w_single.shape[1]), mode='wrap'), 'k')
-
-ax[0].set_xlabel('PC 1')
-ax[0].set_ylabel('PC 2')
-
-ax[1].scatter(w_single[0][idx], w_single[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5, rasterized=1)
-ax[1].plot(gaussian_filter1d(w_single[0][idx], int(size*w_single.shape[1]), mode='wrap'), gaussian_filter1d(w_single[2][idx], int(size*w_single.shape[1]), mode='wrap'), 'k')
-ax[1].set_xlabel('PC 1')
-ax[1].set_ylabel('PC 3')
-
-sc = ax[2].scatter(w_single[1][idx], w_single[2][idx], c=theta_norm[idx], cmap=cmap, alpha=0.5, rasterized=1)
-ax[2].plot(gaussian_filter1d(w_single[1][idx], int(size*w_single.shape[1]), mode='wrap'), gaussian_filter1d(w_single[2][idx], int(size*w_single.shape[1]), mode='wrap'), 'k')
-ax[2].set_xlabel('PC 2')
-ax[2].set_ylabel('PC 3')
-
-for k in range(3):
-    ax[k].set_xlim(-z_lim, z_lim)
-    ax[k].set_ylim(-z_lim, z_lim)
-
-plt.colorbar(sc, ax=ax[-1], label='Angle (°)')
-plt.savefig('./figures/single/pca_weights_%s_2D.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_55.png]]
-
-*** theta space
-
-#+begin_src jupyter-python
-import numpy as np
-from scipy.ndimage import gaussian_filter1d
-from scipy.stats import t
-
-nbins = 16
-theta_bins = np.linspace(0, 360, nbins+1)
-theta_digitized = np.digitize(theta_norm, theta_bins) - 1
-
-w_mean = np.full((3, nbins), np.nan)
-w_sem  = np.full((3, nbins), np.nan)
-w_n    = np.zeros((3, nbins), dtype=int)
-
-alpha = 0.05  # 95% CI
-
-for i in range(nbins):
-    mask = theta_digitized == i
-    for j in range(3):
-        x = w_single[j, mask]          # shape (n_i,)
-        n = x.size
-        w_n[j, i] = n
-        if n >= 2:
-            w_mean[j, i] = np.mean(x)
-            w_sem[j, i]  = np.std(x, ddof=1) / np.sqrt(n)
-        elif n == 1:
-            w_mean[j, i] = x[0]
-            w_sem[j, i]  = np.nan
-
-# t critical value per bin (depends on n)
-tcrit = np.full((3, nbins), np.nan)
-for j in range(3):
-    for i in range(nbins):
-        n = w_n[j, i]
-        if n >= 2:
-            tcrit[j, i] = t.ppf(1 - alpha/2, df=n-1)
-
-ci_lo = w_mean - tcrit * w_sem
-ci_hi = w_mean + tcrit * w_sem
-
-# optional: smooth mean and CI bounds (approximate)
-sigma = 1
-w_mean_s = gaussian_filter1d(w_mean, sigma=sigma, axis=1, mode='wrap')
-ci_lo_s  = gaussian_filter1d(ci_lo,  sigma=sigma, axis=1, mode='wrap')
-ci_hi_s  = gaussian_filter1d(ci_hi,  sigma=sigma, axis=1, mode='wrap')
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import matplotlib.pyplot as plt
-from numpy import deg2rad
-
-bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
-theta_plot = deg2rad(bin_centers) * 180/np.pi  # degrees
-
-fig, axs = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height))
-
-for i, ax in enumerate(axs):
-    ax.plot(theta_plot, w_mean_s[i], lw=2)
-    ax.fill_between(theta_plot, ci_lo_s[i], ci_hi_s[i], alpha=0.25)
-    ax.axhline(0, ls='--', color='k')
-    ax.set_ylabel(f'Weights PC {i+1}')
-    ax.set_xlabel('Neuron Loc (°)')
-
-axs[-1].axvline(45)
-axs[-1].axvline(225)
-plt.savefig(f'./figures/single/pca_weights_{dum}_bin.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_57.png]]
-
-** Opto
-
-#+begin_src jupyter-python
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15','JawsM18', 'ChRM04', 'ChRM23']
-# laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM18', 'ChRM04', 'ChRM23']
-laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15',  'JawsM18']
-
-tasks = ['DPA']
-stages= ['Naive', 'Expert']
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-traj_mouse = []
-for i_mouse, mouse in enumerate(laser_mice):
-    idx = (y_single.mouse==mouse) & (y_single.laser==0)
-    X_idx = X_epoch[idx]
-    y_idx = y_single[idx]
-
-    traj_ = []
-
-    for j in stages:
-        for i in range(2):
-            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) & (y_idx.performance==1)
-            traj_.append(X_idx[mask].mean(0))
-
-    traj_mouse.append(traj_)
-
-traj_mouse = np.array(traj_mouse)
-print(traj_mouse.shape)
-#+end_src
-
-#+RESULTS:
-: (5, 4, 3, 42)
-
-#+begin_src jupyter-python
-traj_opto = []
-for i_mouse, mouse in enumerate(laser_mice):
-    idx = (y_single.mouse==mouse) & (y_single.laser==1)
-    X_idx = X_epoch[idx]
-    y_idx = y_single[idx]
-
-    traj_ = []
-
-    for j in stages:
-        for i in range(2):
-            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) # & (y_idx.performance==1)
-            traj_.append(X_idx[mask].mean(0))
-
-    traj_opto.append(traj_)
-
-traj_opto = np.array(traj_opto)
-print(traj_opto.shape)
-#+end_src
-
-#+RESULTS:
-: (5, 4, 3, 42)
-
-#+begin_src jupyter-python
-fp_mouse = np.nanmean(traj_mouse[..., options['bins_DELAY']//2], -1)
-fp_opto = np.nanmean(traj_opto[..., options['bins_DELAY']//2], -1)
-
-fp_mouse = np.nanmean(traj_mouse[..., options['bins_LD']//2], -1)
-fp_opto = np.nanmean(traj_opto[..., options['bins_LD']//2], -1)
-
-print(fp_mouse.shape)
-
-pc1 = fp_mouse[..., 0]
-pc2 = fp_mouse[..., 1]
-pc3 = fp_mouse[..., 2]
-
-pc1_opto = fp_opto[..., 0]
-pc2_opto = fp_opto[..., 1]
-pc3_opto = fp_opto[..., 2]
-#+end_src
-
-#+RESULTS:
-: (5, 4, 3)
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*height, height), sharey=1)
-
-for i in range(pc1.shape[0]):
-    ax[0].scatter(pc1[i], pc2[i], label=options['mice'][i])
-    ax[1].scatter(pc1_opto[i], pc2_opto[i], label=options['mice'][i])
-
-for k in range(2):
-    ax[k].axvline(0, color='k')
-    ax[k].axhline(0, color='k')
-
-    ax[k].set_xlabel('PC1')
-    ax[k].set_ylabel('PC2')
-# plt.legend(fontsize=12, frameon=0)
-plt.savefig('./figures/pca/opto_pc1_pc2_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_60.png]]
-
-#+begin_src jupyter-python
-perf_off = y_single[y_single['mouse'].isin(laser_mice) & (y_single.laser==0)].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
-perf_on = y_single[y_single['mouse'].isin(laser_mice) & (y_single.laser==1)].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
-
-perf_off = perf_off[perf_off.learning.isin(stages)]
-perf_on = perf_on[perf_on.learning.isin(stages)]
-
-delta_dpa = (perf_on['performance'] - perf_off['performance']).values
-print(perf_off.shape, perf_on.shape)
-print(delta_dpa)
-#+end_src
-
-#+RESULTS:
-: (20, 4) (20, 4)
-: [ 0.          0.04166667  0.         -0.00694444  0.00694444  0.08333333
-:  -0.04166667 -0.02777778  0.01041667  0.0625      0.09375     0.04166667
-:  -0.10416667 -0.02083333 -0.02777778 -0.01388889  0.00694444 -0.02777778
-:  -0.00694444  0.04861111]
-
-#+begin_src jupyter-python
-perf_off = y_single[y_single['mouse'].isin(laser_mice) & (y_single.laser==0)].groupby(['mouse', 'sample_odor', 'learning'])['odr_perf'].mean().reset_index()
-perf_on = y_single[y_single['mouse'].isin(laser_mice) & (y_single.laser==1)].groupby(['mouse', 'sample_odor', 'learning'])['odr_perf'].mean().reset_index()
-
-perf_off = perf_off[perf_off.learning.isin(stages)]
-perf_on = perf_on[perf_on.learning.isin(stages)]
-
-delta_odr = (perf_on['odr_perf'] - perf_off['odr_perf']).values
-print(perf_off.shape, perf_on.shape)
-print(delta_odr)
-#+end_src
-
-#+RESULTS:
-: (20, 4) (20, 4)
-: [ 0.03125     0.02083333 -0.03125     0.05208333 -0.02083333  0.
-:   0.          0.          0.          0.02083333  0.015625    0.0625
-:   0.07291667  0.07291667  0.0625      0.0625     -0.02083333  0.
-:   0.02083333  0.03125   ]
-
-#+begin_src jupyter-python
-dPC1 = (pc1_opto - pc1).reshape(-1)
-dPC2 = (pc2_opto - pc2).reshape(-1)
-dPC3 = (pc3_opto - pc3).reshape(-1)
-print(dPC1.shape, dPC2.shape)
-#+end_src
-
-#+RESULTS:
-: (20,) (20,)
-
-#+begin_src jupyter-python
-df = perf_off[['mouse', 'sample_odor']]
-df['delta_dpa'] = delta_dpa
-df['delta_odr'] = delta_odr
-
-df['mouse'] = pd.Categorical(df['mouse'], categories=laser_mice, ordered=True)
-df = df.sort_values('mouse')
-
-df['delta_pc1'] = dPC1
-df['delta_pc2'] = dPC2
-df['delta_pc3'] = dPC3
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-from scipy.stats import pearsonr
-
-palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1)
-
-df_ = df.copy()
-
-for i, delta_perf in enumerate(['delta_dpa', 'delta_odr']):
-    sns.regplot(data=df_, x='delta_pc1', y=delta_perf, scatter=True,
-                fit_reg=True, ci=95, ax=ax[i],
-                scatter_kws={'s': 0, 'alpha': 0.7},
-                line_kws={'color': 'k', 'lw': 2, 'ls':'--'})
-
-    sns.scatterplot(data=df_, x='delta_pc1', y=delta_perf,
-                    hue='mouse', style=None, s=80, alpha=0.8, ax=ax[i],
-                    legend=None, palette=palette)
-
-    corr, p_value = pearsonr(df_['delta_pc1'].dropna(), df_[delta_perf].dropna())
-
-    annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
-    ax[i].annotate(annotation, xy=(.65, 0.95), xycoords='axes fraction', fontsize=14,
-                backgroundcolor='white', verticalalignment='top', horizontalalignment='left',
-                bbox=dict(edgecolor=None, facecolor='white', boxstyle='round'))
-
-    ax[i].set_xlabel("$\\Delta$ PC1")
-    ax[i].set_ylabel("$\\Delta$ Performance")
-
-ax[0].set_ylabel("$\\Delta$ Performance")
-ax[1].set_ylabel("")
-plt.savefig('./figures/pca/opto_pc1_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_65.png]]
-
-#+begin_src jupyter-python
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-from scipy.stats import pearsonr
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1)
-
-df_ = df.copy()
-
-for i, delta_perf in enumerate(['delta_dpa', 'delta_odr']):
-    sns.regplot(data=df_, x='delta_pc2', y=delta_perf, scatter=True,
-                fit_reg=True, ci=95, ax=ax[i],
-                scatter_kws={'s': 0, 'alpha': 0.7},
-                line_kws={'color': 'k', 'lw': 2, 'ls':'--'})
-
-    sns.scatterplot(data=df_, x='delta_pc2', y=delta_perf,
-                    hue='mouse', style=None, s=80, alpha=0.8, ax=ax[i],
-                    legend=None, palette=palette)
-
-    corr, p_value = pearsonr(df_['delta_pc2'].dropna(), df_[delta_perf].dropna())
-
-    annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
-    ax[i].annotate(annotation, xy=(.65, 0.95), xycoords='axes fraction', fontsize=14,
-                backgroundcolor=None, verticalalignment='top', horizontalalignment='left',
-                bbox=dict(edgecolor='None', facecolor='None', boxstyle='round'))
-
-    ax[i].set_xlabel("$\\Delta$ PC2")
-
-ax[0].set_ylabel("$\\Delta$ Performance")
-ax[1].set_ylabel("")
-
-plt.savefig('./figures/pca/opto_pc2_%s.svg' % dum, dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_66.png]]
-
-#+begin_src jupyter-python
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-from scipy.stats import pearsonr
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1)
-
-df_ = df.copy()
-
-for i, delta_perf in enumerate(['delta_dpa', 'delta_odr']):
-    sns.regplot(data=df_, x='delta_pc3', y=delta_perf, scatter=True,
-                fit_reg=True, ci=95, ax=ax[i],
-                scatter_kws={'s': 0, 'alpha': 0.7},
-                line_kws={'color': 'k', 'lw': 2, 'ls':'--'})
-
-    sns.scatterplot(data=df_, x='delta_pc3', y=delta_perf,
-                    hue='mouse', style=None, s=80, alpha=0.8, ax=ax[i],
-                    legend=None, palette=palette)
-
-    corr, p_value = pearsonr(df_['delta_pc3'].dropna(), df_[delta_perf].dropna())
-
-    annotation = f"Pearson r = {corr:.2f}\np-value = {p_value:.3f}"
-    ax[i].annotate(annotation, xy=(.65, 0.25), xycoords='axes fraction', fontsize=14,
-                backgroundcolor='none', verticalalignment='top', horizontalalignment='left',
-                bbox=dict(edgecolor='None', facecolor='none'))
-
-    ax[i].set_xlabel("$\\Delta$ PC3")
-
-ax[0].set_ylabel("$\\Delta$ Performance")
-ax[1].set_ylabel("")
-
-plt.savefig('./figures/pca/opto_pc3_%s.svg' % dum, dpi=300)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_67.png]]
-
-#+begin_src jupyter-python
-
-#+end_src
-
-#+RESULTS:
-
 ** Binned Flow Fields
 *** utils
 
@@ -2512,6 +81,7 @@ def flow_field_from_trajectories(x, y, dt=1.0, bins=25, xrange=None, yrange=None
 #+end_src
 
 #+RESULTS:
+: fb4c2843-64ab-4e54-8d4f-025e4972e2ee
 
 #+begin_src jupyter-python
 import numpy as np
@@ -2583,6 +153,7 @@ def flow_field_midpoint(x, y, dt=1.0, bins=25, xrange=None, yrange=None, min_cou
 #+end_src
 
 #+RESULTS:
+: 749315d1-dccf-4d51-9695-cace4ef8f89a
 
 #+begin_src jupyter-python
 import numpy as np
@@ -2629,6 +200,7 @@ def bin_mean_1d(xvals, yvals, edges, min_count=1):
 #+end_src
 
 #+RESULTS:
+: 8d67e0de-6a65-4748-b1e6-a00f0582ad49
 
 #+begin_src jupyter-python
 import numpy as np
@@ -2703,6 +275,7 @@ def radial_angular_from_binned_uv(U, V, C, xedges, yedges, r_edges, th_edges,
 #+end_src
 
 #+RESULTS:
+: 71ceacda-7e93-4614-a63c-0d12973434a3
 
 #+begin_src jupyter-python
 import numpy as np
@@ -2722,6 +295,7 @@ def gaussian_filter1d_nan(x, sigma, mode="nearest", truncate=4.0):
 #+end_src
 
 #+RESULTS:
+: 93566a84-2b65-454c-a4b2-445baaf9b306
 
 #+begin_src jupyter-python
 import numpy as np
@@ -2771,6 +345,7 @@ def weighted_binned_mean(xvals, yvals, edges, weights=None,
 #+end_src
 
 #+RESULTS:
+: 422d9fa0-8180-4331-86a2-5f43b6ee2345
 
 #+begin_src jupyter-python
 def binned_mean_1d(xvals, yvals, edges, min_count=1):
@@ -2827,6 +402,7 @@ def speed_vs_r_theta(x_coor, y_coor, dt=1.0,
 #+end_src
 
 #+RESULTS:
+: c8d3d510-a1ba-4a14-843a-3159d9d78a0c
 
 #+begin_src jupyter-python
 import numpy as np
@@ -2868,6 +444,7 @@ def binned_mean(xvals, yvals, edges, min_count=50):
 #+end_src
 
 #+RESULTS:
+: 15a20fe1-73a4-4b25-8078-4b1f3a195cfc
 
 *** all mice
 
@@ -2881,6 +458,7 @@ sigma_r, sigma_th= 1, 1
 #+end_src
 
 #+RESULTS:
+: b36946c5-b13d-4eaf-9037-69433497eb9c
 
 **** cartesian speeds
 
@@ -2917,6 +495,7 @@ for i_mouse in range(len(options['mice'])):
 #+end_src
 
 #+RESULTS:
+: f935ad94-942e-40ba-aa4f-3060e7556c76
 
 #+begin_src jupyter-python
 from scipy.stats import circmean
@@ -2930,7 +509,7 @@ mean_sp_th = np.nanmean(uniform_filter1d(np.array(sp_th_list), sigma_th), 0)
 #+end_src
 
 #+RESULTS:
-: cfd4df66-dbc0-457c-ba5f-7c6509053efe
+: 097e52de-c4f5-482b-989e-d36cc455cb9c
 
 #+begin_src jupyter-python
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
@@ -2959,7 +538,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: f343e1c3-b05b-48e3-bef3-22e64ee2a4ae
+: f25731f6-eaff-4a4c-973c-4e0c6c7c44e3
 
 **** binned cartesian speeds
 
@@ -3014,7 +593,7 @@ for i_mouse in range(len(options['mice'])):
 #+end_src
 
 #+RESULTS:
-: 701ca3b2-fe77-42a6-8275-8bcb3e02ce4d
+: ec8b1e84-3ce0-40d3-bf5e-3b892e35f6d0
 
 #+begin_src jupyter-python
 from scipy.stats import circmean
@@ -3032,7 +611,7 @@ std_sp_th = np.nanstd(sp_th_list, 0) / np.sqrt(len(options['mice']))
 #+end_src
 
 #+RESULTS:
-: a2925d6a-b860-476f-9e77-011b24a7e589
+: 05e1fd04-a62b-44e0-8040-e9b938e289af
 
 #+begin_src jupyter-python
 sigma_r = 5
@@ -3076,7 +655,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 06149a90-6eb3-4271-bf61-7201e028b949
+: 00b09c2d-1fbf-4ad1-808d-5aa816d16115
 
 #+begin_src jupyter-python
 
@@ -3084,7 +663,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: d05889a0-6d68-49ce-9844-c9270b01fa5d
+: eec9f9d7-0fd0-4500-b5bf-06fe4fe7c68b
 
 **** polar speeds
 
@@ -3160,7 +739,7 @@ for i_mouse in range(len(options['mice'])):
 #+end_src
 
 #+RESULTS:
-: 4f05f15d-ded9-469c-818a-51ac1eb0f3ec
+: a196c93e-5e02-41bd-96e7-eddf06a52f26
 
 #+begin_src jupyter-python
 r_list = pad_list(r_list, axis=0, max_len=None)
@@ -3197,7 +776,7 @@ std_aw_th = uniform_filter1d(np.nanstd(aw_th_list, 0), sigma_th) / np.sqrt(len(o
 #+end_src
 
 #+RESULTS:
-: ec8df3e2-28c3-447b-a487-87551b095dea
+: d0cbb1ca-84a2-42e9-919c-104e3d792a52
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3231,7 +810,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 2ae097d8-3f1f-436c-81a9-e830e02bc28e
+: dde3f6cc-9b05-4a91-bcf0-f5a62e8be0f9
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3264,7 +843,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: cbb1e108-b494-4042-9ef6-95160022852f
+: 1513eefa-0615-4d25-b249-6a341102dca2
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3297,14 +876,14 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 2d0ee18d-d6e6-4d98-adc3-f6ee20e8113d
+: fec66f14-1406-4782-be3c-247771a295ab
 
 #+begin_src jupyter-python
 
 #+end_src
 
 #+RESULTS:
-: f7dd0eaf-9588-4688-a3ed-6b6ce2340669
+: e48431d9-7f04-43a2-bf10-718c6c46abce
 
 *** data
 **** data
@@ -3320,29 +899,31 @@ if i_mouse !=-1:
 #+end_src
 
 #+RESULTS:
+: 47666f4d-9424-49f1-904f-548a29f3e491
 
 #+begin_src jupyter-python
 dt = 1
-nbins = 12
-min_count = 1
+nbins = 16
+min_count = 5
 min_w = 1
-sigma_r, sigma_th= 5, 5
+sigma_r, sigma_th= 15, 15
 #+end_src
 
 #+RESULTS:
+: 23a4928f-9f8f-4531-919f-87e3a30cc991
 
 #+begin_src jupyter-python
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 
-idx = (y_single.tasks=='DPA') & (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse]) & (y_single.learning=='Expert')
+idx = (y_single.tasks=='DPA') & (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse])
 # idx = (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse])
 
-X_delay = X_epoch[idx].copy()
+X_delay = X_single[idx].copy()
 
 x_coor = X_delay[:, 0]
 y_coor = X_delay[:, 1]
 
-bins = np.concatenate( (options['bins_BL']//2, options['bins_DELAY']//2))
+bins = np.concatenate( (options['bins_BL'], options['bins_DELAY']))
 
 x_coor = X_delay[:, 0, bins]
 y_coor = X_delay[:, 1, bins]
@@ -3350,14 +931,14 @@ y_coor = X_delay[:, 1, bins]
 # x_coor = X_delay[:, 0, :options['bins_DELAY'][-1]]
 # y_coor = X_delay[:, 1, :options['bins_DELAY'][-1]]
 
-x_coor = X_delay[:, 0, options['bins_DELAY']//2]
-y_coor = X_delay[:, 1, options['bins_DELAY']//2]
+# x_coor = X_delay[:, 0, options['bins_DELAY']]
+# y_coor = X_delay[:, 1, options['bins_DELAY']]
 
 print(x_coor.shape)
 #+end_src
 
 #+RESULTS:
-: (96, 36)
+: 1ab09ed3-3e06-4c99-873c-9e456d19c3cc
 
 **** binned flows
 
@@ -3367,7 +948,7 @@ xedges, yedges, U, V, C = flow_field_midpoint(x_coor, y_coor, dt=dt, bins=nbins)
 #+end_src
 
 #+RESULTS:
-: fc12286d-4162-4410-a7eb-29be8ab19e2e
+: 030804c4-c4b5-4dec-8333-e771762305df
 
 #+begin_src jupyter-python
 from matplotlib import colors
@@ -3375,7 +956,7 @@ from matplotlib import colors
 speed = np.sqrt(U**2 + V**2)
 speed = np.where(C >= min_count, speed, np.nan)
 
-vmin = np.nanpercentile(speed, 5)
+vmin = 0.0
 vmax = np.nanpercentile(speed, 95)  # robust upper limit
 
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1, sharex=1)
@@ -3412,7 +993,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: a8017548-3f9a-4427-953d-497b820c89ae
+: 3771ad27-ab23-4063-a11e-01578b613d44
 
 
 #+begin_src jupyter-python
@@ -3420,6 +1001,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
+: a112dd48-e2b7-4b97-86c1-1a89bed350a0
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3439,7 +1021,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 939d646a-92ac-429b-b5a3-5907cffe5a4e
+: 5fe20433-7b95-42ae-a86f-5ce0d49604cf
 
 
 #+begin_src jupyter-python
@@ -3472,7 +1054,7 @@ th_c, speed_th, cnt_th, wsum_th = weighted_binned_mean(
 #+end_src
 
 #+RESULTS:
-: 767aeb28-802d-4a56-9376-3d1a4a7ab2fd
+: ce2e4286-11e4-4804-8493-7cb6df8cb7ad
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3493,7 +1075,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 3f9b5dab-5215-4421-93b2-3427a3032625
+: 71fa93ef-118f-4848-82f1-5139405e754c
 
 #+begin_src jupyter-python
 import numpy as np
@@ -3544,7 +1126,7 @@ vth_rt, vth_cnt = bin2d_mean(r, th, np.abs(vth), r_edges, th_edges, min_count=mi
 #+end_src
 
 #+RESULTS:
-: 2c74a212-d9d4-44de-b99f-cac6e9f21f09
+: 2f1e5a99-5654-41e1-82ea-e8c98a9de19e
 
 **** counts
 
@@ -3569,7 +1151,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 8e817d16-de0e-41f9-8dc0-c45f0220d518
+: b9dbb2de-eecc-4844-aa08-7ae2b1c7390f
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3586,14 +1168,14 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 0dc59b4e-7461-47cc-adf8-f7246a77deb7
+: 0afcde21-b4ac-4377-9c5d-eaea26b64b54
 
 #+begin_src jupyter-python
 
 #+end_src
 
 #+RESULTS:
-: 0a78d9fe-7f07-4bc3-898c-41340211731f
+: 0cbf9cf8-0fcf-460b-b3be-51a2957fec36
 
 **** speeds
 
@@ -3619,7 +1201,7 @@ _, aw_th, _ = binned_mean(th, aw, th_edges, min_count=min_count)
 #+end_src
 
 #+RESULTS:
-: 525528ba-88f9-412b-b9ec-bcbcc809f8f8
+: c68b2426-8515-4333-8468-cb095f897daf
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3641,7 +1223,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: e13111a3-6219-49ab-8832-b5f79b0f4a8c
+: 3036559d-1e7a-4369-ad23-5f3bdda4916b
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3662,7 +1244,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 486262e8-8178-4bd2-bc25-31010efc5e16
+: bb417b60-31c8-41bf-91eb-cd69d902c9db
 
 **** speeds from binned field
 
@@ -3791,7 +1373,7 @@ def polar_from_binned_field(xedges, yedges, U, V, C=None, min_count=1, eps=1e-12
 #+end_src
 
 #+RESULTS:
-: 53de1495-9eb8-4d46-acfd-0990fe5abe51
+: 7c6b7573-4d5a-4b6d-8386-30b33b722922
 
 #+begin_src jupyter-python
 import numpy as np
@@ -3831,7 +1413,7 @@ def polar_from_binned_field(xedges, yedges, U, V, C=None, min_count=1, eps=1e-12
 #+end_src
 
 #+RESULTS:
-: 6b6dc593-4053-44c6-b027-56d9304b0477
+: 6ba6ddd9-2e84-48cf-a12f-f9e434c58d5d
 
 #+begin_src jupyter-python
 min_w = 1
@@ -3856,7 +1438,7 @@ _,    aOm_th,  _, _ = weighted_binned_mean(TH, aOm,  th_edges, weights=C, min_co
 #+end_src
 
 #+RESULTS:
-: 7ce54e53-c17e-4bf9-ad94-b2ecbc12da01
+: b1957ad4-3644-41f6-94a7-d3c666fe449c
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3878,7 +1460,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: d3d9e558-23f2-47fb-93cc-9736f1966aa9
+: 20c98305-8bcd-47da-8a1f-fe8ddeab0c3a
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
@@ -3897,15 +1479,14 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-: 6432b10a-6637-4ee9-a429-1b7616829027
+: 78e08f07-58ab-4446-90a3-078c08421204
 
 #+begin_src jupyter-python
 
 #+end_src
 
 #+RESULTS:
-: 9693dace-8972-44bc-b265-a448a75b6c3d
-
+: 3d75669a-117d-4562-a29d-3e9feb55a997
 ** Flow
 **** Fig. 2E–H blocks
 
@@ -3937,8 +1518,8 @@ task_sel = ['DPA']
 
 # choose epoch for delay-state geometry
 # you can swap bins_DELAY for bins_LD if you want late delay specifically
-bins_state = options['bins_DELAY']//2
-bins_late  = options['bins_LD']//2
+bins_state = options['bins_DELAY']
+bins_late  = options['bins_LD']
 
 # naive / expert labels used throughout
 stages = ['Naive', 'Expert']
@@ -3966,13 +1547,12 @@ def traj_xy(X, bins=None, x_idx=0, y_idx=1):
         return X[:, x_idx, :], X[:, y_idx, :]
     return X[:, x_idx, bins], X[:, y_idx, bins]
 
-print(X_epoch.shape, y_single.shape)
+print(X_single.shape, y_single.shape)
 print("Using bins_state:", bins_state[:3], "...", bins_state[-3:])
 #+end_src
 
 #+RESULTS:
-: (9216, 3, 42) (9216, 18)
-: Using bins_state: [ 9  9 10] ... [25 26 26]
+: 94c9b582-3b59-46e7-9059-e44b18d22ad8
 
 
 ---
@@ -4011,7 +1591,7 @@ def compute_speed_field(XYx, XYy, bins=25, dt=1.0, smooth=1.0, min_count=5):
 
 
 def plot_speed_field(ax, xedges, yedges, speed, U, V, C, zlim=None, title='',
-                     cmap='coolwarm', quiver_scale=.1, min_count=5):
+                     cmap='coolwarm', quiver_scale=0.25, min_count=5):
     xc = 0.5 * (xedges[:-1] + xedges[1:])
     yc = 0.5 * (yedges[:-1] + yedges[1:])
     Xc, Yc = np.meshgrid(xc, yc, indexing='ij')
@@ -4062,6 +1642,7 @@ def plot_mean_traj(ax, X, y, bins, color_by='sample_odor', title=''):
 #+end_src
 
 #+RESULTS:
+: 0d623eb3-89f5-4d34-8521-6aff30115be0
 
 
 ---
@@ -4076,17 +1657,17 @@ This produces the hero panel.
 # Naive vs Expert occupancy / flow maps
 # =========================
 
-bins_plot = np.concatenate((options['bins_BL']//2, options['bins_DELAY']//2))
-# bins_plot = options['bins_DELAY']   # use this if you want only delay
+bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY']))
+bins_plot = options['bins_DELAY']   # use this if you want only delay
 
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2.4*width, 1.15*height), sharex=True, sharey=True)
 
 pcms = []
-zlim = 20
+zlim = 50
 
 for i, stage in enumerate(stages):
     mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-    X_stage = X_epoch[mask]
+    X_stage = X_single[mask]
     y_stage = y_single.loc[mask].reset_index(drop=True)
 
     x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
@@ -4097,14 +1678,14 @@ for i, stage in enumerate(stages):
 
     pcm = plot_speed_field(
         ax[i], xedges, yedges, speed, U, V, C,
-        zlim=zlim, title=stage, quiver_scale=.1, min_count=5
+        zlim=zlim, title=stage, quiver_scale=0.1, min_count=5
     )
     pcms.append(pcm)
 
     plot_mean_traj(ax[i], X_stage, y_stage, bins_plot, color_by='sample_odor', title=stage)
 
-# cbar = fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02)
-# cbar.set_label('Speed')
+cbar = fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02)
+cbar.set_label('Speed')
 
 plt.tight_layout()
 plt.savefig('./figures/single/fig2E_state_maps.svg')
@@ -4112,7 +1693,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singleClass/figure_115.png]]
+: 616f387a-7447-4338-9388-c2dbcc752b4c
 
 
 ****** Notes
@@ -4142,7 +1723,7 @@ for mouse in y_single.mouse.unique():
         if np.sum(mask) < 5:
             continue
 
-        x, y = epoch_xy(X_epoch[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
+        x, y = epoch_xy(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
 
         rows.append({
             'mouse': mouse,
@@ -4159,15 +1740,7 @@ df_cent.head()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-|   | mouse   | learning | x_centroid | y_centroid | x_abs    | y_abs    | n_trials |
-|---+---------+----------+------------+------------+----------+----------+----------|
-| 0 | JawsM01 | Naive    | 0.183927   | -0.043810  | 1.415602 | 1.173120 | 75       |
-| 1 | JawsM01 | Expert   | -0.969565  | -0.499424  | 1.258597 | 1.259824 | 31       |
-| 2 | JawsM06 | Naive    | -0.359548  | -0.447841  | 1.338902 | 1.499167 | 60       |
-| 3 | JawsM06 | Expert   | -0.011261  | -0.007136  | 1.363448 | 1.351783 | 84       |
-| 4 | JawsM12 | Naive    | 0.284964   | 0.449698   | 1.249282 | 1.180077 | 62       |
-:END:
+: 68337253-a3e6-4257-b859-c41472f2cee0
 
 
 #+begin_src jupyter-python
@@ -4207,7 +1780,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singleClass/figure_117.png]]
+: 5ae47f5a-2dfa-41e1-9082-2b6e8d789899
 
 
 ****** Optional alternative
@@ -4230,7 +1803,7 @@ for mouse in y_single.mouse.unique():
         if np.sum(mask) < 5:
             continue
 
-        _, y = epoch_xy(X_epoch[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
+        _, y = epoch_xy(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
 
         rows.append({
             'mouse': mouse,
@@ -4260,7 +1833,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singleClass/figure_118.png]]
+: 02b8ea6b-49b6-4b96-804a-15676236cc9e
 
 
 ---
@@ -4288,7 +1861,7 @@ for mouse in y_single.mouse.unique():
         if np.sum(mask) < 5:
             continue
 
-        x, y = epoch_xy(X_epoch[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
+        x, y = epoch_xy(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
         dum[f'x_{stage}'] = np.nanmean(x)
         dum[f'y_{stage}'] = np.nanmean(y)
 
@@ -4324,19 +1897,7 @@ df_rel
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-|   | mouse   | x_Naive   | y_Naive   | x_Expert  | y_Expert  | dpa_Naive | dpa_Expert | gng_Naive | gng_Expert | dx        | dy        | dDPA     | dGNG      |
-|---+---------+-----------+-----------+-----------+-----------+-----------+------------+-----------+------------+-----------+-----------+----------+-----------|
-| 0 | JawsM01 | 0.183927  | -0.043810 | -0.969565 | -0.499424 | 0.781250  | 0.968750   | 0.947917  | 0.984375   | -1.153492 | -0.455614 | 0.187500 | 0.036458  |
-| 1 | JawsM06 | -0.359548 | -0.447841 | -0.011261 | -0.007136 | 0.625000  | 0.875000   | 0.875000  | 0.776042   | 0.348287  | 0.440705  | 0.250000 | -0.098958 |
-| 2 | JawsM12 | 0.284964  | 0.449698  | -0.294436 | 0.106582  | 0.645833  | 0.781250   | 0.791667  | 0.945312   | -0.579399 | -0.343116 | 0.135417 | 0.153646  |
-| 3 | JawsM15 | -2.107031 | 0.749616  | -1.930194 | 1.169765  | 0.729167  | 0.927083   | 0.744792  | 0.718750   | 0.176837  | 0.420149  | 0.197917 | -0.026042 |
-| 4 | JawsM18 | -0.391648 | 0.435810  | 0.050011  | 1.293850  | 0.833333  | 0.989583   | 0.848958  | 0.968750   | 0.441660  | 0.858039  | 0.156250 | 0.119792  |
-| 5 | ChRM04  | -0.888170 | 0.120232  | -2.255800 | 0.296018  | 0.833333  | 0.916667   | 0.890625  | 0.859375   | -1.367630 | 0.175786  | 0.083333 | -0.031250 |
-| 6 | ChRM23  | -2.555926 | 0.375899  | -3.647807 | -0.679613 | 0.656250  | 0.750000   | 0.697917  | 0.820312   | -1.091881 | -1.055513 | 0.093750 | 0.122396  |
-| 7 | ACCM03  | 1.713420  | 1.489561  | 0.300535  | 1.420706  | 0.692708  | 0.953125   | 0.692708  | 0.871094   | -1.412885 | -0.068855 | 0.260417 | 0.178385  |
-| 8 | ACCM04  | 0.365258  | 0.167223  | 0.165478  | 0.321445  | 0.562500  | 0.726562   | 0.609375  | 0.910156   | -0.199779 | 0.154222  | 0.164062 | 0.300781  |
-:END:
+: c87b5c70-d378-44e7-bd80-46f341837d1b
 
 
 #+begin_src jupyter-python
@@ -4359,7 +1920,7 @@ for i, (beh, lab) in enumerate(zip(['dDPA', 'dGNG'], ['Δ DPA performance', 'Δ 
     ax[i].annotate(f"Pearson r = {r:.2f}\np = {p:.3f}",
                    xy=(0.05, 0.95), xycoords='axes fraction',
                    ha='left', va='top',
-                   bbox=dict(facecolor='none', edgecolor='none'))
+                   bbox=dict(facecolor='white', edgecolor='none'))
 
     ax[i].axvline(0, ls='--', color='0.5')
     ax[i].axhline(0, ls='--', color='0.5')
@@ -4372,326 +1933,8 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singleClass/figure_120.png]]
+: 1af73ce0-a8fc-4168-a0e8-b910c7698af7
 
-
-Can you change the previous analysis so that I have one dot per sample odor
-
-Yes. Right now your Fig. 2G collapses behavior/geometry to *one value per mouse*, because you average across all DPA trials within each stage.
-
-To get *one dot per sample odor*, you should compute the naive→expert change separately for each =(mouse, sample_odor)= pair.
-
-****** Replace the Fig. 2G data block with this
-
-#+begin_src jupyter-python
-# =========================
-# Fig 2G
-# Geometry-behavior relationship
-# one dot per (mouse, sample_odor)
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    for samp in sorted(y_single.sample_odor.dropna().unique()):
-        dum = {'mouse': mouse, 'sample_odor': samp}
-
-        # geometry per stage, per sample odor
-        for stage in stages:
-            mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-            mask &= (y_single.mouse.values == mouse)
-            mask &= (y_single.sample_odor.values == samp)
-
-            if np.sum(mask) >= 5:
-                x, y = epoch_xy(X_epoch[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
-                dum[f'x_{stage}'] = np.nanmean(x)
-                dum[f'y_{stage}'] = np.nanmean(y)
-            else:
-                dum[f'x_{stage}'] = np.nan
-                dum[f'y_{stage}'] = np.nan
-
-        # DPA performance per stage, per sample odor
-        for stage in stages:
-            mask = (y_single.mouse == mouse)
-            mask &= (y_single.learning == stage)
-            mask &= (y_single.tasks == 'DPA')
-            mask &= (y_single.laser == 0)
-            mask &= (y_single.sample_odor == samp)
-
-            dum[f'dpa_{stage}'] = np.nanmean(y_single.loc[mask, 'performance'])
-
-        # GNG/ODR performance per stage, per sample odor
-        for stage in stages:
-            mask = (y_single.mouse == mouse)
-            mask &= (y_single.learning == stage)
-            mask &= (y_single.tasks != 'DPA')
-            mask &= (y_single.laser == 0)
-            mask &= (y_single.sample_odor == samp)
-
-            dum[f'gng_{stage}'] = np.nanmean(y_single.loc[mask, 'odr_perf'])
-
-        rows.append(dum)
-
-df_rel = pd.DataFrame(rows)
-
-df_rel['dx'] = df_rel['x_Expert'] - df_rel['x_Naive']
-df_rel['dy'] = df_rel['y_Expert'] - df_rel['y_Naive']
-df_rel['dDPA'] = df_rel['dpa_Expert'] - df_rel['dpa_Naive']
-df_rel['dGNG'] = df_rel['gng_Expert'] - df_rel['gng_Naive']
-
-# optional cleanup
-df_rel = df_rel.dropna(subset=['dy', 'dDPA', 'dGNG'])
-
-df_rel
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-|    | mouse   | sample_odor | x_Naive   | y_Naive   | x_Expert  | y_Expert  | dpa_Naive | dpa_Expert | gng_Naive | gng_Expert | dx        | dy        | dDPA     | dGNG      |
-|----+---------+-------------+-----------+-----------+-----------+-----------+-----------+------------+-----------+------------+-----------+-----------+----------+-----------|
-| 0  | JawsM01 | 0.0         | 0.133444  | -0.108629 | -0.953902 | -0.568154 | 0.687500  | 1.000000   | 0.958333  | 0.968750   | -1.087346 | -0.459526 | 0.312500 | 0.010417  |
-| 1  | JawsM01 | 1.0         | 0.223591  | 0.007119  | -0.986273 | -0.426112 | 0.875000  | 0.937500   | 0.937500  | 1.000000   | -1.209864 | -0.433231 | 0.062500 | 0.062500  |
-| 2  | JawsM06 | 0.0         | -0.762595 | -0.261743 | -0.194728 | -0.515582 | 0.583333  | 0.833333   | 0.843750  | 0.770833   | 0.567866  | -0.253839 | 0.250000 | -0.072917 |
-| 3  | JawsM06 | 1.0         | -0.006883 | -0.610678 | 0.155527  | 0.455087  | 0.666667  | 0.916667   | 0.906250  | 0.781250   | 0.162409  | 1.065765  | 0.250000 | -0.125000 |
-| 4  | JawsM12 | 0.0         | 0.278444  | 0.515529  | -0.004145 | 0.300621  | 0.687500  | 0.750000   | 0.802083  | 0.937500   | -0.282589 | -0.214908 | 0.062500 | 0.135417  |
-| 5  | JawsM12 | 1.0         | 0.292382  | 0.374786  | -0.562396 | -0.072531 | 0.604167  | 0.812500   | 0.781250  | 0.953125   | -0.854778 | -0.447317 | 0.208333 | 0.171875  |
-| 6  | JawsM15 | 0.0         | -3.754103 | 0.601085  | -4.183170 | 1.333845  | 0.729167  | 0.937500   | 0.718750  | 0.697917   | -0.429067 | 0.732761  | 0.208333 | -0.020833 |
-| 7  | JawsM15 | 1.0         | -0.459959 | 0.898148  | 0.373987  | 1.001957  | 0.729167  | 0.916667   | 0.770833  | 0.739583   | 0.833946  | 0.103808  | 0.187500 | -0.031250 |
-| 8  | JawsM18 | 0.0         | -1.970817 | 0.528208  | -1.219895 | 1.210496  | 0.854167  | 1.000000   | 0.833333  | 0.968750   | 0.750922  | 0.682288  | 0.145833 | 0.135417  |
-| 9  | JawsM18 | 1.0         | 1.268504  | 0.338674  | 1.346937  | 1.378977  | 0.812500  | 0.979167   | 0.864583  | 0.968750   | 0.078433  | 1.040303  | 0.166667 | 0.104167  |
-| 10 | ChRM04  | 0.0         | -1.867473 | 0.196118  | -3.315154 | 0.561030  | 0.854167  | 0.979167   | 0.916667  | 0.864583   | -1.447681 | 0.364912  | 0.125000 | -0.052083 |
-| 11 | ChRM04  | 1.0         | 0.141355  | 0.040455  | -1.041417 | -0.007776 | 0.812500  | 0.854167   | 0.864583  | 0.854167   | -1.182772 | -0.048231 | 0.041667 | -0.010417 |
-| 12 | ChRM23  | 0.0         | -4.884817 | 0.806124  | -5.223093 | -0.361500 | 0.604167  | 0.687500   | 0.677083  | 0.796875   | -0.338276 | -1.167624 | 0.083333 | 0.119792  |
-| 13 | ChRM23  | 1.0         | -0.569519 | 0.008943  | -2.314872 | -0.948786 | 0.708333  | 0.812500   | 0.718750  | 0.843750   | -1.745353 | -0.957729 | 0.104167 | 0.125000  |
-| 14 | ACCM03  | 0.0         | -2.173040 | 0.624843  | -4.319628 | 1.311035  | 0.666667  | 0.937500   | 0.656250  | 0.828125   | -2.146588 | 0.686192  | 0.270833 | 0.171875  |
-| 15 | ACCM03  | 1.0         | 5.318253  | 2.291618  | 4.771661  | 1.526838  | 0.718750  | 0.968750   | 0.729167  | 0.914062   | -0.546593 | -0.764779 | 0.250000 | 0.184896  |
-| 16 | ACCM04  | 0.0         | 0.403685  | 0.180009  | -0.068231 | 0.240021  | 0.593750  | 0.750000   | 0.625000  | 0.914062   | -0.471915 | 0.060012  | 0.156250 | 0.289062  |
-| 17 | ACCM04  | 1.0         | 0.322310  | 0.152933  | 0.414768  | 0.408299  | 0.531250  | 0.703125   | 0.593750  | 0.906250   | 0.092458  | 0.255366  | 0.171875 | 0.312500  |
-:END:
-
----
-
-****** Then update the plotting block
-
-This version gives:
-- *one dot per sample odor*
-- color = mouse
-- style = sample odor
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
-
-palette = dict(zip(df_rel['mouse'].unique(),
-                   sns.color_palette("tab10", n_colors=df_rel['mouse'].nunique())))
-
-for i, (beh, lab) in enumerate(zip(['dDPA', 'dGNG'], ['Δ DPA performance', 'Δ GNG performance'])):
-    sns.regplot(
-        data=df_rel, x='dy', y=beh, ax=ax[i],
-        scatter=False, color='k',
-        line_kws={'ls': '--', 'lw': 2}
-    )
-
-    sns.scatterplot(
-        data=df_rel, x='dy', y=beh,
-        hue='mouse', style='sample_odor',
-        palette=palette, s=80,
-        edgecolor='k', linewidth=0.3,
-        ax=ax[i], legend=None
-    )
-
-    r, p = pearsonr(df_rel['dy'], df_rel[beh])
-    ax[i].annotate(
-        f"Pearson r = {r:.2f}\np = {p:.3f}",
-        xy=(0.05, 0.95), xycoords='axes fraction',
-        ha='left', va='top',
-        bbox=dict(facecolor='none', edgecolor='none')
-    )
-
-    ax[i].axvline(0, ls='--', color='0.5')
-    ax[i].axhline(0, ls='--', color='0.5')
-    ax[i].set_xlabel('Δ Choice-axis centroid')
-    ax[i].set_ylabel(lab)
-
-# ax[1].legend(frameon=False, bbox_to_anchor=(1.02, 1), loc='upper left')
-plt.tight_layout()
-plt.savefig('./figures/single/fig2G_geometry_behavior_by_sample.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_122.png]]
-
-*** Did you recompute the correlations accordingly pvalues seem very high
-
-Yes — with that modified block, the correlation and p-value are recomputed on the new =df_rel=, so they are now based on /one point per (mouse, sample_odor)/ rather than one point per mouse.
-
-In your plotting code, this line does the recomputation:
-
-#+begin_src jupyter-python
-r, p = pearsonr(df_rel['dy'], df_rel[beh])
-#+end_src
-
-So the high p-values are expected if:
-- you only doubled the number of points from 9 mice to 18 mouse×odor points,
-- but the two odors within each mouse are not independent,
-- and/or the relationship is weak / noisy.
-
-The important caveat is that =pearsonr= is now treating the 18 dots as independent observations, which is not really true, because each mouse contributes 2 points.
-
-If you want one dot per sample odor /for visualization/ but proper statistics, better options are:
-
-1. /keep the scatter with one dot per sample odor/, but
-2. compute stats at the mouse level, or
-3. use a repeated-measures / clustered method.
-
-**** Best simple fix: compute correlation on mouse-averaged values
-
-That gives a valid mouse-level test while keeping the odor-level dots in the figure.
-
-#+begin_src jupyter-python
-df_mouse = (
-    df_rel.groupby('mouse', as_index=False)[['dy', 'dDPA', 'dGNG']]
-    .mean()
-)
-
-for beh in ['dDPA', 'dGNG']:
-    r, p = pearsonr(df_mouse['dy'], df_mouse[beh])
-    print(beh, r, p)
-#+end_src
-
-Then in the figure, annotate with these mouse-level values instead of the odor-level ones.
-
-**** If you want separate stats by sample odor
-
-You can compute one correlation for odor A and one for odor B:
-
-#+begin_src jupyter-python
-for samp in sorted(df_rel.sample_odor.unique()):
-    df_s = df_rel[df_rel.sample_odor == samp]
-    for beh in ['dDPA', 'dGNG']:
-        r, p = pearsonr(df_s['dy'], df_s[beh])
-        print("sample", samp, beh, "r=", r, "p=", p)
-#+end_src
-
-That tests whether the relationship is present within each odor separately.
-
-**** Why p-values may be high
-Possible reasons:
-- true effect is weak
-- strong between-mouse variability
-- dy may not be the right geometry summary
-- splitting by odor reduces stability of each centroid estimate
-- only 9 mice, effectively still small N
-
-**** Recommended interpretation
-- /Figure/: one dot per sample odor is fine
-- /Statistics/: use mouse-level correlation, or report per-odor correlations separately
-
-If you want, I can rewrite your plotting block so it:
-- shows one dot per sample odor,
-- overlays mouse means,
-- and annotates the panel with the /mouse-level/ correlation/p-value.
-
-*** ok
-
-Use mouse-level stats, odor-level dots.
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
-
-palette = dict(zip(df_rel['mouse'].unique(),
-                   sns.color_palette("tab10", n_colors=df_rel['mouse'].nunique())))
-
-# mouse-level stats for annotation
-df_mouse = (
-    df_rel.groupby('mouse', as_index=False)[['dy', 'dDPA', 'dGNG']]
-    .mean()
-)
-
-for i, (beh, lab) in enumerate(zip(['dDPA', 'dGNG'],
-                                   ['Δ DPA performance', 'Δ GNG performance'])):
-
-    # regression line from mouse means
-    sns.regplot(
-        data=df_mouse, x='dy', y=beh, ax=ax[i],
-        scatter=False, color='k',
-        line_kws={'ls': '--', 'lw': 2}
-    )
-
-    # odor-level dots
-    sns.scatterplot(
-        data=df_rel, x='dy', y=beh,
-        hue='mouse', style='sample_odor',
-        palette=palette, s=80,
-        edgecolor='k', linewidth=0.3,
-        ax=ax[i], legend=False, alpha=0.75
-    )
-
-    # optional: mouse mean dots
-    sns.scatterplot(
-        data=df_mouse, x='dy', y=beh,
-        hue='mouse', palette=palette,
-        s=140, edgecolor='k', linewidth=1.2,
-        ax=ax[i], legend=False, marker='o'
-    )
-
-    r, p = pearsonr(df_mouse['dy'], df_mouse[beh])
-    ax[i].annotate(
-        f"mouse-level\nr = {r:.2f}\np = {p:.3f}",
-        xy=(0.05, 0.95), xycoords='axes fraction',
-        ha='left', va='top',
-        bbox=dict(facecolor='none', edgecolor='none')
-    )
-
-    ax[i].axvline(0, ls='--', color='0.5')
-    ax[i].axhline(0, ls='--', color='0.5')
-    ax[i].set_xlabel('Δ Choice-axis centroid')
-    ax[i].set_ylabel(lab)
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2G_geometry_behavior_by_sample_mouseStats.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singleClass/figure_126.png]]
-
-If you want, I can also make sample odor 0/1 use fixed markers like circle/square and add a clean legend.
-
-***
----
-
-****** What changed
-
-Previously:
-- 1 row per =mouse=
-
-Now:
-- 1 row per =(mouse, sample_odor)=
-
-So if sample odors are =0= and =1=, you should get *2 dots per mouse*.
-
----
-
-****** Optional: use labels A/B instead of 0/1
-
-If you want prettier legends:
-
-#+begin_src python
-df_rel['sample_label'] = df_rel['sample_odor'].map({0: 'A', 1: 'B'})
-#+end_src
-
-and then in =sns.scatterplot=:
-
-#+begin_src python
-style='sample_label'
-#+end_src
-
----
-
-If you want, I can also rewrite the earlier *Fig. 2F centroid* analysis so that it also shows *one paired line per sample odor instead of one per mouse*.
-
-***
 
 ****** Note
 This uses:
@@ -4702,7 +1945,6 @@ This uses:
 If you want a stricter analysis, restrict GNG to =tasks == 'DualGo'= / =DualNoGo= if those labels exist.
 
 ---
-
 
 ***** 6) Fig. 2H — Correct vs false-alarm trajectories
 
@@ -4740,15 +1982,14 @@ print("false alarm:", np.sum(mask_fa))
 #+end_src
 
 #+RESULTS:
-: correct rejection: 283
-: false alarm: 245
+: 344aa125-2dc7-42e5-87d2-39d4f276b91d
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
 
 # left: trajectories
 for mask, color, lab in zip([mask_cr, mask_fa], ['#377eb8', '#e41a1c'], ['Correct reject', 'False alarm']):
-    X_ = X_epoch[mask]
+    X_ = X_single[mask]
     x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
     y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
     ax[0].plot(x, y, color=color, lw=2, label=lab)
@@ -4769,7 +2010,7 @@ for mouse in y_single.mouse.unique():
         mm = mask & (y_single.mouse == mouse)
         if np.sum(mm) < 3:
             continue
-        yv = np.nanmean(X_epoch[mm][:, y_idx, bins_late], axis=(0,1))
+        yv = np.nanmean(X_single[mm][:, y_idx, bins_late], axis=(0,1))
         vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
 
 df_err = pd.DataFrame(vals)
@@ -4789,20 +2030,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-# [goto error]
-: ---------------------------------------------------------------------------
-: IndexError                                Traceback (most recent call last)
-: Cell In[129], line 6
-:       4 for mask, color, lab in zip([mask_cr, mask_fa], ['#377eb8', '#e41a1c'], ['Correct reject', 'False alarm']):
-:       5     X_ = X_epoch[mask]
-: ----> 6     x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
-:       7     y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
-:       8     ax[0].plot(x, y, color=color, lw=2, label=lab)
-:
-: IndexError: index 42 is out of bounds for axis 2 with size 42
-[[file:./figures/singleClass/figure_122.png]]
-:END:
+: be656ab3-4eda-4ca5-8099-fa7d13d3246b
 
 
 ****** Optional extension
@@ -4827,7 +2055,7 @@ for i, stage in enumerate(['Naive', 'Expert']):
     for mask, color, lab in zip([mask_cr, mask_fa], ['#377eb8', '#e41a1c'], ['CR', 'FA']):
         if np.sum(mask) == 0:
             continue
-        X_ = X_epoch[mask]
+        X_ = X_single[mask]
         x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
         y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
         ax[i].plot(x, y, color=color, lw=2, label=lab)
@@ -4846,7 +2074,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_58.png]]
+: 5b7879fc-22d2-4b33-9d1c-23176daed085
 
 
 ---
@@ -4914,6 +2142,7 @@ def format_overlap_ax(ax, xlabel='A/B Overlap', ylabel='Choice Overlap', xlim=No
 #+end_src
 
 #+RESULTS:
+: 95b4fae6-4d81-40c4-b03a-b25a4eed5e8c
 
 
 ---
@@ -4950,7 +2179,7 @@ pcms = []
 
 for i, stage in enumerate(stages):
     mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-    X_stage = X_epoch[mask]
+    X_stage = X_single[mask]
     y_stage = y_single.loc[mask].reset_index(drop=True)
 
     x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
@@ -4998,7 +2227,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_60.png]]
+: e9f9c7e2-5f32-4c65-ab55-5a2a013a8aec
 
 
 ***** Why this is better
@@ -5039,7 +2268,7 @@ for mouse in y_single.mouse.unique():
         if np.sum(mask) < 5:
             continue
 
-        met = get_delay_metrics(X_epoch[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
+        met = get_delay_metrics(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
 
         rows.append({
             'mouse': mouse,
@@ -5056,15 +2285,7 @@ df_geom.head()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-|   | mouse   | learning | x_centroid | y_centroid | frac_lower | r_mean   | n_trials |
-|---+---------+----------+------------+------------+------------+----------+----------|
-| 0 | JawsM01 | Naive    | -7.368778  | 1.257271   | 0.253333   | 7.883574 | 75       |
-| 1 | JawsM01 | Expert   | -7.608942  | -0.410214  | 0.548387   | 7.968154 | 31       |
-| 2 | JawsM06 | Naive    | -3.485188  | -0.056764  | 0.466667   | 4.295585 | 60       |
-| 3 | JawsM06 | Expert   | -3.006540  | -0.231667  | 0.440476   | 4.249220 | 84       |
-| 4 | JawsM12 | Naive    | -4.187242  | 0.560836   | 0.467742   | 5.017056 | 62       |
-:END:
+: bfe8fddb-2b55-478f-ba00-a4c6d46fc344
 
 
 #+begin_src jupyter-python
@@ -5079,9 +2300,7 @@ print('paired x_centroid:', ttest_rel(wide_x['Naive'], wide_x['Expert'], nan_pol
 #+end_src
 
 #+RESULTS:
-: paired y_centroid: TtestResult(statistic=np.float64(1.7023633759549823), pvalue=np.float64(0.12709736341071587), df=np.int64(8))
-: paired frac_lower: TtestResult(statistic=np.float64(-1.5742428991454223), pvalue=np.float64(0.15407836611770387), df=np.int64(8))
-: paired x_centroid: TtestResult(statistic=np.float64(-3.460452160152216), pvalue=np.float64(0.008562092019388939), df=np.int64(8))
+: 0e33c410-47f8-4179-9c36-768cf1a2202a
 
 
 #+begin_src jupyter-python
@@ -5125,7 +2344,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_63.png]]
+: 5ab89310-bd9e-46d9-af60-c35b5692703d
 
 
 ***** Optional supplement panel: sample axis
@@ -5156,7 +2375,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_64.png]]
+: 08dc2178-2799-4bfe-8352-6bb1583abb70
 
 
 ---
@@ -5189,7 +2408,7 @@ for mouse in y_single.mouse.unique():
         if np.sum(mask) < 5:
             continue
 
-        met = get_delay_metrics(X_epoch[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
+        met = get_delay_metrics(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
         row[f'x_{stage}'] = np.nanmean(met['x_centroid'])
         row[f'y_{stage}'] = np.nanmean(met['y_centroid'])
         row[f'frac_{stage}'] = np.nanmean(met['frac_lower'])
@@ -5223,19 +2442,7 @@ df_rel
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-|   | mouse   | x_Naive    | y_Naive   | frac_Naive | x_Expert   | y_Expert  | frac_Expert | dpa_Naive | dpa_Expert | gng_Naive | gng_Expert | dx        | dy        | dfrac     | dDPA     | dGNG      |
-|---+---------+------------+-----------+------------+------------+-----------+-------------+-----------+------------+-----------+------------+-----------+-----------+-----------+----------+-----------|
-| 0 | JawsM01 | -7.368778  | 1.257271  | 0.253333   | -7.608942  | -0.410214 | 0.548387    | 0.781250  | 0.968750   | 0.947917  | 0.984375   | -0.240164 | -1.667484 | 0.295054  | 0.187500 | 0.036458  |
-| 1 | JawsM06 | -3.485188  | -0.056764 | 0.466667   | -3.006540  | -0.231667 | 0.440476    | 0.625000  | 0.875000   | 0.875000  | 0.776042   | 0.478647  | -0.174903 | -0.026190 | 0.250000 | -0.098958 |
-| 2 | JawsM12 | -4.187242  | 0.560836  | 0.467742   | -2.353736  | 0.169049  | 0.540000    | 0.645833  | 0.781250   | 0.791667  | 0.945312   | 1.833506  | -0.391787 | 0.072258  | 0.135417 | 0.153646  |
-| 3 | JawsM15 | -18.452473 | -1.479109 | 0.471429   | -17.858196 | -1.116282 | 0.483146    | 0.729167  | 0.927083   | 0.744792  | 0.718750   | 0.594277  | 0.362827  | 0.011717  | 0.197917 | -0.026042 |
-| 4 | JawsM18 | -29.304064 | 0.866758  | 0.425000   | -26.570036 | 0.614078  | 0.452632    | 0.833333  | 0.989583   | 0.848958  | 0.968750   | 2.734027  | -0.252680 | 0.027632  | 0.156250 | 0.119792  |
-| 5 | ChRM04  | -49.765451 | 4.322640  | 0.262500   | -46.169255 | -0.390953 | 0.534091    | 0.833333  | 0.916667   | 0.890625  | 0.859375   | 3.596197  | -4.713593 | 0.271591  | 0.083333 | -0.031250 |
-| 6 | ChRM23  | -14.715155 | 0.860540  | 0.444444   | -12.511259 | 1.722979  | 0.333333    | 0.656250  | 0.750000   | 0.697917  | 0.820312   | 2.203896  | 0.862440  | -0.111111 | 0.093750 | 0.122396  |
-| 7 | ACCM03  | -25.010011 | 3.996422  | 0.383459   | -21.499245 | 0.491592  | 0.500000    | 0.692708  | 0.953125   | 0.692708  | 0.871094   | 3.510766  | -3.504830 | 0.116541  | 0.260417 | 0.178385  |
-| 8 | ACCM04  | -8.716558  | 1.223649  | 0.305556   | -8.433033  | 1.114868  | 0.290323    | 0.562500  | 0.726562   | 0.609375  | 0.910156   | 0.283524  | -0.108782 | -0.015233 | 0.164062 | 0.300781  |
-:END:
+: ad0c797e-bfa0-4a90-9fb4-282075727d11
 
 
 
@@ -5290,7 +2497,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_66.png]]
+: 45b3fa99-6635-41dc-832d-da30394d13ac
 
 
 ***** Optional alternate version using =dfrac=
@@ -5326,7 +2533,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_67.png]]
+: 42eefc96-c803-47fd-aa32-5521579aac41
 
 
 ---
@@ -5363,7 +2570,7 @@ print('CR:', np.sum(mask_cr), 'FA:', np.sum(mask_fa))
 #+end_src
 
 #+RESULTS:
-: CR: 283 FA: 245
+: 4cb42e7f-b000-4983-a83b-c64b9370b0db
 
 
 
@@ -5372,7 +2579,7 @@ fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=False
 
 # ---- left: mean trajectories
 for mask, color, lab in zip([mask_cr, mask_fa], [col_CR, col_FA], ['Correct reject', 'False alarm']):
-    X_ = X_epoch[mask]
+    X_ = X_single[mask]
     if X_.shape[0] == 0:
         continue
 
@@ -5394,7 +2601,7 @@ for mouse in y_single.mouse.unique():
         mm = mask & (y_single.mouse == mouse)
         if np.sum(mm) < 3:
             continue
-        yv = np.nanmean(X_epoch[mm][:, y_idx, bins_late], axis=(0, 1))
+        yv = np.nanmean(X_single[mm][:, y_idx, bins_late], axis=(0, 1))
         vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
 
 df_err = pd.DataFrame(vals)
@@ -5419,7 +2626,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_69.png]]
+: 3a4e178b-a5f8-4965-a050-f368bf818135
 
 
 ***** Optional two-stage version
@@ -5443,7 +2650,7 @@ for i, stage in enumerate(['Naive', 'Expert']):
     mask_fa = mask0 & (y_single.performance == 0)
 
     for mask, color, lab in zip([mask_cr, mask_fa], [col_CR, col_FA], ['CR', 'FA']):
-        X_ = X_epoch[mask]
+        X_ = X_single[mask]
         if X_.shape[0] == 0:
             continue
         x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
@@ -5460,7 +2667,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_70.png]]
+: 16405eaa-f6e8-4242-8ea8-962324a9b35d
 
 
 ---
@@ -5474,8 +2681,7 @@ pkl_save(df_rel,  'fig2G_geometry_behavior_refined', path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/pca//fig2F_delay_geometry_refined.pkl
-: saving to ../data/pca//fig2G_geometry_behavior_refined.pkl
+: c5ed84d1-9659-4a0d-a238-e9b3c2cdd546
 
 
 ---
@@ -5500,23 +2706,21 @@ bins_choice = options['bins_CHOICE']
 mask_lick = (y_single.laser == 0) & (y_single.performance == 1) & (y_single.choice == 1)
 mask_nolick = (y_single.laser == 0) & (y_single.performance == 1) & (y_single.choice == 0)
 
-m_lick = np.nanmean(X_epoch[mask_lick][:, 1, bins_choice])
-m_nolick = np.nanmean(X_epoch[mask_nolick][:, 1, bins_choice])
+m_lick = np.nanmean(X_single[mask_lick][:, 1, bins_choice])
+m_nolick = np.nanmean(X_single[mask_nolick][:, 1, bins_choice])
 
 print('PC2 mean lick    :', m_lick)
 print('PC2 mean no-lick :', m_nolick)
 
 if m_lick < m_nolick:
     print('Flipping PC2 sign so that positive values are more lick-like')
-    X_epoch[:, 1, :] *= -1
+    X_single[:, 1, :] *= -1
 else:
     print('Keeping PC2 sign')
 #+end_src
 
 #+RESULTS:
-: PC2 mean lick    : 3.2428565479551192
-: PC2 mean no-lick : 2.5984880775561954
-: Keeping PC2 sign
+: 1fac6563-00e5-4776-a11c-83f0d88b1fa1
 
 
 This will make all later interpretations more stable.
@@ -5586,6 +2790,7 @@ def plot_mean_traj_by_group(ax, X, y, bins, group_col, levels, colors, labels):
 #+end_src
 
 #+RESULTS:
+: 736a3446-3185-4edf-9324-79aaa3410cfd
 
 
 ---
@@ -5614,7 +2819,7 @@ for i, stage in enumerate(stages):
     mask &= (y_single.laser == 0)
     mask &= (y_single.performance == 1)
 
-    X_stage = X_epoch[mask]
+    X_stage = X_single[mask]
     y_stage = y_single.loc[mask].reset_index(drop=True)
 
     x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
@@ -5642,7 +2847,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_74.png]]
+: 2e346a7c-b9a6-463e-a299-29eb79206173
 
 
 Why this is better:
@@ -5675,7 +2880,7 @@ for i, stage in enumerate(stages):
     mask &= (y_single.laser == 0)
     mask &= (y_single.performance == 1)
 
-    X_stage = X_epoch[mask]
+    X_stage = X_single[mask]
     y_stage = y_single.loc[mask].reset_index(drop=True)
 
     x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
@@ -5709,7 +2914,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_75.png]]
+: 23655932-d593-4f20-93d6-615e4ad4f33b
 
 
 ---
@@ -5737,7 +2942,7 @@ for mouse in y_single.mouse.unique():
         if np.sum(mask) < 5:
             continue
 
-        x, y = epoch_xy(X_epoch[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
+        x, y = epoch_xy(X_single[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
 
         rows.append({
             'mouse': mouse,
@@ -5752,6 +2957,7 @@ df_cent = pd.DataFrame(rows)
 #+end_src
 
 #+RESULTS:
+: 2256c31c-a1d5-4245-a1bc-af56ddfd5133
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
@@ -5785,7 +2991,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_77.png]]
+: 171f6354-6fdc-42e0-b9dd-558b74012157
 
 
 This is better than the earlier version because:
@@ -5817,7 +3023,7 @@ for mouse in y_single.mouse.unique():
         mask &= (y_single.mouse == mouse)
 
         if np.sum(mask) >= 5:
-            x, y = epoch_xy(X_epoch[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
+            x, y = epoch_xy(X_single[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
             dumdf[f'x_{stage}'] = np.nanmean(x)
             dumdf[f'y_{stage}'] = np.nanmean(y)
 
@@ -5836,6 +3042,7 @@ df_rel['dGNG'] = df_rel['gng_Expert'] - df_rel['gng_Naive']
 #+end_src
 
 #+RESULTS:
+: 44264bd6-34b4-4a9b-9cfd-a3c3a22779ba
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
@@ -5870,7 +3077,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_79.png]]
+: 1d5c11ae-dc9b-44a8-a037-6fe3b6029eaa
 
 
 ---
@@ -5905,7 +3112,7 @@ print(stage, 'CR:', np.sum(mask_cr), 'FA:', np.sum(mask_fa))
 #+end_src
 
 #+RESULTS:
-: Naive CR: 283 FA: 245
+: e41df457-3fb7-4832-95ae-a284cfef477c
 
 
 #+begin_src jupyter-python
@@ -5915,7 +3122,7 @@ for mask, color, lab in zip([mask_cr, mask_fa], ['#377eb8', '#e41a1c'], ['Correc
     if np.sum(mask) == 0:
         continue
 
-    X_ = X_epoch[mask]
+    X_ = X_single[mask]
     x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
     y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
 
@@ -5937,7 +3144,7 @@ for mouse in y_single.mouse.unique():
         mm = mask & (y_single.mouse == mouse)
         if np.sum(mm) < 3:
             continue
-        yv = np.nanmean(X_epoch[mm][:, y_idx, bins_late])
+        yv = np.nanmean(X_single[mm][:, y_idx, bins_late])
         vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
 
 df_err = pd.DataFrame(vals)
@@ -5959,7 +3166,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_81.png]]
+: 3cd8c668-8751-45f1-bb64-603953e939de
 
 
 ---
@@ -6038,6 +3245,7 @@ def correct_dpa_by_dual_mean(X, y, by_mouse=True, by_stage=True, laser=0):
 #+end_src
 
 #+RESULTS:
+: 7a93c21f-8b2b-4c1f-90f6-62258e510cf1
 
 
 ---
@@ -6050,13 +3258,13 @@ def correct_dpa_by_dual_mean(X, y, by_mouse=True, by_stage=True, laser=0):
 # Build corrected latent representation
 # =========================
 
-X_epoch_corr = correct_dpa_by_dual_mean(X_epoch, y_single, by_mouse=True, by_stage=True, laser=0)
+X_single_corr = correct_dpa_by_dual_mean(X_single, y_single, by_mouse=True, by_stage=True, laser=0)
 
-print(X_epoch.shape, X_epoch_corr.shape)
+print(X_single.shape, X_single_corr.shape)
 #+end_src
 
 #+RESULTS:
-: (9216, 10, 84) (9216, 10, 84)
+: b301c171-1212-4f0d-9b3d-bcc3ed16193f
 
 
 You can sanity check the correction:
@@ -6067,9 +3275,9 @@ for stage in ['Naive', 'Expert']:
     mask_dpa = (y_single.tasks == 'DPA') & (y_single.learning == stage) & (y_single.laser == 0)
     mask_dual = (y_single.tasks != 'DPA') & (y_single.learning == stage) & (y_single.laser == 0)
 
-    m_dpa_before = np.nanmean(X_epoch[mask_dpa][:, :2, bins_late], axis=(0,2))
-    m_dpa_after  = np.nanmean(X_epoch_corr[mask_dpa][:, :2, bins_late], axis=(0,2))
-    m_dual       = np.nanmean(X_epoch[mask_dual][:, :2, bins_late], axis=(0,2))
+    m_dpa_before = np.nanmean(X_single[mask_dpa][:, :2, bins_late], axis=(0,2))
+    m_dpa_after  = np.nanmean(X_single_corr[mask_dpa][:, :2, bins_late], axis=(0,2))
+    m_dual       = np.nanmean(X_single[mask_dual][:, :2, bins_late], axis=(0,2))
 
     print(stage)
     print(' DPA before:', m_dpa_before)
@@ -6078,21 +3286,14 @@ for stage in ['Naive', 'Expert']:
 #+end_src
 
 #+RESULTS:
-: Naive
-:  DPA before: [ 1.49644465 -4.11422736]
-:  DPA after : [ 1.74984677 -4.79119008]
-:  dual mean : [-1.1283255   3.07255776]
-: Expert
-:  DPA before: [ 2.06893882 -4.93691945]
-:  DPA after : [ 2.43110927 -5.75543317]
-:  dual mean : [-1.57772509  3.69623031]
+: 5b6688c2-1bba-4161-85ff-9e3f4ebb0691
 
 
 ---
 
 **/ 3) Use corrected coordinates in Fig. 2E
 
-If you want the hero panel itself corrected, just replace =X_epoch= by =X_epoch_corr=.
+If you want the hero panel itself corrected, just replace =X_single= by =X_single_corr=.
 
 #+begin_src jupyter-python
 # =========================
@@ -6112,7 +3313,7 @@ for i, stage in enumerate(stages):
     mask &= (y_single.laser == 0)
     # mask &= (y_single.performance == 1)
 
-    X_stage = X_epoch_corr[mask]
+    X_stage = X_single_corr[mask]
     y_stage = y_single.loc[mask].reset_index(drop=True)
 
     x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
@@ -6140,7 +3341,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_85.png]]
+: a79b8c66-609c-490d-ac22-428cf0c88b3d
 
 
 ---
@@ -6168,7 +3369,7 @@ for mouse in y_single.mouse.unique():
         if np.sum(mask) < 5:
             continue
 
-        x, y = epoch_xy(X_epoch_corr[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
+        x, y = epoch_xy(X_single_corr[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
 
         rows.append({
             'mouse': mouse,
@@ -6184,15 +3385,7 @@ df_cent_corr.head()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-|   | mouse   | learning | x_centroid | y_centroid | frac_nolick | n_trials |
-|---+---------+----------+------------+------------+-------------+----------|
-| 0 | JawsM01 | Naive    | -1.390945  | -1.720655  | 0.687500    | 96       |
-| 1 | JawsM01 | Expert   | -2.859099  | -1.313824  | 0.812500    | 32       |
-| 2 | JawsM06 | Naive    | 0.239262   | -0.064414  | 0.468750    | 96       |
-| 3 | JawsM06 | Expert   | 0.355736   | 0.055094   | 0.479167    | 96       |
-| 4 | JawsM12 | Naive    | 0.629458   | 0.837852   | 0.375000    | 96       |
-:END:
+: 119d88e0-15f6-41ca-9d26-b8dfdc901be9
 
 
 #+begin_src jupyter-python
@@ -6227,7 +3420,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_87.png]]
+: 3a1b36d9-7749-4003-986e-65a6810dda00
 
 
 ---
@@ -6256,7 +3449,7 @@ for mouse in y_single.mouse.unique():
         mask &= (y_single.mouse == mouse)
 
         if np.sum(mask) >= 5:
-            x, y = epoch_xy(X_epoch_corr[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
+            x, y = epoch_xy(X_single_corr[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
             dum[f'x_{stage}'] = np.nanmean(x)
             dum[f'y_{stage}'] = np.nanmean(y)
 
@@ -6276,6 +3469,7 @@ df_rel_corr['dGNG'] = df_rel_corr['gng_Expert'] - df_rel_corr['gng_Naive']
 #+end_src
 
 #+RESULTS:
+: a4d18e71-a0d9-463b-97da-437375d55c90
 
 
 #+begin_src jupyter-python
@@ -6311,7 +3505,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_89.png]]
+: ed27d5db-6502-4c36-9700-fea8466e29c3
 
 
 ---
@@ -6334,7 +3528,7 @@ for mouse in y_single.mouse.unique():
         mm = mask & (y_single.mouse == mouse)
         if np.sum(mm) < 3:
             continue
-        yv = np.nanmean(X_epoch_corr[mm][:, y_idx, bins_late])
+        yv = np.nanmean(X_single_corr[mm][:, y_idx, bins_late])
         vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
 
 df_err_corr = pd.DataFrame(vals)
@@ -6342,15 +3536,7 @@ df_err_corr.head()
 #+end_src
 
 #+RESULTS:
-:RESULTS:
-|   | mouse   | type | late_choice |
-|---+---------+------+-------------|
-| 0 | JawsM01 | CR   | -1.668531   |
-| 1 | JawsM01 | FA   | -1.375789   |
-| 2 | JawsM06 | CR   | 0.462211    |
-| 3 | JawsM06 | FA   | 0.165297    |
-| 4 | JawsM12 | CR   | 1.627242    |
-:END:
+: c93c02f8-55ef-4339-9a74-e3fe4e91baaa
 
 
 ---

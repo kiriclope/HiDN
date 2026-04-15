@@ -1,0 +1,1257 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:jupyter-python :results both :exports both :async yes :session pca :kernel dual :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
+
+* Notebook Settings
+
+#+begin_src jupyter-python
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual/bin/python
+
+* Imports
+
+#+begin_src jupyter-python
+  from sklearn.exceptions import ConvergenceWarning
+  warnings.filterwarnings("ignore")
+  import traceback
+
+  import sys
+  sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+  import os
+  if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+  import pickle as pkl
+  import numpy as np
+  import matplotlib.pyplot as plt
+  import pandas as pd
+  import seaborn as sns
+
+  from time import perf_counter
+
+  from sklearn.base import clone
+  from sklearn.metrics import make_scorer, roc_auc_score
+  from sklearn.preprocessing import StandardScaler, RobustScaler
+  from sklearn.model_selection import RepeatedStratifiedKFold, LeaveOneOut, StratifiedKFold
+
+  from src.common.plot_utils import add_vlines, add_vdashed
+  from src.common.options import set_options
+  from src.stats.bootstrap import my_boots_ci
+  from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+  from src.preprocess.helpers import avg_epochs
+  from src.decode.bump import circcvl
+  from src.torch.classificationCV import ClassificationCV
+  from src.torch.classify import get_classification
+#+end_src
+
+#+RESULTS:
+
+* Helpers
+** scalers
+
+#+begin_src jupyter-python
+import numpy as np
+
+class StandardScaler:
+    def __init__(self, axis=0, if_scale=0):
+        self.axis = axis
+        self.center_ = None
+        self.scale_ = None
+        self.if_scale_ = if_scale
+
+    def fit(self, X):
+        self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
+        self.scale_ = np.nanstd(X, axis=(self.axis, -1), keepdims=True)
+
+        lo, hi = np.nanpercentile(self.scale_.ravel(), [5, 95])
+        self.scale_ = np.clip(self.scale_, lo, hi)
+
+        return self
+
+    def transform(self, X):
+        if self.if_scale_:
+            return (X - self.center_) / self.scale_
+        return (X - self.center_)
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+
+class RobustScaler:
+    def __init__(self, axis=0):
+        self.axis = axis
+        self.center_ = None
+        self.scale_ = None
+
+    def fit(self, X):
+        self.center_ = np.nanmedian(X, axis=self.axis, keepdims=True)
+        q75 = np.nanpercentile(X, 75, axis=self.axis, keepdims=True)
+        q25 = np.nanpercentile(X, 25, axis=self.axis, keepdims=True)
+        self.scale_ = q75 - q25
+        # Prevent division by zero
+        self.scale_ = np.where(self.scale_ == 0, 1, self.scale_)
+        return self
+
+    def transform(self, X):
+        return (X - self.center_) / self.scale_
+
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+#+end_src
+
+#+RESULTS:
+
+** pad
+
+#+begin_src jupyter-python
+def pad_list(arrays, axis=0, max_len=None):
+    """
+    Pads a list of arrays along the specified axis with NaNs so all have the same size along that axis.
+    Returns a list of padded arrays.
+    """
+    # Find maximum size along specified axis
+    if max_len is None:
+        max_len = max(arr.shape[axis] for arr in arrays)
+
+    padded = []
+    for arr in arrays:
+        pad_width = [(0, 0)] * arr.ndim
+
+
+        n_pad = max_len - arr.shape[axis]
+
+        if n_pad > 0:
+            pad_width[axis] = (0, n_pad)
+            arr_padded = np.pad(arr, pad_width, mode='constant', constant_values=np.nan)
+        else:
+            arr_padded = arr
+        padded.append(arr_padded)
+
+    return padded
+#+end_src
+
+#+RESULTS:
+: 4caca8b5-aca7-4f6c-9e9c-0c96563ad136
+
+#+begin_src jupyter-python
+def pad_with_nans(array, target_shape):
+    result = np.full(target_shape, np.nan)  # Create an array filled with NaNs
+    print(result.shape)
+    slices = tuple(slice(0, min(dim, target)) for dim, target in zip(array.shape, target_shape))
+    result[slices] = array[slices]
+    return result
+#+end_src
+
+#+RESULTS:
+
+** save
+
+#+begin_src jupyter-python
+  def convert_seconds(seconds):
+      h = seconds // 3600
+      m = (seconds % 3600) // 60
+      s = seconds % 60
+      return h, m, s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+  import pickle as pkl
+
+  def pkl_save(obj, name, path="."):
+      os.makedirs(path, exist_ok=True)
+      destination = path + "/" + name + ".pkl"
+      print("saving to", destination)
+      pkl.dump(obj, open(destination, "wb"))
+
+
+  def pkl_load(name, path="."):
+      source = path + "/" + name + '.pkl'
+      print('loading from', source)
+      return pkl.load(open( source, "rb"))
+
+#+end_src
+
+#+RESULTS:
+
+** cv pca
+
+#+begin_src jupyter-python
+def cv_avg_cond(X, y, condition='odor_pair', levels=None):
+    if isinstance(condition, str):
+        condition = [condition]
+
+    # fixed levels (recommended): dict {col: [ordered levels]}
+    if levels is None:
+        levels = {c: np.sort(y[c].astype(str).unique()) for c in condition}
+    else:
+        levels = {c: np.array(levels[c]).astype(str) for c in condition}
+
+    combos = list(itertools.product(*[levels[c] for c in condition]))
+
+    X_avg = []
+    for combo in combos:
+        idx = np.ones(len(y), dtype=bool)
+        for c, v in zip(condition, combo):
+            idx &= (y[c].astype(str).values == str(v))
+
+        if not idx.any():
+            raise ValueError(f"Missing condition combo in this split: {dict(zip(condition, combo))}")
+
+        X_avg.append(np.nanmean(X[idx], axis=0))
+
+    return np.stack(X_avg, axis=0)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+
+def polar_velocities(x, y, sigma_r=1, sigma_t=1, sigma_time=1):
+    """
+    x, y: (n_traj, n_points)
+    sigma: gaussian smoothing in time (in points)
+    Returns:
+      dr_s, dtheta_s: (n_traj, n_points): smoothed radial and angular velocities
+      r, theta: positions at each point, for later conversion
+    """
+
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+    theta_u = np.unwrap(theta, axis=1)
+
+    # r_s = gaussian_filter1d(r, sigma=sigma_r)
+    # theta_s = gaussian_filter1d(theta_u, sigma=sigma_t)
+
+    r_s = gaussian_filter(r, sigma=(sigma_r, sigma_time))
+    theta_s = gaussian_filter(theta_u, sigma=(sigma_t, sigma_time))
+
+    dr_s = np.gradient(r_s, axis=1)
+    dtheta_s = np.gradient(theta_s, axis=1)
+
+    return dr_s, dtheta_s, r_s, theta_s
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def pol2cart(dr, dtheta, r, theta):
+    """
+    Converts smoothed polar velocities to Cartesian velocities.
+    All arrays shape: (n_traj, n_points)
+    """
+    u = dr * np.cos(theta) - r * dtheta * np.sin(theta)
+    v = dr * np.sin(theta) + r * dtheta * np.cos(theta)
+    return u, v
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
+    """
+    Interpolate velocity field to a regular grid.
+    Inputs: x,y,u,v all (n_samples,) or (n_traj, n_points) -- flatten them first.
+    Returns: xi, yi, ui, vi: all (grid_size, grid_size) arrays.
+    """
+    x_flat = x.flatten()
+    y_flat = y.flatten()
+    u_flat = u.flatten()
+    v_flat = v.flatten()
+
+    # xi, yi = np.meshgrid(
+    #     np.linspace(np.min(x_flat), np.max(x_flat), grid_size),
+    #     np.linspace(np.min(y_flat), np.max(y_flat), grid_size),
+    # )
+
+    x_min, x_max = np.min(x_flat)-1, np.max(x_flat)+1
+    y_min, y_max = np.min(y_flat)-1, np.max(y_flat)+1
+
+    if z_lim is 0:
+        z_min = np.min((x_min, y_min))
+        z_max = np.min((x_max, y_max))
+    else:
+        z_min = -z_lim
+        z_max = z_lim
+
+    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
+                         np.linspace(z_min, z_max, grid_size))
+
+
+    ui = griddata((x_flat, y_flat), u_flat, (xi, yi), method=method, fill_value=np.nan)
+    vi = griddata((x_flat, y_flat), v_flat, (xi, yi), method=method, fill_value=np.nan)
+
+    # Fill nans with nearest
+    mask = np.isnan(ui)
+    if np.any(mask):
+        ui[mask] = griddata((x_flat, y_flat), u_flat, (xi, yi), method='nearest')[mask]
+        vi[mask] = griddata((x_flat, y_flat), v_flat, (xi, yi), method='nearest')[mask]
+
+    return xi, yi, ui, vi
+
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
+    speed = np.sqrt(ui**2 + vi**2)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(5,5))
+    # Normalize for coloring
+    import matplotlib as mpl
+    vmin, vmax = np.nanpercentile(speed, [5, 95])
+    norm = mpl.colors.Normalize(vmin, vmax)
+    # strm = ax.streamplot(xi, yi, ui, vi, density=density, color=speed, cmap='coolwarm', norm=norm)
+    heatmap = ax.pcolormesh(xi, yi, speed, cmap='coolwarm', shading='gouraud', norm=norm)
+
+    if show_cbar:
+        plt.colorbar(strm.lines, ax=ax, label='Speed')
+
+    ax.set_aspect('equal')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    return ax
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+from scipy.ndimage import gaussian_filter1d, gaussian_filter
+from scipy.interpolate import Rbf
+
+def create_field_rbf(
+    x, y, u, v,
+    grid_size=32,
+    z_lim=5,
+    method='multiquadric',
+    epsilon=None,
+    smooth=0.0
+):
+    """
+    Interpolate velocity field to a regular grid using RBFs.
+
+    Inputs:
+      x, y, u, v: (n_traj, n_points) or (n_samples,) arrays
+      grid_size: number of grid points per dimension
+      z_lim: if 0, use bounding box of data; otherwise [-z_lim, z_lim]^2
+      function: RBF type ('multiquadric', 'inverse', 'gaussian', 'linear', etc.)
+      epsilon: shape parameter; if None, Rbf chooses something heuristic
+      smooth: smoothing parameter passed to Rbf (regularization)
+
+    Returns:
+      xi, yi, ui, vi: all (grid_size, grid_size) arrays
+    """
+    x_flat = x.flatten()
+    y_flat = y.flatten()
+    u_flat = u.flatten()
+    v_flat = v.flatten()
+
+    # Domain limits
+    if z_lim == 0:
+        x_min, x_max = x_flat.min() - 1, x_flat.max() + 1
+        y_min, y_max = y_flat.min() - 1, y_flat.max() + 1
+        z_min = min(x_min, y_min)
+        z_max = max(x_max, y_max)
+    else:
+        z_min, z_max = -z_lim, z_lim
+
+    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
+                         np.linspace(z_min, z_max, grid_size))
+
+    # One RBF for u, one for v
+    rbfu = Rbf(
+        x_flat, y_flat, u_flat,
+        function=method,
+        epsilon=epsilon,
+        smooth=smooth
+    )
+    rbfv = Rbf(
+        x_flat, y_flat, v_flat,
+        function=method,
+        epsilon=epsilon,
+        smooth=smooth
+    )
+
+    ui = rbfu(xi, yi)
+    vi = rbfv(xi, yi)
+
+    return xi, yi, ui, vi
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+
+from scipy.ndimage import gaussian_filter1d, gaussian_filter
+from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+
+def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
+    """
+    Interpolate velocity field to a regular grid.
+
+    Inputs:
+      x, y, u, v: (n_traj, n_points) or (n_samples,) arrays
+      grid_size: number of grid points per dimension
+      method: 'linear' (via LinearNDInterpolator) or any method supported
+              by griddata ('linear', 'nearest', 'cubic') if not 'linear' here.
+      z_lim: if 0, use bounding box of data; otherwise domain = [-z_lim, z_lim]^2
+
+    Returns:
+      xi, yi, ui, vi: all (grid_size, grid_size) arrays
+    """
+    x_flat = x.flatten()
+    y_flat = y.flatten()
+    u_flat = u.flatten()
+    v_flat = v.flatten()
+
+    # Domain limits
+    if z_lim == 0:
+        x_min, x_max = x_flat.min() - 1, x_flat.max() + 1
+        y_min, y_max = y_flat.min() - 1, y_flat.max() + 1
+        z_min = min(x_min, y_min)
+        z_max = max(x_max, y_max)
+    else:
+        z_min, z_max = -z_lim, z_lim
+
+    xi, yi = np.meshgrid(np.linspace(z_min, z_max, grid_size),
+                         np.linspace(z_min, z_max, grid_size))
+
+    # Interpolation
+    if method == 'linear':
+        # Use LinearNDInterpolator + NearestNDInterpolator fallback
+        pts = np.column_stack((x_flat, y_flat))
+        lin_u = LinearNDInterpolator(pts, u_flat)
+        lin_v = LinearNDInterpolator(pts, v_flat)
+
+        ui = lin_u(xi, yi)
+        vi = lin_v(xi, yi)
+
+        mask = np.isnan(ui)
+        if np.any(mask):
+            near_u = NearestNDInterpolator(pts, u_flat)
+            near_v = NearestNDInterpolator(pts, v_flat)
+            ui[mask] = near_u(xi[mask], yi[mask])
+            vi[mask] = near_v(xi[mask], yi[mask])
+    else:
+        from scipy.interpolate import griddata
+        ui = griddata((x_flat, y_flat), u_flat, (xi, yi),
+                      method=method, fill_value=np.nan)
+        vi = griddata((x_flat, y_flat), v_flat, (xi, yi),
+                      method=method, fill_value=np.nan)
+
+        mask = np.isnan(ui)
+        if np.any(mask):
+            ui[mask] = griddata((x_flat, y_flat), u_flat, (xi, yi),
+                                method='nearest')[mask]
+            vi[mask] = griddata((x_flat, y_flat), v_flat, (xi, yi),
+                                method='nearest')[mask]
+
+    return xi, yi, ui, vi
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def get_mean_velo(r_s, dr_s, n_bins=32, z_lim=10):
+
+    r_all  = r_s.flatten()
+    dr_all = dr_s.flatten()
+
+    bins = np.linspace(np.nanmin(r_all), np.nanmax(r_all), n_bins)
+
+    bin_centers = 0.5*(bins[:-1] + bins[1:])
+    digitized = np.digitize(r_all, bins)
+
+    dr_mean = np.array([np.nanmean(dr_all[digitized == i]) for i in range(1, len(bins))])
+
+    return dr_mean, bins, bin_centers, digitized
+#+end_src
+
+#+RESULTS:
+
+* Parameters
+
+#+begin_src jupyter-python
+old_mice = ['ChRM04','JawsM15', 'JawsM18', 'ACCM03', 'ACCM04']
+Jaws_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18']
+
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+# mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23']
+# mice = ['JawsM15', 'JawsM18', 'ChRM04']
+
+tasks = ['Dual'] # all
+
+kwargs = {
+   'mice': mice,
+   'tasks': tasks,
+   'mouse': mice[0], 'laser': 0,
+   'trials': '', 'reload': 0, 'data_type': 'dF',
+   'prescreen': None, 'pval': 0.05,
+   'preprocess': True, 'scaler_BL': 'standard_BL',
+   'avg_noise': False, 'unit_var_BL': False,
+   'random_state': None, 'T_WINDOW': 0.0,
+   'l1_ratio': 0.95,
+   'n_comp': 3, 'pca': 'pca',
+   'scaler': None,
+   'bootstrap': 1, 'n_boots': 128,
+   'n_splits': 5, 'n_repeats': 10,
+   'class_weight': 0,
+   'multilabel': 0,
+   'mne_estimator':'generalizing', # sliding or generalizing
+   'n_jobs': 64,
+}
+
+# kwargs['days'] = ['first', 'middle', 'last']
+kwargs['days'] = ['first', 'last']
+# kwargs['days'] = 'all'
+options = set_options(**kwargs)
+options['cv_B'] = False
+#+end_src
+
+#+RESULTS:
+
+* Load Data
+
+#+begin_src jupyter-python
+SCALE=None
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+X_trials, y_trials = [], []
+
+n_neurons = 3319
+counter = 0
+for mouse in options['mice']:
+
+    options['mouse'] = mouse
+    options = set_options(**options)
+    X, y = get_X_y_days(**options)
+
+    print(mouse, X.shape, y.shape, options['n_days'])
+
+    X_scale = X.copy()
+    std_=1
+    for day in range(1, options['n_days']+1):
+        idx0 = (y.day==day) & (y.laser==0)
+
+        mean_ = 1
+        if SCALE is not None:
+            mean_ = np.nanmean(X[idx0], 0, keepdims=1)
+
+        if SCALE=='std':
+
+            std_ = np.nanstd(X[idx0], (0, 2), ddof=0, keepdims=1)
+
+            lo, hi = np.percentile(std_.ravel(), [5, 95])
+            std_ = np.clip(std_, lo, hi)
+
+        if SCALE == 'mad':
+            med = np.nanmedian(X[idx0], axis=(0,2), keepdims=True)  # often ~0
+            mad = np.nanmedian(np.abs(X[idx0] - med), axis=(0, 2), keepdims=True)
+            std_ = 1.4826 * mad + 1e-4
+
+            lo, hi = np.percentile(std_.ravel(), [5, 95])
+            std_ = np.clip(std_, lo, hi)
+
+        if SCALE=='std_trial':
+
+            std_ = np.nanstd(X[idx0], 0, ddof=0, keepdims=1)
+
+            lo, hi = np.percentile(std_.ravel(), [5, 95])
+            std_ = np.clip(std_, lo, hi)
+
+        if SCALE == 'mad_trial':
+            med = np.nanmedian(X[idx0], axis=0, keepdims=True)  # often ~0
+            mad = np.nanmedian(np.abs(X[idx0] - med), axis=0, keepdims=True)
+            std_ = 1.4826 * mad + 1e-4
+
+            lo, hi = np.percentile(std_.ravel(), [5, 95])
+            std_ = np.clip(std_, lo, hi)
+
+        idx = (y.day==day)
+        X_scale[idx] = (X[idx] - mean_) / std_
+
+    X_trial = np.zeros((X.shape[0], n_neurons, X.shape[-1])) * np.nan
+    X_trial[:, counter:X.shape[1]+counter, :] = X_scale
+
+    counter += X.shape[1]
+
+    X_trials.append(X_trial)
+
+    y['mouse'] = mouse
+    y_trials.append(y)
+
+X_trials = np.array(X_trials, dtype=object)
+y_trials = np.array(y_trials, dtype=object)
+#+end_src
+
+#+RESULTS:
+: JawsM01 (768, 184, 84) (768, 15) 4
+: JawsM06 (1152, 201, 84) (1152, 15) 6
+: JawsM12 (960, 423, 84) (960, 15) 5
+: JawsM15 (1152, 693, 84) (1152, 15) 6
+: JawsM18 (1152, 444, 84) (1152, 15) 6
+: ChRM04 (1152, 668, 84) (1152, 15) 6
+: ChRM23 (960, 232, 84) (960, 15) 5
+: ACCM03 (960, 361, 84) (960, 15) 5
+: ACCM04 (960, 113, 84) (960, 15) 5
+
+#+begin_src jupyter-python
+X_all = np.concatenate(X_trials, 0)
+y_all = pd.concat(y_trials)
+print(X_all.shape, y_all.shape)
+#+end_src
+
+#+RESULTS:
+: (9216, 3319, 84) (9216, 16)
+
+#+begin_src jupyter-python
+dum = ''
+if SCALE is not None:
+    dum = SCALE
+
+pkl_save(X_all, 'X_all_nan_%s' % dum, path="../data/pca")
+pkl_save(y_all, 'y_all_nan_%s' % dum, path="../data/pca")
+#+end_src
+
+#+RESULTS:
+
+
+* Single mouse
+** Load
+
+#+begin_src jupyter-python
+dum = ''
+if SCALE is not None:
+    dum = SCALE
+
+X_all = pkl_load('X_all_nan_%s' % dum, path="../data/pca")
+y_all = pkl_load('y_all_nan_%s' % dum, path="../data/pca")
+#+end_src
+
+#+RESULTS:
+: loading from ../data/pca/X_all_nan_.pkl
+: loading from ../data/pca/y_all_nan_.pkl
+
+#+begin_src jupyter-python
+y_all['sample'] = y_all.sample_odor
+y_all['test'] = y_all.test_odor
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+print(y_all.keys())
+#+end_src
+
+#+RESULTS:
+: Index(['sample_odor', 'dist_odor', 'test_odor', 'tasks', 'response', 'laser',
+:        'day', 'choice', 'pair', 'odr_perf', 'odr_choice', 'odr_response',
+:        'odor_pair', 'learning', 'performance', 'mouse', 'sample', 'test'],
+:       dtype='object')
+
+** CV Scores
+*** utils
+
+ #+begin_src jupyter-python
+import mne
+mne.set_log_level("ERROR")
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def smooth_and_bin2(X, sigma=1.0):
+    X_s = gaussian_filter1d(X, sigma=sigma, axis=-1, mode='nearest')
+    T = X_s.shape[-1]
+    assert T % 2 == 0
+    return X_s.reshape(*X_s.shape[:-1], T//2, 2).mean(-1)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def _unwrap_to_final_estimator(est):
+    seen = set()
+    while True:
+        if id(est) in seen:
+            raise RuntimeError("Cycle detected while unwrapping estimator.")
+        seen.add(id(est))
+
+        if hasattr(est, "best_estimator_"):
+            est = est.best_estimator_
+            continue
+
+        if isinstance(est, Pipeline) or hasattr(est, "steps") or hasattr(est, "named_steps"):
+            steps = est.steps if hasattr(est, "steps") else list(est.named_steps.items())
+            est = steps[-1][1]
+            continue
+
+        if hasattr(est, "estimator_"):
+            est = est.estimator_
+            continue
+
+        return est
+
+def _get_coef_single(est):
+    model = _unwrap_to_final_estimator(est)
+    if not hasattr(model, "coef_"):
+        raise AttributeError(f"{type(model)} has no coef_ attribute.")
+    return np.asarray(model.coef_)
+
+
+def _get_intercept_single(est):
+    model = _unwrap_to_final_estimator(est)
+    if not hasattr(model, "intercept_"):
+        raise AttributeError(f"{type(model)} has no intercept_ attribute.")
+    return np.asarray(model.intercept_)
+
+def _get_coefs(estimator):
+    return np.stack([_get_coef_single(est_t) for est_t in estimator.estimators_], axis=0)
+
+
+def _get_intercepts(estimator):
+    return np.stack([_get_intercept_single(est_t) for est_t in estimator.estimators_], axis=0)
+
+def _normalize_decision_function(dec, coefs, eps=1e-6):
+    norms = np.linalg.norm(coefs.reshape(coefs.shape[0], -1), axis=1) + eps
+
+    if dec.ndim == 2:
+        return dec / norms[None, :]
+    elif dec.ndim == 3:
+        return dec / norms[None, :, None]
+    else:
+        raise ValueError(f"Unexpected decision_function shape: {dec.shape}")
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+from sklearn.pipeline import Pipeline
+
+def get_final_estimator(est):
+    if isinstance(est, Pipeline):
+        return est.steps[-1][1]
+    return est
+
+def get_coef_norms_timewise(time_estimator, eps=1e-6):
+    """
+    For SlidingEstimator or GeneralizingEstimator fitted on time-resolved data.
+    Returns norm(s) of classifier coefficients for each train-time estimator.
+    """
+    norms = []
+    for est_t in time_estimator.estimators_:
+        final_est = get_final_estimator(est_t)
+        coef = np.asarray(final_est.coef_)
+        norms.append(np.linalg.norm(coef.ravel()) + eps)
+    return np.asarray(norms)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+from sklearn.base import clone
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import StratifiedKFold
+
+from joblib import Parallel, delayed
+from sklearn.decomposition import PCA
+
+def get_estimator(
+        n_comp=3,
+        scaler='standard',
+):
+
+    clf = PCA(n_components=n_comp)
+
+    pipeline = []
+    if scaler is not None:
+        if scaler == "standard":
+            pipeline.append(("scaler", StandardScaler()))
+        elif scaler == "center":
+            pipeline.append(("scaler", StandardScaler(with_std=False)))
+
+    pipeline.append(("model", clf))
+    pipe = Pipeline(pipeline)
+
+    return pipe
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def ccgd_score(
+    X,
+    y_df,
+    estimator,
+    target="sample",
+    cv=None,
+    stage='Expert',
+    context='DPA',
+    n_jobs=-1,
+):
+    start = perf_counter()
+
+    if cv is None:
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=None)
+
+    m_within = (
+        (y_df.laser == 0)
+        & (y_df.learning == stage)
+        & (y_df.performance == 1)
+        & (y_df.tasks == context)
+    )
+
+    X_within = X[m_within]
+    y_within = y_df.loc[m_within].reset_index(drop=True)
+    y_within_labels = y_within[target].to_numpy()
+
+    print('X_within', X_within.shape, 'y_within', y_within.shape)
+
+    m_cross = (
+        (y_df.laser == 0)
+        & (y_df.learning == stage)
+        & (y_df.performance == 1)
+        & (y_df.tasks != context)
+    )
+
+    X_cross = X[m_cross]
+    y_cross = y_df.loc[m_cross].reset_index(drop=True)
+    y_cross_labels = y_cross[target].to_numpy()
+
+    print('X_cross', X_cross.shape, 'y_cross', y_cross.shape)
+
+    strata = (y_within["odor_pair"].astype(str) + "_" + y_within["day"].astype(str)).values
+
+    within_scores, y_cv_within = [], []
+    cross_scores, y_cv_cross = [], []
+
+    for train_idx, test_idx in cv.split(X_within, strata):
+        X_train, X_test = X_within[train_idx], X_within[test_idx]
+        y_train, y_test = y_within_labels[train_idx], y_within_labels[test_idx]
+
+        est = clone(estimator)
+        est.fit(X_train, y_train)
+        norms = get_coef_norms_timewise(est)
+
+        within_dec = est.decision_function(X_test) / norms[None, :, None]
+        within_sign = 2 * y_test - 1
+        within_score = within_sign[:, None, None] * within_dec
+
+        within_scores.append(within_score)
+        y_cv_within.append(y_within.iloc[test_idx].reset_index(drop=True))
+
+        cross_dec = est.decision_function(X_cross) / norms[None, :, None]
+        cross_sign = 2 * y_cross_labels - 1
+        cross_score  = cross_sign[:, None, None] * cross_dec
+
+        cross_scores.append(cross_score)
+        y_cv_cross.append(y_cross.reset_index(drop=True))
+
+    within_scores = np.vstack(within_scores)
+    y_cv_within = pd.concat(y_cv_within, axis=0, ignore_index=True)
+
+    # cross_scores = np.vstack(cross_scores)
+    # y_cv_cross = pd.concat(y_cv_cross, axis=0, ignore_index=True)
+
+    cross_scores = np.stack(cross_scores, axis=0)   # (n_folds, n_cross, n_train_t, n_test_t)
+    cross_scores = cross_scores.mean(axis=0)        # (n_cross, n_train_t, n_test_t)
+    y_cv_cross = y_cross.reset_index(drop=True)
+
+    print('within_score', within_scores.shape, 'y_within', y_cv_within.shape)
+    print('cross_score', cross_scores.shape, 'y_cross', y_cv_cross.shape)
+
+    scores = np.vstack([within_scores, cross_scores])
+    y_cv = pd.concat([y_cv_within, y_cv_cross], axis=0, ignore_index=True)
+
+    end = perf_counter()
+    print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+    return scores, y_cv
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+def flat_trial_time(A):
+            # (n_trials, n_neurons, n_time) -> (n_trials*n_time, n_neurons)
+            return A.transpose(0, 2, 1).reshape(-1, A.shape[1])
+
+def cross_val_pca(
+    X,
+    y_df,
+    estimator,
+    cv=None,
+    stage='Expert',
+    bins=None,
+    n_jobs=-1,
+):
+    start = perf_counter()
+
+    if cv is None:
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=None)
+
+    m_within = (
+        (y_df.laser == 0)
+        & (y_df.learning == stage)
+        & (y_df.performance == 1)
+    )
+
+    X_within = X[m_within]
+    y_within = y_df.loc[m_within].reset_index(drop=True)
+
+    print('X_within', X_within.shape, 'y_within', y_within.shape)
+
+    m_cross = ~m_within
+    X_cross = X[m_cross]
+    y_cross = y_df.loc[m_cross].reset_index(drop=True)
+
+    print('X_cross', X_cross.shape, 'y_cross', y_cross.shape)
+
+    strata = (y_within["odor_pair"].astype(str) + "_" + y_within["day"].astype(str)+ "_" + y_within["tasks"].astype(str)).values
+
+    within_scores, y_cv_within = [], []
+    cross_scores = []
+
+    for train_idx, test_idx in cv.split(X_within, strata):
+        X_train, X_test = X_within[train_idx], X_within[test_idx]
+        est = clone(estimator)
+        if bins is not None:
+                    est.fit(flat_trial_time(X_train[..., bins]))
+        else:
+                    est.fit(flat_trial_time(X_train))
+
+        within_score = est.transform(flat_trial_time(X_test)).reshape((X_test.shape[0], X_test.shape[-1], -1))
+        within_scores.append(within_score)
+        y_cv_within.append(y_within.iloc[test_idx].reset_index(drop=True))
+
+        cross_score = est.transform(flat_trial_time(X_cross)).reshape((X_cross.shape[0], X_cross.shape[-1], -1))
+        cross_scores.append(cross_score)
+
+    within_scores = np.vstack(within_scores)
+    y_cv_within = pd.concat(y_cv_within, axis=0, ignore_index=True)
+
+    cross_scores = np.stack(cross_scores, axis=0)   # (n_folds, n_cross, n_train_t, n_test_t)
+    cross_scores = cross_scores.mean(axis=0)        # (n_cross, n_train_t, n_test_t)
+    y_cv_cross = y_cross.reset_index(drop=True)
+
+    print('within_score', within_scores.shape, 'y_within', y_cv_within.shape)
+    print('cross_score', cross_scores.shape, 'y_cross', y_cv_cross.shape)
+
+    scores = np.vstack([within_scores, cross_scores])
+    y_cv = pd.concat([y_cv_within, y_cv_cross], axis=0, ignore_index=True)
+
+    end = perf_counter()
+    print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
+
+    return scores, y_cv
+#+end_src
+
+#+RESULTS:
+
+*** model
+
+#+begin_src jupyter-python
+dum = 'pca'
+
+scaler = 'center'
+if scaler is not None:
+    dum += '_' + scaler
+
+print(dum)
+#+end_src
+
+#+RESULTS:
+: pca_center
+
+#+begin_src jupyter-python
+n_splits = 5
+n_repeats = 1
+folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+estimator = get_estimator(n_comp=3, scaler=scaler)
+# folds = LeaveOneOut()
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+print(options['mice'])
+#+end_src
+
+#+RESULTS:
+: ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18', 'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+
+#+begin_src jupyter-python
+stages = ['Naive', 'Expert']
+targets = ['sample', 'choice', 'test']
+
+X_mice, y_mice, w_mice = [], [], []
+# for mouse in options['mice']:
+for mouse in [options['mice'][3]]:
+
+    X_stage, y_stage, w_stage = [], [], []
+
+    for stage in stages:
+        idx = (y_all.mouse == mouse) & (y_all.learning == stage)
+
+        X_df = X_all[idx]
+        y_df = y_all.loc[idx].reset_index(drop=True)
+
+        valid_neurons = ~np.all(np.isnan(X_df), axis=(0, 2))
+        X_df = X_df[:, valid_neurons, :]
+        X_df = smooth_and_bin2(X_df, sigma=1.0)
+
+        print('mouse', mouse, 'stage', stage)
+
+        Z_, y_ = cross_val_pca(X_df, y_df,  estimator, cv=folds, stage=stage, bins=options['bins_TEST']//2)
+        y_['stage'] = stage
+
+        print('Z', Z_.shape, 'y', y_.shape)
+
+        X_stage.append(Z_)
+        y_stage.append(y_)
+
+    X_mice.append(np.vstack(X_stage))
+    y_mice.append(pd.concat(y_stage, axis=0, ignore_index=True))
+#+end_src
+
+#+RESULTS:
+#+begin_example
+mouse JawsM15 stage Naive
+X_within (195, 693, 42) y_within (195, 18)
+X_cross (381, 693, 42) y_cross (381, 18)
+within_score (195, 42, 3) y_within (195, 18)
+cross_score (381, 42, 3) y_cross (381, 18)
+Elapsed (with compilation) = 0h 0m 0s
+Z (576, 42, 3) y (576, 19)
+mouse JawsM15 stage Expert
+X_within (249, 693, 42) y_within (249, 18)
+X_cross (327, 693, 42) y_cross (327, 18)
+within_score (249, 42, 3) y_within (249, 18)
+cross_score (327, 42, 3) y_cross (327, 18)
+Elapsed (with compilation) = 0h 0m 0s
+Z (576, 42, 3) y (576, 19)
+#+end_example
+
+#+begin_src jupyter-python
+# X_list = []
+# for i in range(9):
+#     X_list.append(np.vstack((X_mice[i][0], X_mice[i][1])))
+# X_single = np.vstack(X_list)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+X_single = np.vstack(X_mice)
+y_single = pd.concat(y_mice, ignore_index=True)
+print(X_single.shape, y_single.shape)
+#+end_src
+
+#+RESULTS:
+: (1152, 42, 3) (1152, 19)
+
+#+begin_src jupyter-python
+pkl_save(X_single, 'X_' + dum, path="../data/overlaps/")
+pkl_save(y_single, 'labels_' + dum, path="../data/overlaps/")
+#+end_src
+
+#+RESULTS:
+: saving to ../data/overlaps//X_pca_center.pkl
+: saving to ../data/overlaps//labels_pca_center.pkl
+
+
+** Load
+
+ #+begin_src jupyter-python
+X_single = pkl_load('X_' + dum, path="../data/overlaps/")
+y_single = pkl_load( 'labels_' + dum, path="../data/overlaps/")
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+print(X_single.shape, y_single.shape)
+#+end_src
+
+#+RESULTS:
+: (1152, 42, 3) (1152, 19)
+
+** Trajectories
+
+#+begin_src jupyter-python
+X_epoch = np.swapaxes(X_single, 1, 2)
+print(X_epoch.shape)
+#+end_src
+
+#+RESULTS:
+: (1152, 3, 42)
+
+#+begin_src jupyter-python
+n_comp = 3
+laser = 0
+i_mouse= -1
+idx_correct = (y_single.laser==0) & (y_single.performance==1)
+idx_mouse = True
+if i_mouse !=-1:
+    idx_mouse = (y_single.mouse==options['mice'][i_mouse])
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+idx_stage = (y_single.learning=='Naive')
+
+palette = sns.color_palette("muted")
+color = [palette[3], palette[0], palette[2]]
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+xtime = np.linspace(0, 14, 42)
+
+for k in range(n_comp):
+    for i, task in enumerate(tasks):
+            mask = (y_single.tasks==task) & idx_mouse & idx_stage & idx_correct
+
+            X_sel = X_epoch[mask]
+            y_avg = X_sel.mean(0)[k]
+            y_sem = X_sel.std(0)[k] / np.sqrt(X_sel.shape[0])
+
+            ax[k].plot(xtime, y_avg, color=color[i], label=task)
+            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+            ax[k].axhline(0.0, ls='--', color='k')
+            ax[k].set_xlabel('Time')
+            add_vlines(ax[k], if_dpa=0)
+
+            ax[k].legend(fontsize=12, frameon=0, loc='best')
+            ax[k].set_xlim([0, 14])
+            # ax[k].set_ylim([0.4, 1.0])
+            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+
+plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_42.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+idx_stage = (y_single.learning=='Expert')
+
+palette = sns.color_palette("muted")
+color = [palette[3], palette[0], palette[2]]
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+xtime = np.linspace(0, 14, 42)
+
+for k in range(n_comp):
+    for i, task in enumerate(tasks):
+            mask = (y_single.tasks==task) & idx_mouse & idx_stage & idx_correct
+
+            X_sel = X_epoch[mask]
+            y_avg = X_sel.mean(0)[k]
+            y_sem = X_sel.std(0)[k] / np.sqrt(X_sel.shape[0])
+
+            ax[k].plot(xtime, y_avg, color=color[i], label=task)
+            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+            ax[k].axhline(0.0, ls='--', color='k')
+            ax[k].set_xlabel('Time')
+            add_vlines(ax[k], if_dpa=0)
+
+            ax[k].legend(fontsize=12, frameon=0, loc='best')
+            ax[k].set_xlim([0, 14])
+            # ax[k].set_ylim([0.4, 1.0])
+            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+
+plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_43.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height),)
+
+idx_stage = (y_single.learning=='Naive')
+
+color = ['#332288', '#88CCEE', '#117733', '#44AA99']
+
+pair = ['AC', 'AD', 'BD', 'BC']
+xtime = np.linspace(0, 14, 42)
+
+
+for i in range(4):
+    mask = (y_single.odor_pair==i) & idx_mouse & idx_correct & idx_stage
+    X_sel = X_epoch[mask]
+
+    X_avg = np.mean(X_sel, 0) # / np.linalg.norm(X_sel, axis=0)    # Mean over trials/samples, shape: (n_comp, n_time)
+    X_sem = np.std(X_sel, 0) / np.sqrt(X_sel.shape[0])  # SEM
+
+    for k in range(n_comp):
+        y_avg = X_avg[k]
+        y_sem = X_sem[k]
+        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+        ax[k].set_xlim([0, 14])
+        # ax[k].set_ylim([-2.5, 2.5])
+        ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_44.png]]
+
+#+begin_src jupyter-python
+
+#+end_src
+
+#+RESULTS:

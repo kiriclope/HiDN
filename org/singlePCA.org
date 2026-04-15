@@ -1,5 +1,5 @@
 #+STARTUP: fold
-#+PROPERTY: header-args:jupyter-python :results both :exports both :async yes :session single :kernel dual :output-dir ./figures/singlePCA :file (lc/org-babel-tangle-figure-filename)
+#+PROPERTY: header-args:jupyter-python :results both :exports both :async "yes" :session single :kernel dual :output-dir ./figures/singlePCA :file (lc/org-babel-tangle-figure-filename)
 
 * Notebook Settings
 
@@ -315,7 +315,6 @@ def create_field(x, y, u, v, grid_size=100, method='linear', z_lim=5):
 #+end_src
 
 #+RESULTS:
-: b4415bb2-d130-460d-bc40-4fc35b1d74bc
 
 #+begin_src jupyter-python
 def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
@@ -339,6 +338,7 @@ def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
 #+end_src
 
 #+RESULTS:
+: caee9f48-dd22-4de8-87cf-b5c44dc1cc4a
 
 #+begin_src jupyter-python
 import numpy as np
@@ -520,8 +520,8 @@ kwargs = {
    'mouse': mice[0], 'laser': 0,
    'trials': '', 'reload': 0, 'data_type': 'dF',
    'prescreen': None, 'pval': 0.05,
-   'preprocess': True, 'scaler_BL': 'standard_BL',
-   'avg_noise': True, 'unit_var_BL': False,
+   'preprocess': True, 'scaler_BL': 'center_BL',
+   'avg_noise': False, 'unit_var_BL': False,
    'random_state': None, 'T_WINDOW': 0.0,
    'l1_ratio': 0.95,
    'n_comp': 3, 'pca': 'pca',
@@ -624,12 +624,6 @@ y_trials = np.array(y_trials, dtype=object)
 : JawsM01 (768, 184, 84) (768, 15) 4
 : JawsM06 (1152, 201, 84) (1152, 15) 6
 : JawsM12 (960, 423, 84) (960, 15) 5
-: JawsM15 (1152, 693, 84) (1152, 15) 6
-: JawsM18 (1152, 444, 84) (1152, 15) 6
-: ChRM04 (1152, 668, 84) (1152, 15) 6
-: ChRM23 (960, 232, 84) (960, 15) 5
-: ACCM03 (960, 361, 84) (960, 15) 5
-: ACCM04 (960, 113, 84) (960, 15) 5
 
 #+begin_src jupyter-python
 X_all = np.concatenate(X_trials, 0)
@@ -638,7 +632,7 @@ print(X_all.shape, y_all.shape)
 #+end_src
 
 #+RESULTS:
-: (9216, 3319, 84) (9216, 16)
+: 4ae0dabc-bdff-48d6-ba64-fbba1231b5fe
 
 #+begin_src jupyter-python
 dum = ''
@@ -650,8 +644,7 @@ pkl_save(y_all, 'y_all_nan_%s' % dum, path="../data/pca")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/pca/X_all_nan_center.pkl
-: saving to ../data/pca/y_all_nan_center.pkl
+: d1cc5013-5b5c-4c3b-956e-9dd9bcfcccdc
 
 * Single mouse
 ** Load
@@ -663,6 +656,9 @@ if SCALE is not None:
 
 X_all = pkl_load('X_all_nan_%s' % dum, path="../data/pca")
 y_all = pkl_load('y_all_nan_%s' % dum, path="../data/pca")
+
+if SCALE is not None:
+    X_raw = pkl_load('X_all_nan', path="../data/pca")
 #+end_src
 
 #+RESULTS:
@@ -699,17 +695,10 @@ import itertools
 from tqdm import tqdm
 from scipy.linalg import orthogonal_procrustes
 
-# -----------------------------
-# Condition levels / ordering
-# -----------------------------
-def get_levels(y: pd.DataFrame, factors):
-    """
-    Return a dict mapping each factor -> ordered levels, in a deterministic way.
-    Numeric factors sorted numerically; non-numeric sorted lexicographically as strings.
-    """
+def get_levels(y, factors):
+    """Get ordered levels for factors."""
     if isinstance(factors, str):
         factors = [factors]
-
     levels = {}
     for f in factors:
         s = y[f]
@@ -719,9 +708,8 @@ def get_levels(y: pd.DataFrame, factors):
             levels[f] = np.sort(s.astype(str).dropna().unique())
     return levels
 
-
-def _combo_mask(y: pd.DataFrame, factors, combo):
-    """Boolean mask selecting rows matching a given factor-value combo."""
+def _combo_mask(y, factors, combo):
+    """Boolean mask for factor-value combination."""
     m = np.ones(len(y), dtype=bool)
     for f, v in zip(factors, combo):
         s = y[f]
@@ -731,601 +719,354 @@ def _combo_mask(y: pd.DataFrame, factors, combo):
             m &= (s.astype(str).values == str(v))
     return m
 
-
-# -----------------------------
-# Condition averaging / anchors
-# -----------------------------
-def cv_avg_cond(X, y: pd.DataFrame, factors, levels, drop_missing=False):
-    """
-    Condition-average X over all combinations of `factors` in the fixed order given by `levels`.
-
-    X: (n_trials, n_neurons, n_time)
-    returns:
-      X_avg: (n_combo, n_neurons, n_time)
-      combos: list of tuples of factor levels (in fixed order)
-    """
+def cv_avg_cond(X, y, factors, levels, drop_missing=False):
+    """Condition-average X over factor combinations."""
     if isinstance(factors, str):
         factors = [factors]
-
     combos = list(itertools.product(*[levels[f] for f in factors]))
     X_avg = []
-
     for combo in combos:
         idx = _combo_mask(y, factors, combo)
         if not idx.any():
             if drop_missing:
                 continue
-            raise ValueError(f"Missing condition combo in this split: {dict(zip(factors, combo))}")
+            raise ValueError(f"Missing combo: {dict(zip(factors, combo))}")
         X_avg.append(np.nanmean(X[idx], axis=0))
-
     return np.stack(X_avg, axis=0), combos
 
-
-def anchors_from_Z(Z, y: pd.DataFrame, factors, levels, drop_missing=False):
-    """
-    Anchors = condition-averaged latent trajectories.
-
-    Z: (n_trials, n_time, n_comp)
-    returns:
-      A: (n_combo*n_time, n_comp) in the fixed combo order defined by `levels`
-    """
+def anchors_from_Z(Z, y, factors, levels, drop_missing=False):
+    """Compute anchors from latent trajectories."""
     if isinstance(factors, str):
         factors = [factors]
-
     combos = list(itertools.product(*[levels[f] for f in factors]))
     A = []
-
     for combo in combos:
         idx = _combo_mask(y, factors, combo)
         if not idx.any():
             if drop_missing:
                 continue
-            raise ValueError(f"Missing condition combo in anchors: {dict(zip(factors, combo))}")
-        A.append(np.nanmean(Z[idx], axis=0))  # (n_time, n_comp)
-
-    A = np.stack(A, axis=0)                  # (n_combo, n_time, n_comp)
+            raise ValueError(f"Missing combo: {dict(zip(factors, combo))}")
+        A.append(np.nanmean(Z[idx], axis=0))
+    A = np.stack(A, axis=0)
     return A.reshape(-1, Z.shape[-1])
-
-
-def _enforce_proper_rotation(R):
-    """Optionally enforce det(R)=+1 to avoid reflections."""
-    if np.linalg.det(R) < 0:
-        R = R.copy()
-        R[:, -1] *= -1
-    return R
-
-
-# -----------------------------
-# CV PCA with anchor alignment
-# -----------------------------
-def cv_pca(
-    X, y: pd.DataFrame, pca, folds, factors, epoch,
-    scale=None,
-    group_col=None,
-    show_pbar=True,
-    clean_mask_fn=None,          # optional: function(y)->bool mask
-    enforce_det_pos=False,       # set True to prevent reflections
-    center_on="trialtime",       # "trialtime" or "condavg"
-):
-    """
-    Per-mouse (or per-X) CV condition-average PCA + fold alignment using Procrustes on anchors.
-
-    X: (n_trials, n_neurons, n_time)  [NO NaNs in neuron dims; OK if NaNs in time samples if you handle them]
-    y: DataFrame aligned with trials
-    factors: str or list of columns defining "condition" combinations used for averaging/anchors
-    epoch: None or slice/indices used for fitting/alignment only
-
-    Returns:
-      Z_all: (n_clean_test_trials + n_pert_trials, n_time, n_comp) aligned latent trajectories
-      y_all: DataFrame aligned with returned trials
-      W_mean: (n_comp, n_neurons) mean of aligned fold loadings (interpret cautiously)
-      evr_folds: array of explained variance ratio per fold
-    """
-
-    if isinstance(factors, str):
-        factors = [factors]
-
-    # ---- define "clean" subset used for fitting/CV
-    if clean_mask_fn is None:
-        m_clean = (y.laser == 0) & (y.learning=='Expert') & (y.performance == 1) & (y.tasks=='DPA') # & ((y.tasks=='DPA') | (y.odr_perf==1))
-    else:
-        m_clean = clean_mask_fn(y)
-
-    Xc = X[m_clean]
-    yc = y.loc[m_clean].reset_index(drop=True)
-
-    X_scaled = Xc
-    if scale is not None:
-        scaler = StandardScaler(if_scale=1)
-        scaler.fit(Xc)
-        Xc_scaled = scaler.transform(Xc)
-
-    # Fixed, deterministic level ordering computed ONCE from full clean data
-    levels = get_levels(yc, factors)
-
-    # -----------------------------
-    # Fit PCA on ALL clean data (epoch) to project perturbed data
-    # -----------------------------
-    Xc_epoch = X_scaled if epoch is None else X_scaled[..., epoch]
-
-    def flat_trial_time(A):
-        return A.transpose(0, 2, 1).reshape(-1, A.shape[1])
-
-    X_avg_epoch_all, _ = cv_avg_cond(Xc_epoch, yc, factors, levels, drop_missing=False)
-    X_avg_flat_all = flat_trial_time(X_avg_epoch_all)
-
-    if center_on == "trialtime":
-        Xc_epoch_flat = flat_trial_time(Xc_epoch)
-        X_mean_all = np.nanmean(Xc_epoch_flat, axis=0, keepdims=True)
-    else:  # "condavg"
-        X_mean_all = np.nanmean(X_avg_flat_all, axis=0, keepdims=True)
-
-    X_cent_all = X_avg_flat_all - X_mean_all
-    if np.isnan(X_cent_all).any():
-        raise ValueError("NaNs detected in ALL-fit PCA matrix. Ensure you are not using NaN-padded neurons.")
-    pca.fit(X_cent_all)
-
-    W_all = pca.components_
-    evr_all = pca.explained_variance_ratio_
-
-    # anchors reference for all-fit PCA
-    Xc_epoch_flat = flat_trial_time(Xc_epoch)
-    Zc_epoch = pca.transform(Xc_epoch_flat - X_mean_all).reshape(Xc_epoch.shape[0], Xc_epoch.shape[-1], -1)
-
-    A_ref = anchors_from_Z(Zc_epoch, yc, factors, levels, drop_missing=False)
-
-    # ---- project perturbed
-    m_pert = ~m_clean
-    if m_pert.mean() != 0:
-        Xp = X[m_pert]
-        yp = y.loc[m_pert].reset_index(drop=True)
-
-        if scale is not None:
-            Xp = scaler.transform(Xp)
-
-        # project perturbed FULL time
-        Xp_full_flat = flat_trial_time(Xp)
-        Zp_full = pca.transform(Xp_full_flat - X_mean_all).reshape(
-            Xp.shape[0], Xp.shape[-1], -1
-        )
-
-        # estimate rotation using perturbed epoch anchors
-        Xp_epoch = Xp if epoch is None else Xp[..., epoch]
-        Xp_epoch_flat = flat_trial_time(Xp_epoch)
-        Zp_epoch = pca.transform(Xp_epoch_flat - X_mean_all).reshape(
-            Xp_epoch.shape[0], Xp_epoch.shape[-1], -1
-        )
-        A_p = anchors_from_Z(Zp_epoch, yp, factors, levels, drop_missing=True)
-
-        # If you drop missing combos, also drop corresponding rows from A_ref
-        # For simplicity, we recommend not dropping (i.e. ensure combos exist).
-        if A_p.shape != A_ref.shape:
-            raise ValueError(
-                "Perturbed anchors shape != reference anchors shape. "
-                "Ensure perturbed data contains all factor combinations or implement matched-row dropping."
-            )
-
-        R_p, _ = orthogonal_procrustes(A_p, A_ref)
-        if enforce_det_pos:
-            R_p = _enforce_proper_rotation(R_p)
-
-        # Zp_aligned = Zp_full @ R_p
-        Zp_aligned = Zp_full
-
-    groups = None
-    if group_col is not None:
-        groups = yc[group_col].astype(str).values
-
-    # your stratification (keep as-is, but ensure columns exist)
-    strata = (
-        yc["odor_pair"].astype(str)
-        + "_" + yc["day"].astype(str)
-        + "_" + yc["tasks"].astype(str)
-    ).values
-
-    Z_folds, y_folds = [], []
-    w_folds, evr_folds = [], []
-
-    it = folds.split(Xc, strata, groups=groups)
-    if show_pbar:
-        mouse_name = y.mouse.unique()[0] if "mouse" in y.columns else "X"
-        it = tqdm(it, total=folds.get_n_splits(Xc, strata), desc=str(mouse_name))
-
-    for fold, (train, test) in enumerate(it):
-        X_train, y_train = Xc[train], yc.iloc[train].reset_index(drop=True)
-        X_test,  y_test  = Xc[test],  yc.iloc[test].reset_index(drop=True)
-
-        if scale is not None:
-            scaler.fit(X_train)
-            X_train = scaler.transform(X_train)
-            X_test = scaler.transform(X_test)
-
-        # epoch views
-        X_train_epoch = X_train if epoch is None else X_train[..., epoch]
-        X_test_full   = X_test
-
-        # flatten helper
-        def flat_trial_time(A):
-            # (n_trials, n_neurons, n_time) -> (n_trials*n_time, n_neurons)
-            return A.transpose(0, 2, 1).reshape(-1, A.shape[1])
-
-        # ---- compute condition averages (TRAIN only) for fitting
-        X_avg_epoch, _ = cv_avg_cond(X_train_epoch, y_train, factors, levels, drop_missing=False)
-        X_avg_flat = flat_trial_time(X_avg_epoch)
-
-        # ---- centering
-        if center_on == "trialtime":
-            X_train_epoch_flat = flat_trial_time(X_train_epoch)
-            X_mean = np.nanmean(X_train_epoch_flat, axis=0, keepdims=True)
-        elif center_on == "condavg":
-            X_mean = np.nanmean(X_avg_flat, axis=0, keepdims=True)
-        else:
-            raise ValueError("center_on must be 'trialtime' or 'condavg'")
-
-        # ---- fit PCA on centered TRAIN condition-average epoch
-        X_cent_fit = X_avg_flat - X_mean
-        if np.isnan(X_cent_fit).any():
-            raise ValueError("NaNs detected in PCA fit matrix. Ensure you are not using NaN-padded neurons.")
-        pca.fit(X_cent_fit)
-
-        W_fold = pca.components_  # (n_comp, n_neurons)
-        evr_folds.append(pca.explained_variance_ratio_)
-
-        # ---- anchors from TRAIN single-trial epoch projections (for alignment)
-        X_train_epoch_flat = flat_trial_time(X_train_epoch)
-        Z_train_epoch = pca.transform(X_train_epoch_flat - X_mean).reshape(X_train_epoch.shape[0], X_train_epoch.shape[-1], -1)  # (n_train_trials, n_time_epoch, n_comp)
-
-        A_train = anchors_from_Z(Z_train_epoch, y_train, factors, levels, drop_missing=False)
-
-        # ---- reference + Procrustes
-        if A_ref is None:
-            A_ref = A_train
-            R = np.eye(Z_train_epoch.shape[-1])
-        else:
-            # Find R such that A_train @ R ~= A_ref
-            R, _ = orthogonal_procrustes(A_train, A_ref)
-            if enforce_det_pos:
-                R = _enforce_proper_rotation(R)
-
-        # ---- project TEST full time then align
-        X_test_full_flat = flat_trial_time(X_test_full)
-        Z_test_full = pca.transform(X_test_full_flat - X_mean).reshape(X_test_full.shape[0], X_test_full.shape[-1], -1)  # (n_test_trials, n_time_full, n_comp)
-
-        Z_test_aligned = Z_test_full @ R
-        W_fold_aligned = R.T @ W_fold
-
-        Z_folds.append(Z_test_aligned)
-        y_folds.append(y_test)
-        w_folds.append(W_fold_aligned)
-
-    # ---- concat CV outputs (clean test trials across folds)
-    Z_clean = np.concatenate(Z_folds, axis=0)
-    y_clean = pd.concat(y_folds, axis=0, ignore_index=True)
-
-    W_mean = np.mean(np.stack(w_folds, axis=0), axis=0)
-    evr_folds = np.array(evr_folds, dtype=object)
-
-    if m_pert.mean() != 0:
-        Z_all = np.concatenate([Z_clean, Zp_aligned], axis=0)
-        y_all = pd.concat([y_clean, yp], axis=0, ignore_index=True)
-
-        return Z_all, y_all, W_all, evr_folds
-
-    return Z_clean, y_clean, W_all, evr_folds
 #+end_src
 
 #+RESULTS:
 
 #+begin_src jupyter-python
 from sklearn.base import clone
-from scipy.linalg import orthogonal_procrustes
-import numpy as np
-import pandas as pd
-import itertools
 from tqdm import tqdm
 
-
-def cv_pca(
-    X,
-    y: pd.DataFrame,
-    pca,
-    folds,
-    factors,
-    epoch=None,
-    scale=None,
-    group_col=None,
-    show_pbar=True,
-    clean_mask_fn=None,
-    enforce_det_pos=False,
-    center_on="trialtime",   # "trialtime" or "condavg"
-    align_folds=True,
-    strict_cv=False,         # if False, use all-clean reference for fold alignment
-    return_fold_loadings=False,
-):
+def cv_pca(X, y, pca, folds, factors,
+           epoch=None, scale=None, stage='Expert', correct='True', context=None,
+           group_col=None, show_pbar=True, center_on="trialtime",
+           align_folds=False):
     """
-    Per-animal CV condition-average PCA.
-
-    Main behavior:
-    - Fit a canonical PCA on ALL clean trials (condition-averaged) for this animal.
-    - Use that canonical PCA to project perturbed trials directly (NO extra within-animal
-      alignment of perturbed data).
-    - For clean trials, do CV:
-        ,* fit PCA on TRAIN condition averages
-        ,* project TEST trials
-        ,* optionally align fold latent space to canonical clean reference
-    - Return all trajectories in one common within-animal latent space.
+    Cross-validated PCA with Procrustes alignment.
 
     Parameters
     ----------
-    X : array, shape (n_trials, n_neurons, n_time)
-    y : DataFrame, aligned to trials
-    pca : sklearn PCA-like estimator
+    X : (n_trials, n_neurons, n_time)
+    y : DataFrame aligned with trials
+    pca : sklearn PCA estimator
     folds : CV splitter
-    factors : str or list of str
-        Columns defining condition combinations used for condition averages / anchors.
-    epoch : None or slice/indexer
-        Time window used for fitting/alignment. Projection is always returned on full time.
-    scale : None or scaler object
-        Must support fit/transform on X shaped (n_trials, n_neurons, n_time).
-    group_col : str or None
-    show_pbar : bool
-    clean_mask_fn : callable or None
-    enforce_det_pos : bool
-    center_on : {"trialtime", "condavg"}
-    align_folds : bool
-        If True, align fold-specific test trajectories to canonical all-clean reference.
-    strict_cv : bool
-        If True, use first fold's train reference as the alignment reference instead of
-        all-clean reference. Avoids leakage from test trials into alignment reference.
-    return_fold_loadings : bool
-
-    Returns
-    -------
-    Z_all : (n_return_trials, n_time, n_comp)
-    y_all : DataFrame
-    W_ref : (n_comp, n_neurons)
-        Canonical all-clean loading matrix.
-    evr_folds : object array of per-fold EVRs
-    extras : dict
+    factors : condition factors for averaging/anchors
+    epoch : time indices for fitting (None = full)
+    scale : sklearn scaler (cloned per fold), or None
+    stage : learning stage filter
+    correct : filter on performance == 1
+    context : filter on tasks column, or None for all
+    center_on : "trialtime" centers on all trial×time points; else on condition averages
+    align_folds : Procrustes-align folds to first fold's anchors
     """
     if isinstance(factors, str):
         factors = [factors]
 
-    # -----------------------------
-    # helpers
-    # -----------------------------
     def flat_trial_time(A):
-        # (n_trials, n_neurons, n_time) -> (n_trials*n_time, n_neurons)
+        # (n_trials, n_neurons, n_time) -> (n_trials * n_time, n_neurons)
         return A.transpose(0, 2, 1).reshape(-1, A.shape[1])
 
-    def maybe_scale_fit_transform(scaler, A):
-        if scaler is None:
-            return A, None
-        sc = clone(scaler)
-        return sc.fit_transform(A), sc
+    # --- Clean / perturbation split ---
+    idx_correct = (y.performance == 1) & ((y.odr_perf==1) | (y.tasks=='DPA')) if correct else True
 
-    def maybe_scale_transform(sc, A):
-        if sc is None:
-            return A
-        return sc.transform(A)
-
-    def compute_mean(X_epoch, X_avg_flat, how):
-        if how == "trialtime":
-            return np.nanmean(flat_trial_time(X_epoch), axis=0, keepdims=True)
-        elif how == "condavg":
-            return np.nanmean(X_avg_flat, axis=0, keepdims=True)
+    if context is not None:
+        if context=='Dual':
+            idx_context = (y.tasks != 'DPA')
         else:
-            raise ValueError("center_on must be 'trialtime' or 'condavg'")
-
-    def fit_pca_on_train(X_train, y_train, levels):
-        X_train_epoch = X_train if epoch is None else X_train[..., epoch]
-        X_avg_epoch, combos = cv_avg_cond(X_train_epoch, y_train, factors, levels, drop_missing=True)
-        X_avg_flat = flat_trial_time(X_avg_epoch)
-
-        X_mean = compute_mean(X_train_epoch, X_avg_flat, center_on)
-        X_fit = X_avg_flat - X_mean
-        if np.isnan(X_fit).any():
-            raise ValueError("NaNs detected in PCA fit matrix.")
-
-        p = clone(pca)
-        p.fit(X_fit)
-        return p, X_mean, combos, X_train_epoch
-
-    def project_trials(p, X_full, X_mean):
-        Z = p.transform(flat_trial_time(X_full) - X_mean)
-        return Z.reshape(X_full.shape[0], X_full.shape[-1], -1)
-
-    def anchors_with_combos(Z_epoch, y_df, levels):
-        combos_all = list(itertools.product(*[levels[f] for f in factors]))
-        A_list, combos_present = [], []
-        for combo in combos_all:
-            idx = _combo_mask(y_df, factors, combo)
-            if not idx.any():
-                continue
-            A_list.append(np.nanmean(Z_epoch[idx], axis=0))   # (n_time_epoch, n_comp)
-            combos_present.append(combo)
-        if len(A_list) == 0:
-            return None, []
-        A = np.stack(A_list, axis=0).reshape(-1, Z_epoch.shape[-1])
-        return A, combos_present
-
-    def intersect_anchor_rows(A1, combos1, A2, combos2, n_time_epoch):
-        set2 = {c: i for i, c in enumerate(combos2)}
-        rows1, rows2 = [], []
-        for i, c in enumerate(combos1):
-            if c in set2:
-                j = set2[c]
-                r1 = np.arange(i * n_time_epoch, (i + 1) * n_time_epoch)
-                r2 = np.arange(j * n_time_epoch, (j + 1) * n_time_epoch)
-                rows1.append(r1)
-                rows2.append(r2)
-        if len(rows1) == 0:
-            return None, None
-        rows1 = np.concatenate(rows1)
-        rows2 = np.concatenate(rows2)
-        return A1[rows1], A2[rows2]
-
-    def solve_rotation(A_src, A_tgt):
-        A0 = A_src - A_src.mean(axis=0, keepdims=True)
-        B0 = A_tgt - A_tgt.mean(axis=0, keepdims=True)
-        R, _ = orthogonal_procrustes(A0, B0)
-        if enforce_det_pos and np.linalg.det(R) < 0:
-            R = R.copy()
-            R[:, -1] *= -1
-        return R
-
-    # -----------------------------
-    # clean / pert masks
-    # -----------------------------
-    if clean_mask_fn is None:
-        m_clean = (
-            (y.laser == 0)
-            & (y.learning == "Expert")
-            & (y.performance == 1)
-            # & ((y.tasks == "DPA") | (y.odr_perf == 1))
-            & (y.tasks=='DPA')
-        )
+            idx_context = (y.tasks == context)
     else:
-        m_clean = clean_mask_fn(y)
+        idx_context = True
+
+    m_clean = (y.laser == 0) & (y.learning == stage) & idx_context & idx_correct
+    m_pert = ~m_clean
 
     Xc = X[m_clean]
     yc = y.loc[m_clean].reset_index(drop=True)
 
-    m_pert = ~m_clean
-    Xp = X[m_pert] if np.any(m_pert) else None
-    yp = y.loc[m_pert].reset_index(drop=True) if np.any(m_pert) else None
+    print('Xc', Xc.shape, 'yc', yc.shape)
 
-    # deterministic condition ordering from all clean data
+    X_pert = X[m_pert]
+    y_pert = y.loc[m_pert].reset_index(drop=True)
+
+    print('X_pert', X_pert.shape, 'y_pert', y_pert.shape)
+
+    # --- Stratification labels ---
+    strata = (
+        yc["odor_pair"].astype(str) + "_"
+        + yc["day"].astype(str) + "_"
+        + yc["tasks"].astype(str)
+    ).values
     levels = get_levels(yc, factors)
 
-    # -----------------------------
-    # canonical all-clean PCA
-    # -----------------------------
-    Xc_all, sc_all = maybe_scale_fit_transform(scale, Xc)
-    Xc_epoch_all = Xc_all if epoch is None else Xc_all[..., epoch]
+    # --- Verify all combos present globally (for Procrustes consistency) ---
+    combos = list(itertools.product(*[levels[f] for f in factors]))
+    for combo in combos:
+        if not _combo_mask(yc, factors, combo).any():
+            raise ValueError(
+                f"Combo {dict(zip(factors, combo))} missing globally; "
+                "Procrustes anchors will be inconsistent across folds."
+            )
 
-    X_avg_epoch_all, combos_all = cv_avg_cond(Xc_epoch_all, yc, factors, levels, drop_missing=True)
-    X_avg_flat_all = flat_trial_time(X_avg_epoch_all)
-    X_mean_all = compute_mean(Xc_epoch_all, X_avg_flat_all, center_on)
+    # --- CV iterator ---
+    it = folds.split(Xc, strata, groups=None)
+    if show_pbar:
+        name = y.mouse.unique()[0] if "mouse" in y.columns else "X"
+        it = tqdm(it, total=folds.get_n_splits(Xc, strata), desc=str(name))
 
-    X_fit_all = X_avg_flat_all - X_mean_all
-    if np.isnan(X_fit_all).any():
-        raise ValueError("NaNs detected in all-clean PCA fit matrix.")
+    # Accumulators
+    # For repeated CV: collect (fold_idx, trial_idx, Z) and average later
+    trial_Z_accum = {}  # trial_idx -> list of Z arrays
+    Z_cross = []
+    w_folds, evr_folds = [], []
+    A_ref = None
+
+    for fold_i, (train, test) in enumerate(it):
+        X_train, y_train = Xc[train], yc.iloc[train].reset_index(drop=True)
+        X_test, y_test = Xc[test], yc.iloc[test].reset_index(drop=True)
+
+        # --- Per-fold scaling ---
+        if scale is not None:
+            scale_fold = StandardScaler(if_scale=1)
+            X_train = scale_fold.fit_transform(X_train)
+            X_test = scale_fold.transform(X_test)
+            X_pert_scaled = scale_fold.transform(X_pert)
+        else:
+            X_pert_scaled = X_pert
+
+        # --- Epoch slice for fitting ---
+        X_train_epoch = X_train if epoch is None else X_train[..., epoch]
+
+        # --- Condition averages (train, epoch) ---
+        X_avg_train, _ = cv_avg_cond(
+            X_train_epoch, y_train, factors, levels, drop_missing=False
+        )
+        X_avg_flat = flat_trial_time(X_avg_train)
+
+        # --- Centering ---
+        if center_on == "trialtime":
+            X_mean = np.nanmean(
+                flat_trial_time(X_train_epoch), axis=0, keepdims=True
+            )
+        else:
+            X_mean = np.nanmean(X_avg_flat, axis=0, keepdims=True)
+
+        # --- Fit PCA ---
+        pca_fold = clone(pca)
+        pca_fold.fit(X_avg_flat - X_mean)
+        w_folds.append(pca_fold.components_)
+        evr_folds.append(pca_fold.explained_variance_ratio_)
+
+        # --- Project test (full time) ---
+        Z_test = pca_fold.transform(flat_trial_time(X_test) - X_mean)
+        Z_test = Z_test.reshape(X_test.shape[0], X_test.shape[-1], -1)
+
+        # --- Project perturbation (full time) ---
+        Z_pert_fold = pca_fold.transform(flat_trial_time(X_pert_scaled) - X_mean)
+        Z_pert_fold = Z_pert_fold.reshape(
+            X_pert_scaled.shape[0], X_pert_scaled.shape[-1], -1
+        )
+
+        # --- Procrustes alignment ---
+        if align_folds:
+            Z_train = pca_fold.transform(
+                flat_trial_time(X_train_epoch) - X_mean
+            )
+            Z_train = Z_train.reshape(
+                X_train_epoch.shape[0], X_train_epoch.shape[-1], -1
+            )
+            A_curr = anchors_from_Z(
+                Z_train, y_train, factors, levels, drop_missing=False
+            )
+
+            if A_ref is None:
+                A_ref = A_curr
+            else:
+                R, _ = orthogonal_procrustes(A_curr, A_ref)
+                Z_test = Z_test @ R
+                Z_pert_fold = Z_pert_fold @ R
+
+        # --- Accumulate per-trial projections (handles repeated CV) ---
+        for i, orig_idx in enumerate(test):
+            trial_Z_accum.setdefault(orig_idx, []).append(Z_test[i])
+
+        Z_cross.append(Z_pert_fold)
+
+    # --- Aggregate clean trials (average over repeats) ---
+    sorted_indices = sorted(trial_Z_accum.keys())
+    Z_clean = np.stack(
+        [np.mean(trial_Z_accum[idx], axis=0) for idx in sorted_indices]
+    )
+    y_clean = yc.iloc[sorted_indices].reset_index(drop=True)
+    print(f"Z_clean: {Z_clean.shape}, y_clean: {y_clean.shape}")
+
+    # --- Aggregate perturbation projections (average over folds) ---
+    Zp = np.mean(np.stack(Z_cross, axis=0), axis=0)
+    print(f"Z_pert: {Zp.shape}, y_pert: {y_pert.shape}")
+
+    # --- Combine ---
+    Z_all = np.concatenate([Z_clean, Zp], axis=0)
+    y_all = pd.concat([y_clean, y_pert], ignore_index=True)
+
+    w_folds = np.array(w_folds)
+    evr_folds = np.array(evr_folds)
+
+    return Z_all, y_all, w_folds, evr_folds
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+from sklearn.base import clone
+from tqdm import tqdm
+
+def cv_pca_all(X, y, pca, folds, factors,
+           epoch=None, scale=None, stage='Expert', correct='True', context=None,
+           group_col=None, show_pbar=True, center_on="trialtime",
+           align_folds=False):
+    """
+    Cross-validated PCA with Procrustes alignment.
+
+    Parameters
+    ----------
+    X : (n_trials, n_neurons, n_time)
+    y : DataFrame aligned with trials
+    pca : sklearn PCA estimator
+    folds : CV splitter
+    factors : condition factors for averaging/anchors
+    epoch : time indices for fitting (None = full)
+    """
+    if isinstance(factors, str):
+        factors = [factors]
+
+    def flat_trial_time(A):
+        return A.transpose(0, 2, 1).reshape(-1, A.shape[1])
+
+    # Clean mask: laser-off, expert, correct DPA trials
+    idx_correct = (y.performance == 1) if correct else True
+    idx_context = (y.tasks==context) if context is not None else True
+    m_clean = (y.laser == 0) & (y.learning == stage) & idx_context & idx_correct
+
+    Xc = X[m_clean]
+    yc = y.loc[m_clean].reset_index(drop=True)
+
+    # Scale if requested
+    sc_all = None
+    if scale is not None:
+        if scale=='standard':
+            scale = StandardScaler(if_scale=1)
+        else:
+            scale = StandardScaler(if_scale=0)
+
+        sc_all = scale
+        Xc = sc_all.fit_transform(Xc)
+
+    levels = get_levels(yc, factors)
+
+    # Fit canonical PCA on all clean data
+    Xc_epoch = Xc if epoch is None else Xc[..., epoch]
+    X_avg_all, _ = cv_avg_cond(Xc_epoch, yc, factors, levels, drop_missing=True)
+    X_avg_flat = flat_trial_time(X_avg_all)
+
+    if center_on == "trialtime":
+        X_mean_all = np.nanmean(flat_trial_time(Xc_epoch), axis=0, keepdims=True)
+    else:
+        X_mean_all = np.nanmean(X_avg_flat, axis=0, keepdims=True)
 
     pca_all = clone(pca)
-    pca_all.fit(X_fit_all)
-
+    pca_all.fit(X_avg_flat - X_mean_all)
     W_ref = pca_all.components_
     evr_all = pca_all.explained_variance_ratio_
 
-    # canonical anchor reference from all-clean projected clean trials
-    Zc_epoch_all = project_trials(pca_all, Xc_epoch_all, X_mean_all)
-    A_ref_all, combos_ref_all = anchors_with_combos(Zc_epoch_all, yc, levels)
-    n_time_epoch_ref = Xc_epoch_all.shape[-1]
+    # Reference anchors
+    Zc_epoch = pca_all.transform(flat_trial_time(Xc_epoch) - X_mean_all)
+    Zc_epoch = Zc_epoch.reshape(Xc_epoch.shape[0], Xc_epoch.shape[-1], -1)
+    A_ref, combos_ref = anchors_from_Z(Zc_epoch, yc, factors, levels, drop_missing=True), None
 
-    # -----------------------------
-    # CV on clean trials
-    # -----------------------------
-    groups = None
-    if group_col is not None:
-        groups = yc[group_col].astype(str).values
-
-    strata = yc[factors].astype(str).agg("_".join, axis=1).values
+    # CV loop
+    strata = (yc["odor_pair"].astype(str) + "_" + yc["day"].astype(str) + "_" + yc["tasks"].astype(str)).values
+    groups = yc[group_col].astype(str).values if group_col else None
 
     it = folds.split(Xc, strata, groups=groups)
     if show_pbar:
         name = y.mouse.unique()[0] if "mouse" in y.columns else "X"
         it = tqdm(it, total=folds.get_n_splits(Xc, strata), desc=str(name))
 
-    Z_folds, y_folds = [], []
-    W_folds_aligned, evr_folds = [], []
+    Z_folds, y_folds, evr_folds = [], [], []
 
-    A_ref_cv, combos_ref_cv, n_time_epoch_cv = None, None, None
-
-    for fold, (train, test) in enumerate(it):
+    for train, test in it:
         X_train, y_train = Xc[train], yc.iloc[train].reset_index(drop=True)
-        X_test, y_test = Xc[test], yc.iloc[test].reset_index(drop=True)
+        X_test, y_test = Xt[test], yc.iloc[test].reset_index(drop=True)
 
-        X_train_s, sc_fold = maybe_scale_fit_transform(scale, X_train)
-        X_test_s = maybe_scale_transform(sc_fold, X_test)
+        if scale is not None:
+            sc = scale
+            X_train = sc.fit_transform(X_train)
+            X_test = sc.transform(X_test)
 
-        pca_fold, X_mean_fold, combos_train, X_train_epoch = fit_pca_on_train(X_train_s, y_train, levels)
-        X_test_full = X_test_s
+        X_train_epoch = X_train if epoch is None else X_train[..., epoch]
+        X_avg_train, _ = cv_avg_cond(X_train_epoch, y_train, factors, levels, drop_missing=True)
+        X_avg_flat = flat_trial_time(X_avg_train)
 
+        if center_on == "trialtime":
+            X_mean = np.nanmean(flat_trial_time(X_train_epoch), axis=0, keepdims=True)
+        else:
+            X_mean = np.nanmean(X_avg_flat, axis=0, keepdims=True)
+
+        pca_fold = clone(pca)
+        pca_fold.fit(X_avg_flat - X_mean)
         evr_folds.append(pca_fold.explained_variance_ratio_)
 
-        Z_test = project_trials(pca_fold, X_test_full, X_mean_fold)
-        W_fold = pca_fold.components_
+        # Project test
+        Z_test = pca_fold.transform(flat_trial_time(X_test) - X_mean)
+        Z_test = Z_test.reshape(X_test.shape[0], X_test.shape[-1], -1)
 
         if align_folds:
-            Z_train_epoch = project_trials(pca_fold, X_train_epoch, X_mean_fold)
-            A_train, combos_train_present = anchors_with_combos(Z_train_epoch, y_train, levels)
-            n_time_epoch = X_train_epoch.shape[-1]
-
-            if A_train is None:
-                raise ValueError(f"No anchor conditions present in fold {fold} train set.")
-
-            if strict_cv:
-                if A_ref_cv is None:
-                    A_ref_cv = A_train
-                    combos_ref_cv = combos_train_present
-                    n_time_epoch_cv = n_time_epoch
-                    R = np.eye(Z_test.shape[-1])
-                else:
-                    A_src, A_tgt = intersect_anchor_rows(
-                        A_train, combos_train_present,
-                        A_ref_cv, combos_ref_cv,
-                        n_time_epoch_cv
-                    )
-                    if A_src is None:
-                        raise ValueError(f"No shared anchor combos between fold {fold} and CV reference.")
-                    R = solve_rotation(A_src, A_tgt)
-            else:
-                A_src, A_tgt = intersect_anchor_rows(
-                    A_train, combos_train_present,
-                    A_ref_all, combos_ref_all,
-                    n_time_epoch_ref
-                )
-                if A_src is None:
-                    raise ValueError(f"No shared anchor combos between fold {fold} and all-clean reference.")
-                R = solve_rotation(A_src, A_tgt)
-
+            Z_train_epoch = pca_fold.transform(flat_trial_time(X_train_epoch) - X_mean)
+            Z_train_epoch = Z_train_epoch.reshape(X_train_epoch.shape[0], X_train_epoch.shape[-1], -1)
+            A_train = anchors_from_Z(Z_train_epoch, y_train, factors, levels, drop_missing=True)
+            R, _ = orthogonal_procrustes(A_train, A_ref)
             Z_test = Z_test @ R
-            W_fold = R.T @ W_fold
 
         Z_folds.append(Z_test)
         y_folds.append(y_test)
-        W_folds_aligned.append(W_fold)
 
-    Z_clean = np.concatenate(Z_folds, axis=0)
-    y_clean = pd.concat(y_folds, axis=0, ignore_index=True)
-    evr_folds = np.array(evr_folds, dtype=object)
+    # Handle perturbed trials
+    m_pert = ~m_clean
+    if np.any(m_pert):
+        Xp = X[m_pert]
+        yp = y.loc[m_pert].reset_index(drop=True)
+        if sc_all is not None:
+            Xp = sc_all.transform(Xp)
 
-    # -----------------------------
-    # project perturbed directly into canonical clean PCA space
-    # NO extra within-animal rotation
-    # -----------------------------
-    if Xp is not None:
-        Xp_all = maybe_scale_transform(sc_all, Xp)
-        Zp = project_trials(pca_all, Xp_all, X_mean_all)
+        Zp = pca_all.transform(flat_trial_time(Xp) - X_mean_all)
+        Zp = Zp.reshape(Xp.shape[0], Xp.shape[-1], -1)
 
-        Z_all = np.concatenate([Z_clean, Zp], axis=0)
-        y_all = pd.concat([y_clean, yp], axis=0, ignore_index=True)
+        Z_all = np.concatenate([np.concatenate(Z_folds, 0), Zp], 0)
+        y_all = pd.concat([pd.concat(y_folds, ignore_index=True), yp], ignore_index=True)
     else:
-        Z_all, y_all = Z_clean, y_clean
+        Z_all = np.concatenate(Z_folds, 0)
+        y_all = pd.concat(y_folds, ignore_index=True)
 
-    extras = {
-        "levels": levels,
-        "evr_all": evr_all,
-        "A_ref_all": A_ref_all,
-        "combos_ref_all": combos_ref_all,
-    }
-
-    if return_fold_loadings:
-        extras["W_folds_aligned"] = W_folds_aligned
-        extras["W_fold_mean"] = np.mean(np.stack(W_folds_aligned, axis=0), axis=0)
-
-    return Z_all, y_all, W_ref, evr_folds, extras
+    return Z_all, y_all, W_ref, np.array(evr_folds, dtype=object)
 #+end_src
 
 #+RESULTS:
@@ -1333,31 +1074,53 @@ def cv_pca(
 *** model
 
 #+begin_src jupyter-python
-options['epochs'] = ['TEST']
-epoch = options['bins_' + options['epochs'][0]]
+dum = 'pca'
 
-dum = options['epochs'][0]
-options['learning'] = None
-if options['learning'] is not None:
-    dum += '_' + options['learning']
+epoch = 'POST_GNG'
+if epoch is not None:
+    dum += '_' + epoch
+    epoch = options['bins_' + epoch]
 
+stage = 'Expert'
+options['learning'] = stage
+if stage is not None:
+    dum += '_' + stage
 
+scale = 'standard'
+if scale is not None:
+    dum += '_' + scale
+
+context = None
+if context is not None:
+    dum += '_' + context
+
+n_splits, n_repeats = -1, 1
+
+if n_splits == -1:
+    folds = LeaveOneOut()
+    dum += '_loo'
+else:
+    folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+
+correct = True
+if correct:
+    dum += '_correct'
+
+factors = ['sample', 'tasks', 'test']
+factors = ['odor_pair']
+# factors = ['sample', 'choice']
+
+for factor in factors:
+    dum += '_' + factor
 print(dum)
 #+end_src
 
 #+RESULTS:
-: TEST
+: pca_POST_GNG_Expert_standard_loo_correct_odor_pair
 
 #+begin_src jupyter-python
-# factors = ['sample', 'tasks', 'test']
-factors = 'odor_pair'
-n_splits = 5
-n_repeats = 1
 n_comp = 10
-
 pca = PCA(n_components=n_comp, svd_solver='randomized')
-# folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
-folds = LeaveOneOut()
 #+end_src
 
 #+RESULTS:
@@ -1372,8 +1135,6 @@ X_mice, y_mice, w_mice, evr_mice = [], [], [], []
 # --- run per-mouse CV PCA (no cross-mouse alignment yet)
 for mouse in options['mice']:
     idx = (y_all['mouse'] == mouse)
-    if options['learning'] is not None:
-        idx &= (y_all.learning == options['learning'])
 
     X_pca = X_all[idx]
     y_pca = y_all.loc[idx].reset_index(drop=True)
@@ -1382,7 +1143,7 @@ for mouse in options['mice']:
     valid_neurons = ~np.all(np.isnan(X_pca), axis=(0, 2))
     X_pca = X_pca[:, valid_neurons, :]
 
-    Z_mouse, y_mouse, W_mouse, evr_mouse, _ = cv_pca(X_pca, y_pca, pca, folds, factors, epoch, center_on="trialtime")
+    Z_mouse, y_mouse, W_mouse, evr_mouse = cv_pca(X_pca, y_pca, pca, folds, factors, epoch, scale=scale, stage=stage, context=context, correct=correct)
 
     X_mice.append(Z_mouse)     # (n_trials_mouse, T, n_comp)
     y_mice.append(y_mouse)     # DataFrame aligned with trials
@@ -1392,106 +1153,123 @@ for mouse in options['mice']:
 
 #+RESULTS:
 #+begin_example
-JawsM01: 100% 31/31 [00:00<00:00, 272.14it/s]
-JawsM06: 100% 84/84 [00:00<00:00, 180.39it/s]
-JawsM12: 100% 50/50 [00:00<00:00, 147.42it/s]
-JawsM15: 100% 89/89 [00:14<00:00,  6.11it/s]
-JawsM18: 100% 95/95 [00:01<00:00, 77.49it/s]
-ChRM04: 100% 88/88 [00:13<00:00,  6.30it/s]
-ChRM23: 100% 48/48 [00:00<00:00, 223.79it/s]
-ACCM03: 100% 122/122 [00:01<00:00, 72.21it/s]
-ACCM04: 100% 93/93 [00:00<00:00, 123.36it/s]
+Xc (90, 184, 84) yc (90, 18)
+X_pert (678, 184, 84) y_pert (678, 18)
+JawsM01: 100% 90/90 [00:18<00:00,  4.91it/s]
+Z_clean: (90, 84, 10), y_clean: (90, 18)
+Z_pert: (678, 84, 10), y_pert: (678, 18)
+Xc (219, 201, 84) yc (219, 18)
+X_pert (933, 201, 84) y_pert (933, 18)
+JawsM06: 100% 219/219 [00:59<00:00,  3.67it/s]
+Z_clean: (219, 84, 10), y_clean: (219, 18)
+Z_pert: (933, 84, 10), y_pert: (933, 18)
+Xc (137, 423, 84) yc (137, 18)
+X_pert (823, 423, 84) y_pert (823, 18)
+JawsM12: 100% 137/137 [01:03<00:00,  2.16it/s]
+Z_clean: (137, 84, 10), y_clean: (137, 18)
+Z_pert: (823, 84, 10), y_pert: (823, 18)
+Xc (208, 693, 84) yc (208, 18)
+X_pert (944, 693, 84) y_pert (944, 18)
+JawsM15: 100% 208/208 [03:17<00:00,  1.05it/s]
+Z_clean: (208, 84, 10), y_clean: (208, 18)
+Z_pert: (944, 84, 10), y_pert: (944, 18)
+Xc (278, 444, 84) yc (278, 18)
+X_pert (874, 444, 84) y_pert (874, 18)
+JawsM18: 100% 278/278 [04:06<00:00,  1.13it/s]
+Z_clean: (278, 84, 10), y_clean: (278, 18)
+Z_pert: (874, 84, 10), y_pert: (874, 18)
+Xc (240, 668, 84) yc (240, 18)
+X_pert (912, 668, 84) y_pert (912, 18)
+ChRM04: 100% 240/240 [03:39<00:00,  1.09it/s]
+Z_clean: (240, 84, 10), y_clean: (240, 18)
+Z_pert: (912, 84, 10), y_pert: (912, 18)
+Xc (131, 232, 84) yc (131, 18)
+X_pert (829, 232, 84) y_pert (829, 18)
+ChRM23: 100% 131/131 [00:33<00:00,  3.93it/s]
+Z_clean: (131, 84, 10), y_clean: (131, 18)
+Z_pert: (829, 84, 10), y_pert: (829, 18)
+Xc (318, 361, 84) yc (318, 18)
+X_pert (642, 361, 84) y_pert (642, 18)
+ACCM03: 100% 318/318 [02:31<00:00,  2.10it/s]
+Z_clean: (318, 84, 10), y_clean: (318, 18)
+Z_pert: (642, 84, 10), y_pert: (642, 18)
+Xc (269, 113, 84) yc (269, 18)
+X_pert (691, 113, 84) y_pert (691, 18)
+ACCM04: 100% 269/269 [00:48<00:00,  5.56it/s]
+Z_clean: (269, 84, 10), y_clean: (269, 18)
+Z_pert: (691, 84, 10), y_pert: (691, 18)
 #+end_example
 
 #+begin_src jupyter-python
-def anchors_with_combos(Z, y, factors, levels):
-    if isinstance(factors, str):
-        factors = [factors]
-
-    combos_all = list(itertools.product(*[levels[f] for f in factors]))
-    A_list, combos_present = [], []
-    for combo in combos_all:
-        idx = _combo_mask(y, factors, combo)
-        if not idx.any():
-            continue
-        A_list.append(np.nanmean(Z[idx], axis=0))   # (n_time, n_comp)
-        combos_present.append(combo)
-
-    if len(A_list) == 0:
-        return None, []
-
-    A = np.stack(A_list, axis=0).reshape(-1, Z.shape[-1])
-    return A, combos_present
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-# --- define global levels from pooled data to fix combo ordering across mice
+# Align across mice using Procrustes
 y_pool = pd.concat(y_mice, ignore_index=True)
 levels = get_levels(y_pool, factors)
+ref_idx = 7  # Reference mouse for alignment
 
-ref_idx = 7
 A_ref = anchors_from_Z(X_mice[ref_idx], y_mice[ref_idx], factors, levels, drop_missing=False)
 
 X_mice_aligned = []
-R_mice = []
 for Z_mouse, y_mouse in zip(X_mice, y_mice):
     A = anchors_from_Z(Z_mouse, y_mouse, factors, levels, drop_missing=False)
-
-    # R s.t. A @ R ~= A_ref
     R, _ = orthogonal_procrustes(A, A_ref)
-
-    # optional: prevent reflections
-    # R = _enforce_proper_rotation(R)
-
     X_mice_aligned.append(Z_mouse @ R)
-    R_mice.append(R)
 
-X_aligned_all = np.concatenate(X_mice_aligned, axis=0)
-y_aligned_all = pd.concat(y_mice, ignore_index=True)
+X_aligned = np.concatenate(X_mice_aligned, axis=0)
+y_aligned = pd.concat(y_mice, ignore_index=True)
+
+# Transpose to (trials, components, time)
+X_single = np.swapaxes(X_aligned, 1, 2)
+y_single = y_aligned
+print(f"Final shape: {X_single.shape}")
 #+end_src
 
 #+RESULTS:
+: Final shape: (9216, 10, 84)
 
 #+begin_src jupyter-python
-print(X_aligned_all.shape, y_aligned_all.shape, w_mice[0].shape, evr_mice[1].shape)
+# Ensure PC2 positive = lick-like
+bins_choice = options['bins_CHOICE']
+mask_lick = (y_single.laser == 0) & (y_single.performance == 1) & (y_single.choice == 1)
+mask_nolick = (y_single.laser == 0) & (y_single.performance == 1) & (y_single.choice == 0)
+
+m_lick = np.nanmean(X_single[mask_lick][:, 1, bins_choice])
+m_nolick = np.nanmean(X_single[mask_nolick][:, 1, bins_choice])
+
+if m_lick < m_nolick:
+    print('Flipping PC2')
+    X_single[:, 1, :] *= -1
+else:
+    print('PC2 orientation OK')
 #+end_src
 
 #+RESULTS:
-: (9216, 84, 10) (9216, 18) (10, 184) (84, 10)
+: Flipping PC2
 
 #+begin_src jupyter-python
 evr_list = [evr.mean(0) for evr in evr_mice]
+evr_single = np.vstack(evr_list)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src jupyter-python
-w_stack = np.concatenate(w_mice, -1)
-evr_single = np.vstack(evr_list)
-print(w_stack.shape, evr_single.shape)
+w_list = [w.mean(0) for w in w_mice]
+w_single = np.hstack(w_list) * 100
+print(w_single.shape)
+#+end_src
+
+#+RESULTS:
+: (10, 3319)
+
+#+begin_src jupyter-python
+# w_stack = np.concatenate(np.mean(w_mice,0), -1)
+# w_single = w_stack * 100
+# evr_single = np.vstack(evr_list)
+print(w_single.shape, evr_single.shape)
 #+end_src
 
 #+RESULTS:
 : (10, 3319) (9, 10)
-
-#+begin_src jupyter-python
-X_single = np.swapaxes(X_aligned_all, 1, 2)
-y_single = y_aligned_all
-w_single = w_stack * 100
-print(X_single.shape, y_single.shape)
-#+end_src
-
-#+RESULTS:
-: (9216, 10, 84) (9216, 18)
-
-#+begin_src jupyter-python
-# E = pc_mouse_energy(w_stack, mouse_slices)  # DataFrame: PC x mouse
-# E.loc[0].sort_values(ascending=False)     # PC1 distribution across mice
-#+end_src
-
-#+RESULTS:
 
 #+begin_src jupyter-python
 evr_mean = np.array(evr_single, dtype=float).mean(0)
@@ -1517,7 +1295,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_36.png]]
+[[file:./figures/singlePCA/figure_35.png]]
 
 ** Save/Load
 
@@ -1526,7 +1304,7 @@ print(dum)
 #+end_src
 
 #+RESULTS:
-: TEST
+: pca_POST_GNG_Expert_standard_loo_correct_odor_pair
 
 #+begin_src jupyter-python
 pkl_save(X_single, 'single_traj_' + dum, path="../data/pca/")
@@ -1536,13 +1314,12 @@ pkl_save(evr_single, 'single_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/pca//single_traj_TESTDPA.pkl
-: saving to ../data/pca//single_labels_TESTDPA.pkl
-: saving to ../data/pca//single_weights_TESTDPA.pkl
-: saving to ../data/pca//single_evr_TESTDPA.pkl
+: saving to ../data/pca//single_traj_pca_POST_GNG_Expert_standard_loo_correct_odor_pair.pkl
+: saving to ../data/pca//single_labels_pca_POST_GNG_Expert_standard_loo_correct_odor_pair.pkl
+: saving to ../data/pca//single_weights_pca_POST_GNG_Expert_standard_loo_correct_odor_pair.pkl
+: saving to ../data/pca//single_evr_pca_POST_GNG_Expert_standard_loo_correct_odor_pair.pkl
 
-
- #+begin_src jupyter-python
+#+begin_src jupyter-python
 X_single = pkl_load('single_traj_' + dum, path="../data/pca/")
 y_single = pkl_load( 'single_labels_' + dum, path="../data/pca/")
 w_single = pkl_load( 'single_weights_' + dum, path="../data/pca/")
@@ -1550,19 +1327,19 @@ evr_single = pkl_load( 'single_evr_' + dum, path="../data/pca/")
 #+end_src
 
 #+RESULTS:
-: loading from ../data/pca//single_traj_TEST.pkl
-: loading from ../data/pca//single_labels_TEST.pkl
-: loading from ../data/pca//single_weights_TEST.pkl
-: loading from ../data/pca//single_evr_TEST.pkl
+: loading from ../data/pca//single_traj_pca_TEST_Expert_standard.pkl
+: loading from ../data/pca//single_labels_pca_TEST_Expert_standard.pkl
+: loading from ../data/pca//single_weights_pca_TEST_Expert_standard.pkl
+: loading from ../data/pca//single_evr_pca_TEST_Expert_standard.pkl
 
 ** Trajectories
 
 #+begin_src jupyter-python
-n_comp = 4
+n_comp = 3
 laser = 0
 i_mouse= -1
 
-idx_correct =  (y_single.learning=='Naive') & (y_single.performance==1) & (y_single.tasks=='DPA')
+idx_correct =  (y_single.learning=='Expert') & (y_single.performance==1) & ((y_single.tasks=='DPA') | (y_single.odr_perf==1))
 idx_mouse = True
 if i_mouse !=-1:
     idx_mouse = (y_single.mouse==options['mice'][i_mouse])
@@ -1601,24 +1378,24 @@ for i in range(4):
         ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
 
 
-plt.savefig('./figures/single/pca_traj_%s.svg' % dum)
+# plt.savefig('./figures/single/pca_traj_%s.svg' % dum)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_41.png]]
+[[file:./figures/singlePCA/figure_40.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 
 palette = sns.color_palette("muted")
-color = [palette[2], palette[0], palette[3]]
+color = [palette[3], palette[0], palette[2]]
 
-pair = y_single.tasks.unique()
+tasks = ['DPA', 'DualGo', 'DualNoGo']
 xtime = np.linspace(0, 14, 84)
 
-for i in range(len(pair)):
-    mask = (y_single.tasks==y_single.tasks.unique()[i]) & (y_single.laser==laser) & idx_mouse & idx_correct # & (y_single.tasks!='DPA') & (y_single.odr_perf==1)
+for i, task in enumerate(tasks):
+    mask = (y_single.tasks==task) & (y_single.laser==laser) & idx_mouse & idx_correct
     X_sel = X_single[mask]
 
     X_avg = X_sel.mean(0)
@@ -1627,7 +1404,7 @@ for i in range(len(pair)):
     for k in range(n_comp):
         y_avg = X_avg[k]
         y_sem = X_sem[k]
-        ax[k].plot(xtime, y_avg, color=color[i], label=pair[i])
+        ax[k].plot(xtime, y_avg, color=color[i], label=tasks[i])
         ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
         ax[k].axhline(0, ls='--', color='k')
         ax[k].set_xlabel('Time')
@@ -1639,12 +1416,12 @@ for i in range(len(pair)):
         # ax[k].set_ylim([-4, 4])
         ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
 
-plt.savefig('./figures/single/pca_traj_%s_tasks.svg' % dum)
+# plt.savefig('./figures/single/pca_traj_%s_tasks.svg' % dum)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_42.png]]
+[[file:./figures/singlePCA/figure_41.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1675,12 +1452,12 @@ for i in range(2):
         # ax[k].set_ylim([-2.5, 2.5])
         ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
 
-plt.savefig('./figures/single/pca_traj_%s_sample.svg' % dum)
+# plt.savefig('./figures/single/pca_traj_%s_sample.svg' % dum)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_43.png]]
+[[file:./figures/singlePCA/figure_42.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1711,12 +1488,12 @@ for i in range(2):
         # ax[k].set_ylim([-2, 2])
         ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
 
-plt.savefig('./figures/single/pca_traj_%s_licks.svg' % dum)
+# plt.savefig('./figures/single/pca_traj_%s_licks.svg' % dum)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_44.png]]
+[[file:./figures/singlePCA/figure_43.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1747,12 +1524,12 @@ for i in range(2):
         # ax[k].set_ylim([-8, 8])
         ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
 
-plt.savefig('./figures/single/pca_traj_%s_test.svg' % dum)
+# plt.savefig('./figures/single/pca_traj_%s_test.svg' % dum)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_45.png]]
+[[file:./figures/singlePCA/figure_44.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
@@ -1780,2633 +1557,15 @@ for i in range(4):
 
 for k in range(3):
     ax[k].legend(fontsize=12, frameon=0, loc='best')
+    ax[k].axhline(0, ls='--')
+    ax[k].axvline(0, ls='--')
 
-plt.savefig('./figures/single/pca_traj_%s_2D.svg' % dum)
+# plt.savefig('./figures/single/pca_traj_%s_2D.svg' % dum)
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_46.png]]
-
-#+begin_src jupyter-python
-
-#+end_src
-
-#+RESULTS:
-
-** Flow
-**** Fig. 2E–H blocks
-
----
-
-***** 1) Setup
-
-This block defines epochs, task filters, and a couple of helpers.
-
-#+begin_src jupyter-python
-# =========================
-# Fig 2 E-H: setup
-# =========================
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-from scipy.ndimage import gaussian_filter
-from scipy.stats import pearsonr
-
-# latent coordinates
-x_idx = 0   # PC1 ~ sample axis
-y_idx = 1   # PC2 ~ choice axis
-
-# use DPA trials for the main geometry panels
-task_sel = ['DPA']
-
-# choose epoch for delay-state geometry
-# you can swap bins_DELAY for bins_LD if you want late delay specifically
-bins_state = options['bins_DELAY']
-bins_late  = options['bins_LD']
-
-# naive / expert labels used throughout
-stages = ['Naive', 'Expert']
-
-# helper: standard filter used for geometry analyses
-def get_stage_mask(y, stage, tasks=['DPA'], laser=0, perf=None):
-    mask = y.learning == stage
-    mask &= y.tasks.isin(tasks)
-    mask &= (y.laser == laser)
-
-    if perf is not None:
-        mask &= (y.performance == perf)
-
-    return mask.values if hasattr(mask, "values") else mask
-
-# helper: average a trajectory over a time bin
-def epoch_xy(X, bins, x_idx=0, y_idx=1):
-    x = np.nanmean(X[:, x_idx, bins], axis=-1)
-    y = np.nanmean(X[:, y_idx, bins], axis=-1)
-    return x, y
-
-# helper: full trajectories in x-y plane
-def traj_xy(X, bins=None, x_idx=0, y_idx=1):
-    if bins is None:
-        return X[:, x_idx, :], X[:, y_idx, :]
-    return X[:, x_idx, bins], X[:, y_idx, bins]
-
-print(X_single.shape, y_single.shape)
-print("Using bins_state:", bins_state[:3], "...", bins_state[-3:])
-#+end_src
-
-#+RESULTS:
-: (9216, 10, 84) (9216, 18)
-: Using bins_state: [18 19 20] ... [51 52 53]
-
-
----
-
-***** 2) Helpers for flow / occupancy maps (Fig. 2E)
-
-We’ll use your existing velocity/binning utilities but simplify plotting.
-
-#+begin_src jupyter-python
-# =========================
-# Helpers for Fig 2E
-# =========================
-
-from scipy.ndimage import gaussian_filter
-
-def compute_speed_field(XYx, XYy, bins=25, dt=1.0, smooth=1.0, min_count=5):
-    """
-    XYx, XYy: (n_trials, n_time)
-    returns:
-      xedges, yedges, speed, U, V, C
-    """
-    xedges, yedges, U, V, C = flow_field_midpoint(XYx, XYy, dt=dt, bins=bins)
-
-    speed = np.sqrt(U**2 + V**2)
-    speed = np.where(C >= min_count, speed, np.nan)
-
-    if smooth is not None and smooth > 0:
-        U = gaussian_filter(np.nan_to_num(U, nan=0.0), smooth)
-        V = gaussian_filter(np.nan_to_num(V, nan=0.0), smooth)
-
-        speed0 = gaussian_filter(np.nan_to_num(speed, nan=0.0), smooth)
-        norm0  = gaussian_filter(np.isfinite(speed).astype(float), smooth)
-        speed  = speed0 / np.where(norm0 == 0, np.nan, norm0)
-
-    return xedges, yedges, speed, U, V, C
-
-
-def plot_speed_field(ax, xedges, yedges, speed, U, V, C, zlim=None, title='',
-                     cmap='coolwarm', quiver_scale=0.25, min_count=5):
-    xc = 0.5 * (xedges[:-1] + xedges[1:])
-    yc = 0.5 * (yedges[:-1] + yedges[1:])
-    Xc, Yc = np.meshgrid(xc, yc, indexing='ij')
-
-    if zlim is not None:
-        ax.set_xlim([-zlim, zlim])
-        ax.set_ylim([-zlim, zlim])
-
-    pcm = ax.pcolormesh(xedges, yedges, speed.T, shading='auto', cmap=cmap)
-
-    mask = C >= min_count
-    ax.quiver(Xc[mask], Yc[mask], U[mask], V[mask],
-              color='w', angles='xy', scale_units='xy', scale=quiver_scale, alpha=0.8)
-
-    ax.axhline(0, ls='--', color='k', lw=1)
-    ax.axvline(0, ls='--', color='k', lw=1)
-
-    ax.set_xlabel('A/B Overlap')
-    ax.set_ylabel('Choice Overlap')
-    ax.set_title(title)
-    ax.set_aspect('equal')
-
-    return pcm
-
-
-def plot_mean_traj(ax, X, y, bins, color_by='sample_odor', title=''):
-    if color_by == 'sample_odor':
-        levels = [0, 1]
-        colors = ['#44AA99', '#332288']
-        labels = ['A', 'B']
-    elif color_by == 'choice':
-        levels = [0, 1]
-        colors = ['#377eb8', '#4daf4a']
-        labels = ['No Lick', 'Lick']
-    else:
-        raise ValueError("unknown color_by")
-
-    for lev, c, lab in zip(levels, colors, labels):
-        mask = y[color_by].values == lev
-        if np.sum(mask) == 0:
-            continue
-        x = X[mask, x_idx][:, bins]
-        yy = X[mask, y_idx][:, bins]
-        ax.plot(np.nanmean(x, 0), np.nanmean(yy, 0), color=c, lw=2, label=lab)
-
-    ax.legend(frameon=0, fontsize=10, loc='best')
-    ax.set_title(title)
-#+end_src
-
-#+RESULTS:
-
-
----
-
-***** 3) Fig. 2E — Naive vs Expert state-space maps
-
-This produces the hero panel.
-
-#+begin_src jupyter-python
-# =========================
-# Fig 2E
-# Naive vs Expert occupancy / flow maps
-# =========================
-
-bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY']))
-bins_plot = options['bins_DELAY']   # use this if you want only delay
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2.4*width, 1.15*height), sharex=True, sharey=True)
-
-pcms = []
-zlim = 50
-
-for i, stage in enumerate(stages):
-    mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-    X_stage = X_single[mask]
-    y_stage = y_single.loc[mask].reset_index(drop=True)
-
-    x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
-
-    xedges, yedges, speed, U, V, C = compute_speed_field(
-        x_traj, y_traj, bins=16, dt=1.0, smooth=1.0, min_count=1
-    )
-
-    pcm = plot_speed_field(
-        ax[i], xedges, yedges, speed, U, V, C,
-        zlim=zlim, title=stage, quiver_scale=0.1, min_count=5
-    )
-    pcms.append(pcm)
-
-    plot_mean_traj(ax[i], X_stage, y_stage, bins_plot, color_by='sample_odor', title=stage)
-
-cbar = fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02)
-cbar.set_label('Speed')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2E_state_maps.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_50.png]]
-
-
-****** Notes
-- If you want the background to look more like your current “norm. speed” maps, you can z-score =speed= within stage before plotting.
-- If stream arrows are too dense/noisy, use =bins=16= and =min_count=8=.
-
----
-
-***** 4) Fig. 2F — Per-mouse delay centroid shifts
-
-This quantifies the learning-dependent shift. Very simple and likely robust.
-
-
-#+begin_src jupyter-python
-# =========================
-# Fig 2F
-# Per-mouse delay-state centroids
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    for stage in stages:
-        mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-        mask &= (y_single.mouse.values == mouse)
-
-        if np.sum(mask) < 5:
-            continue
-
-        x, y = epoch_xy(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
-
-        rows.append({
-            'mouse': mouse,
-            'learning': stage,
-            'x_centroid': np.nanmean(x),
-            'y_centroid': np.nanmean(y),
-            'x_abs': np.nanmean(np.abs(x)),
-            'y_abs': np.nanmean(np.abs(y)),
-            'n_trials': np.sum(mask),
-        })
-
-df_cent = pd.DataFrame(rows)
-df_cent.head()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-|   | mouse   | learning | x_centroid | y_centroid | x_abs    | y_abs    | n_trials |
-|---+---------+----------+------------+------------+----------+----------+----------|
-| 0 | JawsM01 | Naive    | -7.368778  | 1.257271   | 7.368778 | 2.071561 | 75       |
-| 1 | JawsM01 | Expert   | -7.608942  | -0.410214  | 7.608942 | 1.916405 | 31       |
-| 2 | JawsM06 | Naive    | -3.485188  | -0.056764  | 3.518080 | 1.804923 | 60       |
-| 3 | JawsM06 | Expert   | -3.006540  | -0.231667  | 3.182809 | 2.155885 | 84       |
-| 4 | JawsM12 | Naive    | -4.187242  | 0.560836   | 4.386398 | 1.690901 | 62       |
-:END:
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=False)
-
-# x-axis / sample coordinate
-for mouse in df_cent.mouse.unique():
-    dfm = df_cent[df_cent.mouse == mouse].set_index('learning').loc[stages]
-    ax[0].plot([0, 1], dfm['x_centroid'], '-o', color='0.7', alpha=0.8)
-ax[0].set_xticks([0, 1])
-ax[0].set_xticklabels(stages)
-ax[0].set_ylabel('Delay centroid (A/B Overlap)')
-ax[0].set_title('Sample axis')
-ax[0].axhline(0, ls='--', color='k')
-
-# y-axis / choice coordinate
-for mouse in df_cent.mouse.unique():
-    dfm = df_cent[df_cent.mouse == mouse].set_index('learning').loc[stages]
-    ax[1].plot([0, 1], dfm['y_centroid'], '-o', color='0.7', alpha=0.8)
-
-# group mean
-for k, var in enumerate(['x_centroid', 'y_centroid']):
-    mean_ = df_cent.groupby('learning')[var].mean().loc[stages].values
-    sem_  = df_cent.groupby('learning')[var].sem().loc[stages].values
-    ax[k].plot([0,1], mean_, '-o', color='k', lw=2)
-    ax[k].fill_between([0,1], mean_-sem_, mean_+sem_, color='k', alpha=0.15)
-
-ax[1].set_xticks([0, 1])
-ax[1].set_xticklabels(stages)
-ax[1].set_ylabel('Delay centroid (Choice Overlap)')
-ax[1].set_title('Choice axis')
-ax[1].axhline(0, ls='--', color='k')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2F_delay_centroids.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_52.png]]
-
-
-****** Optional alternative
-If your story is specifically about a *downward shift into no-lick*, you may want to use:
-- =y_centroid=
-- or =frac_lower = mean(y < 0)=
-instead of =abs=.
-
-Here is an extra block for that:
-
-#+begin_src jupyter-python
-# Optional: occupancy below zero (no-lick half-plane)
-
-rows = []
-for mouse in y_single.mouse.unique():
-    for stage in stages:
-        mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-        mask &= (y_single.mouse.values == mouse)
-
-        if np.sum(mask) < 5:
-            continue
-
-        _, y = epoch_xy(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
-
-        rows.append({
-            'mouse': mouse,
-            'learning': stage,
-            'frac_lower': np.nanmean(y < 0),
-        })
-
-df_occ = pd.DataFrame(rows)
-
-fig, ax = plt.subplots(figsize=(width, height))
-for mouse in df_occ.mouse.unique():
-    dfm = df_occ[df_occ.mouse == mouse].set_index('learning').loc[stages]
-    ax.plot([0, 1], dfm['frac_lower'], '-o', color='0.7')
-
-mean_ = df_occ.groupby('learning')['frac_lower'].mean().loc[stages].values
-sem_  = df_occ.groupby('learning')['frac_lower'].sem().loc[stages].values
-ax.plot([0,1], mean_, '-o', color='k', lw=2)
-ax.fill_between([0,1], mean_-sem_, mean_+sem_, color='k', alpha=0.15)
-
-ax.set_xticks([0,1])
-ax.set_xticklabels(stages)
-ax.set_ylabel('Fraction in no-lick half-plane')
-ax.set_ylim([0,1])
-plt.tight_layout()
-plt.savefig('./figures/single/fig2F_frac_lower.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_53.png]]
-
-
----
-
-***** 5) Fig. 2G — Geometry-behavior relationship
-
-We compute naive→expert changes per mouse and correlate with behavior change.
-
-#+begin_src jupyter-python
-# =========================
-# Fig 2G
-# Geometry-behavior relationship
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    dum = {'mouse': mouse}
-
-    # geometry
-    for stage in stages:
-        mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-        mask &= (y_single.mouse.values == mouse)
-
-        if np.sum(mask) < 5:
-            continue
-
-        x, y = epoch_xy(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
-        dum[f'x_{stage}'] = np.nanmean(x)
-        dum[f'y_{stage}'] = np.nanmean(y)
-
-    # behavior: DPA performance
-    for stage in stages:
-        mask = (y_single.mouse == mouse)
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.tasks == 'DPA')
-        mask &= (y_single.laser == 0)
-
-        dum[f'dpa_{stage}'] = np.nanmean(y_single.loc[mask, 'performance'])
-
-    # behavior: GNG performance
-    for stage in stages:
-        mask = (y_single.mouse == mouse)
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.tasks != 'DPA')
-        mask &= (y_single.laser == 0)
-
-        # use odr_perf for embedded GNG-type task performance
-        dum[f'gng_{stage}'] = np.nanmean(y_single.loc[mask, 'odr_perf'])
-
-    rows.append(dum)
-
-df_rel = pd.DataFrame(rows)
-
-df_rel['dx'] = df_rel['x_Expert'] - df_rel['x_Naive']
-df_rel['dy'] = df_rel['y_Expert'] - df_rel['y_Naive']
-df_rel['dDPA'] = df_rel['dpa_Expert'] - df_rel['dpa_Naive']
-df_rel['dGNG'] = df_rel['gng_Expert'] - df_rel['gng_Naive']
-
-df_rel
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-|   | mouse   | x_Naive    | y_Naive   | x_Expert   | y_Expert  | dpa_Naive | dpa_Expert | gng_Naive | gng_Expert | dx        | dy        | dDPA     | dGNG      |
-|---+---------+------------+-----------+------------+-----------+-----------+------------+-----------+------------+-----------+-----------+----------+-----------|
-| 0 | JawsM01 | -7.368778  | 1.257271  | -7.608942  | -0.410214 | 0.781250  | 0.968750   | 0.947917  | 0.984375   | -0.240164 | -1.667484 | 0.187500 | 0.036458  |
-| 1 | JawsM06 | -3.485188  | -0.056764 | -3.006540  | -0.231667 | 0.625000  | 0.875000   | 0.875000  | 0.776042   | 0.478647  | -0.174903 | 0.250000 | -0.098958 |
-| 2 | JawsM12 | -4.187242  | 0.560836  | -2.353736  | 0.169049  | 0.645833  | 0.781250   | 0.791667  | 0.945312   | 1.833506  | -0.391787 | 0.135417 | 0.153646  |
-| 3 | JawsM15 | -18.452473 | -1.479109 | -17.858196 | -1.116282 | 0.729167  | 0.927083   | 0.744792  | 0.718750   | 0.594277  | 0.362827  | 0.197917 | -0.026042 |
-| 4 | JawsM18 | -29.304064 | 0.866758  | -26.570036 | 0.614078  | 0.833333  | 0.989583   | 0.848958  | 0.968750   | 2.734027  | -0.252680 | 0.156250 | 0.119792  |
-| 5 | ChRM04  | -49.765451 | 4.322640  | -46.169255 | -0.390953 | 0.833333  | 0.916667   | 0.890625  | 0.859375   | 3.596197  | -4.713593 | 0.083333 | -0.031250 |
-| 6 | ChRM23  | -14.715155 | 0.860540  | -12.511259 | 1.722979  | 0.656250  | 0.750000   | 0.697917  | 0.820312   | 2.203896  | 0.862440  | 0.093750 | 0.122396  |
-| 7 | ACCM03  | -25.010011 | 3.996422  | -21.499245 | 0.491592  | 0.692708  | 0.953125   | 0.692708  | 0.871094   | 3.510766  | -3.504830 | 0.260417 | 0.178385  |
-| 8 | ACCM04  | -8.716558  | 1.223649  | -8.433033  | 1.114868  | 0.562500  | 0.726562   | 0.609375  | 0.910156   | 0.283524  | -0.108782 | 0.164062 | 0.300781  |
-:END:
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
-
-palette = dict(zip(df_rel['mouse'], sns.color_palette("tab10", n_colors=len(df_rel))))
-
-for i, (beh, lab) in enumerate(zip(['dDPA', 'dGNG'], ['Δ DPA performance', 'Δ GNG performance'])):
-    sns.regplot(
-        data=df_rel, x='dy', y=beh, ax=ax[i],
-        scatter=False, color='k', line_kws={'ls':'--', 'lw':2}
-    )
-    sns.scatterplot(
-        data=df_rel, x='dy', y=beh, hue='mouse',
-        palette=palette, s=70, edgecolor='k', linewidth=0.3,
-        legend=False, ax=ax[i]
-    )
-
-    r, p = pearsonr(df_rel['dy'], df_rel[beh])
-    ax[i].annotate(f"Pearson r = {r:.2f}\np = {p:.3f}",
-                   xy=(0.05, 0.95), xycoords='axes fraction',
-                   ha='left', va='top',
-                   bbox=dict(facecolor='white', edgecolor='none'))
-
-    ax[i].axvline(0, ls='--', color='0.5')
-    ax[i].axhline(0, ls='--', color='0.5')
-    ax[i].set_xlabel('Δ Choice-axis centroid')
-    ax[i].set_ylabel(lab)
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2G_geometry_behavior.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_55.png]]
-
-
-****** Note
-This uses:
-- geometry change = =dy = y_Expert - y_Naive=
-- DPA change = mean performance in DPA
-- GNG change = mean =odr_perf= for non-DPA tasks
-
-If you want a stricter analysis, restrict GNG to =tasks == 'DualGo'= / =DualNoGo= if those labels exist.
-
----
-
-***** 6) Fig. 2H — Correct vs false-alarm trajectories
-
-Simple version: unpaired DPA trials only (=AD=, =BC=), compare:
-- correct rejection (=performance == 1=)
-- false alarm (=performance == 0=)
-
-We’ll plot mean trajectories in the PC1-PC2 plane.
-
-#+begin_src jupyter-python
-# =========================
-# Fig 2H
-# Correct vs false alarm trajectories on unpaired DPA trials
-# =========================
-
-# unpaired DPA = AD and BC
-# In your coding, odor_pair seems to be:
-# 0 AC, 1 AD, 2 BD, 3 BC
-# so unpaired are 1 and 3
-unpaired_pairs = [1, 3]
-
-stage = 'Naive'   # change to 'Expert' if you want, or make two panels
-bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY'], options['bins_TEST']))
-
-mask0 = (y_single.tasks == 'DPA')
-mask0 &= (y_single.learning == stage)
-mask0 &= (y_single.laser == 0)
-mask0 &= (y_single.odor_pair.isin(unpaired_pairs))
-
-mask_cr = mask0 & (y_single.performance == 1)
-mask_fa = mask0 & (y_single.performance == 0)
-
-print("correct rejection:", np.sum(mask_cr))
-print("false alarm:", np.sum(mask_fa))
-#+end_src
-
-#+RESULTS:
-: correct rejection: 283
-: false alarm: 245
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
-
-# left: trajectories
-for mask, color, lab in zip([mask_cr, mask_fa], ['#377eb8', '#e41a1c'], ['Correct reject', 'False alarm']):
-    X_ = X_single[mask]
-    x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
-    y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
-    ax[0].plot(x, y, color=color, lw=2, label=lab)
-    ax[0].scatter(x[0], y[0], color=color, s=50)
-    ax[0].scatter(x[-1], y[-1], color=color, s=80, marker='s')
-
-ax[0].axhline(0, ls='--', color='k')
-ax[0].axvline(0, ls='--', color='k')
-ax[0].set_xlabel('A/B Overlap')
-ax[0].set_ylabel('Choice Overlap')
-ax[0].legend(frameon=0)
-ax[0].set_title(f'{stage}: unpaired DPA')
-
-# right: late delay choice-axis position
-vals = []
-for mouse in y_single.mouse.unique():
-    for lab, mask in zip(['CR', 'FA'], [mask_cr, mask_fa]):
-        mm = mask & (y_single.mouse == mouse)
-        if np.sum(mm) < 3:
-            continue
-        yv = np.nanmean(X_single[mm][:, y_idx, bins_late], axis=(0,1))
-        vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
-
-df_err = pd.DataFrame(vals)
-
-if len(df_err):
-    sns.pointplot(data=df_err, x='type', y='late_choice', dodge=0.2, errorbar='se', ax=ax[1], color='k')
-    sns.stripplot(data=df_err, x='type', y='late_choice', hue='mouse', dodge=False, ax=ax[1], size=6)
-    ax[1].legend([], [], frameon=False)
-    ax[1].axhline(0, ls='--', color='k')
-    ax[1].set_ylabel('Late-delay choice overlap')
-    ax[1].set_xlabel('')
-    ax[1].set_title('Error trials drift toward lick sector')
-
-plt.tight_layout()
-plt.savefig(f'./figures/single/fig2H_correct_vs_FA_{stage}.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-# [goto error]
-#+begin_example
----------------------------------------------------------------------------
-AttributeError                            Traceback (most recent call last)
-Cell In[155], line 32
-     29 df_err = pd.DataFrame(vals)
-     31 if len(df_err):
----> 32     sns.pointplot(data=df_err, x='type', y='late_choice', dodge=0.2, errorbar='se', ax=ax[1], color='k')
-     33     sns.stripplot(data=df_err, x='type', y='late_choice', hue='mouse', dodge=False, ax=ax[1], size=6)
-     34     ax[1].legend([], [], frameon=False)
-
-File ~/mambaforge/envs/dual/lib/python3.14/site-packages/seaborn/categorical.py:2516, in pointplot(data, x, y, hue, order, hue_order, estimator, errorbar, n_boot, seed, units, weights, color, palette, hue_norm, markers, linestyles, dodge, log_scale, native_scale, orient, capsize, formatter, legend, err_kws, ci, errwidth, join, scale, ax, **kwargs)
-   2513 p._point_kwargs_backcompat(scale, join, kwargs)
-   2514 err_kws, capsize = p._err_kws_backcompat(err_kws, None, errwidth, capsize)
--> 2516 p.plot_points(
-   2517     aggregator=aggregator,
-   2518     markers=markers,
-   2519     linestyles=linestyles,
-   2520     dodge=dodge,
-   2521     color=color,
-   2522     capsize=capsize,
-   2523     err_kws=err_kws,
-   2524     plot_kws=kwargs,
-   2525 )
-   2527 p._add_axis_labels(ax)
-   2528 p._adjust_cat_axis(ax, axis=p.orient)
-
-File ~/mambaforge/envs/dual/lib/python3.14/site-packages/seaborn/categorical.py:1217, in _CategoricalPlotter.plot_points(self, aggregator, markers, linestyles, dodge, color, capsize, err_kws, plot_kws)
-   1208 agg_data = sub_data if sub_data.empty else (
-   1209     sub_data
-   1210     .groupby(self.orient)
-   (...)   1213     .reset_index()
-   1214 )
-   1216 if dodge:
--> 1217     hue_idx = self._hue_map.levels.index(sub_vars["hue"])
-   1218     step_size = dodge / (n_hue_levels - 1)
-   1219     offset = -dodge / 2 + step_size * hue_idx
-
-AttributeError: 'NoneType' object has no attribute 'index'
-#+end_example
-[[file:./figures/singlePCA/figure_57.png]]
-:END:
-
-
-****** Optional extension
-Make this panel two columns:
-- Naive
-- Expert
-
-If you want that, here is a compact version:
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
-
-for i, stage in enumerate(['Naive', 'Expert']):
-    mask0 = (y_single.tasks == 'DPA')
-    mask0 &= (y_single.learning == stage)
-    mask0 &= (y_single.laser == 0)
-    mask0 &= (y_single.odor_pair.isin(unpaired_pairs))
-
-    mask_cr = mask0 & (y_single.performance == 1)
-    mask_fa = mask0 & (y_single.performance == 0)
-
-    for mask, color, lab in zip([mask_cr, mask_fa], ['#377eb8', '#e41a1c'], ['CR', 'FA']):
-        if np.sum(mask) == 0:
-            continue
-        X_ = X_single[mask]
-        x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
-        y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
-        ax[i].plot(x, y, color=color, lw=2, label=lab)
-
-    ax[i].axhline(0, ls='--', color='k')
-    ax[i].axvline(0, ls='--', color='k')
-    ax[i].set_title(stage)
-    ax[i].set_xlabel('A/B Overlap')
-    if i == 0:
-        ax[i].set_ylabel('Choice Overlap')
-    ax[i].legend(frameon=0)
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2H_correct_vs_FA_both.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_58.png]]
-
-
----
-
-**** Refined Fig. 2E–H analysis
-
----
-
-**/ 1) Setup / derived helpers
-
-This block adds a few small helpers on top of what you already have.
-
-#+begin_src jupyter-python
-# =========================
-# Refined helpers for Fig 2 E-H
-# =========================
-
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-from scipy.stats import pearsonr, ttest_rel, wilcoxon
-from scipy.ndimage import gaussian_filter
-
-# canonical colors
-col_A = '#44AA99'
-col_B = '#332288'
-col_CR = '#377eb8'
-col_FA = '#e41a1c'
-col_mean = 'k'
-
-def sem(x, axis=0):
-    x = np.asarray(x, float)
-    return np.nanstd(x, axis=axis, ddof=1) / np.sqrt(np.sum(np.isfinite(x), axis=axis))
-
-def get_delay_metrics(X, bins, x_idx=0, y_idx=1):
-    """
-    X: (n_trials, n_comp, n_time)
-    Returns trial-wise delay metrics in PC1-PC2 plane
-    """
-    x = np.nanmean(X[:, x_idx, bins], axis=-1)
-    y = np.nanmean(X[:, y_idx, bins], axis=-1)
-
-    return {
-        'x_centroid': x,
-        'y_centroid': y,
-        'r': np.sqrt(x**2 + y**2),
-        'frac_lower': (y < 0).astype(float),
-    }
-
-def add_crosshair(ax):
-    ax.axhline(0, ls='--', color='k', lw=1)
-    ax.axvline(0, ls='--', color='k', lw=1)
-
-def format_overlap_ax(ax, xlabel='A/B Overlap', ylabel='Choice Overlap', xlim=None, ylim=None):
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    add_crosshair(ax)
-    if xlim is not None:
-        ax.set_xlim(xlim)
-    if ylim is not None:
-        ax.set_ylim(ylim)
-    ax.set_aspect('equal')
-#+end_src
-
-#+RESULTS:
-
-
----
-
-**/ 2) Refined Fig. 2E — state-space maps + clearer condition trajectories
-
-The current version is already close. I would refine it by:
-
-- using /delay-only or baseline+delay only/, not whole-trial, for the field,
-- overlaying /sample A/B mean trajectories/ more cleanly,
-- optionally marking the /delay centroid/ for each sample,
-- using a fixed symmetric axis range.
-
-This should make the learning-dependent downward shift more legible.
-
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2E
-# Naive vs Expert state-space geometry
-# =========================
-
-# choose geometry window
-# bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY']))
-bins_plot = options['bins_DELAY']
-
-zlim = 14
-field_bins = 100
-field_min_count = 8
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2.4*width, 1.15*height), sharex=True, sharey=True)
-
-pcms = []
-
-for i, stage in enumerate(stages):
-    mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-    X_stage = X_single[mask]
-    y_stage = y_single.loc[mask].reset_index(drop=True)
-
-    x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
-
-    xedges, yedges, speed, U, V, C = compute_speed_field(
-        x_traj, y_traj, bins=field_bins, dt=1.0, smooth=1.0, min_count=field_min_count
-    )
-
-    pcm = plot_speed_field(
-        ax[i], xedges, yedges, speed, U, V, C,
-        zlim=zlim, title=stage, quiver_scale=0.32, min_count=field_min_count
-    )
-    pcms.append(pcm)
-
-    # overlay mean sample trajectories
-    for odor, color, lab in zip([0, 1], [col_A, col_B], ['A', 'B']):
-        m = (y_stage.sample_odor.values == odor)
-        if np.sum(m) == 0:
-            continue
-
-        x = X_stage[m][:, x_idx][:, bins_plot]
-        y = X_stage[m][:, y_idx][:, bins_plot]
-
-        x_mean = np.nanmean(x, axis=0)
-        y_mean = np.nanmean(y, axis=0)
-
-        ax[i].plot(x_mean, y_mean, color=color, lw=2.5, label=lab)
-        ax[i].scatter(x_mean[0], y_mean[0], color=color, s=40, zorder=5)
-        ax[i].scatter(x_mean[-1], y_mean[-1], color=color, s=60, marker='s', zorder=5)
-
-        # delay centroid marker
-        xd = np.nanmean(X_stage[m][:, x_idx][:, bins_state], axis=(0,1))
-        yd = np.nanmean(X_stage[m][:, y_idx][:, bins_state], axis=(0,1))
-        ax[i].scatter(xd, yd, color=color, s=100, edgecolor='white', linewidth=1.2, zorder=6)
-
-    format_overlap_ax(ax[i], xlim=[-zlim, zlim], ylim=[-zlim, zlim])
-    ax[i].legend(frameon=0, fontsize=10, loc='upper right')
-
-cbar = fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02)
-cbar.set_label('Speed')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2E_state_maps_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_60.png]]
-
-
-***** Why this is better
-- The /field/ is estimated only where the “memory geometry” lives.
-- The /mean trajectories/ are clearer and less cluttered.
-- The /delay centroid marker/ makes the core shift more explicit.
-
-***** Suggested interpretation
-In text, I would describe this as:
-- naive and expert trajectories both preserve A/B separation,
-- expert delay states occupy a lower region of the choice axis,
-- speed maps indicate a low-speed basin displaced into the no-lick half-plane.
-
----
-
-**/ 3) Refined Fig. 2F — focus on the two strongest summaries
-
-The current x/y centroid panel is okay, but for the paper I would make the main panel:
-
-- /left:/ delay centroid on choice axis (=y_centroid=)
-- /right:/ fraction of trials in the lower half-plane (=frac_lower=)
-
-Then, if you want, keep the sample-axis centroid as supplement.
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2F
-# Delay-state geometry per mouse
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    for stage in stages:
-        mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-        mask &= (y_single.mouse.values == mouse)
-
-        if np.sum(mask) < 5:
-            continue
-
-        met = get_delay_metrics(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
-
-        rows.append({
-            'mouse': mouse,
-            'learning': stage,
-            'x_centroid': np.nanmean(met['x_centroid']),
-            'y_centroid': np.nanmean(met['y_centroid']),
-            'frac_lower': np.nanmean(met['frac_lower']),
-            'r_mean': np.nanmean(met['r']),
-            'n_trials': np.sum(mask),
-        })
-
-df_geom = pd.DataFrame(rows)
-df_geom.head()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-|   | mouse   | learning | x_centroid | y_centroid | frac_lower | r_mean   | n_trials |
-|---+---------+----------+------------+------------+------------+----------+----------|
-| 0 | JawsM01 | Naive    | -7.368778  | 1.257271   | 0.253333   | 7.883574 | 75       |
-| 1 | JawsM01 | Expert   | -7.608942  | -0.410214  | 0.548387   | 7.968154 | 31       |
-| 2 | JawsM06 | Naive    | -3.485188  | -0.056764  | 0.466667   | 4.295585 | 60       |
-| 3 | JawsM06 | Expert   | -3.006540  | -0.231667  | 0.440476   | 4.249220 | 84       |
-| 4 | JawsM12 | Naive    | -4.187242  | 0.560836   | 0.467742   | 5.017056 | 62       |
-:END:
-
-
-#+begin_src jupyter-python
-# stats (simple paired tests)
-wide_y = df_geom.pivot(index='mouse', columns='learning', values='y_centroid').dropna()
-wide_f = df_geom.pivot(index='mouse', columns='learning', values='frac_lower').dropna()
-wide_x = df_geom.pivot(index='mouse', columns='learning', values='x_centroid').dropna()
-
-print('paired y_centroid:', ttest_rel(wide_y['Naive'], wide_y['Expert'], nan_policy='omit'))
-print('paired frac_lower:', ttest_rel(wide_f['Naive'], wide_f['Expert'], nan_policy='omit'))
-print('paired x_centroid:', ttest_rel(wide_x['Naive'], wide_x['Expert'], nan_policy='omit'))
-#+end_src
-
-#+RESULTS:
-: paired y_centroid: TtestResult(statistic=np.float64(1.7023633759549823), pvalue=np.float64(0.12709736341071587), df=np.int64(8))
-: paired frac_lower: TtestResult(statistic=np.float64(-1.5742428991454223), pvalue=np.float64(0.15407836611770387), df=np.int64(8))
-: paired x_centroid: TtestResult(statistic=np.float64(-3.460452160152216), pvalue=np.float64(0.008562092019388939), df=np.int64(8))
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=False)
-
-# ---- panel 1: choice-axis centroid
-for mouse in df_geom.mouse.unique():
-    dfm = df_geom[df_geom.mouse == mouse].set_index('learning').loc[stages]
-    ax[0].plot([0, 1], dfm['y_centroid'], '-o', color='0.7', alpha=0.8)
-
-mean_ = df_geom.groupby('learning')['y_centroid'].mean().loc[stages].values
-sem_  = df_geom.groupby('learning')['y_centroid'].sem().loc[stages].values
-ax[0].plot([0, 1], mean_, '-o', color='k', lw=2)
-ax[0].fill_between([0, 1], mean_-sem_, mean_+sem_, color='k', alpha=0.15)
-
-ax[0].set_xticks([0, 1])
-ax[0].set_xticklabels(stages)
-ax[0].set_ylabel('Delay centroid (Choice Overlap)')
-ax[0].set_title('Choice axis')
-ax[0].axhline(0, ls='--', color='k')
-
-# ---- panel 2: fraction in lower half-plane
-for mouse in df_geom.mouse.unique():
-    dfm = df_geom[df_geom.mouse == mouse].set_index('learning').loc[stages]
-    ax[1].plot([0, 1], dfm['frac_lower'], '-o', color='0.7', alpha=0.8)
-
-mean_ = df_geom.groupby('learning')['frac_lower'].mean().loc[stages].values
-sem_  = df_geom.groupby('learning')['frac_lower'].sem().loc[stages].values
-ax[1].plot([0, 1], mean_, '-o', color='k', lw=2)
-ax[1].fill_between([0, 1], mean_-sem_, mean_+sem_, color='k', alpha=0.15)
-
-ax[1].set_xticks([0, 1])
-ax[1].set_xticklabels(stages)
-ax[1].set_ylabel('Fraction in no-lick half-plane')
-ax[1].set_ylim([0, 1])
-ax[1].set_title('Delay occupancy')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2F_delay_geometry_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_63.png]]
-
-
-***** Optional supplement panel: sample axis
-If the sample axis really does not move much, that is useful but should probably be supplementary.
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(figsize=(width, height))
-
-for mouse in df_geom.mouse.unique():
-    dfm = df_geom[df_geom.mouse == mouse].set_index('learning').loc[stages]
-    ax.plot([0, 1], dfm['x_centroid'], '-o', color='0.7', alpha=0.8)
-
-mean_ = df_geom.groupby('learning')['x_centroid'].mean().loc[stages].values
-sem_  = df_geom.groupby('learning')['x_centroid'].sem().loc[stages].values
-ax.plot([0, 1], mean_, '-o', color='k', lw=2)
-ax.fill_between([0, 1], mean_-sem_, mean_+sem_, color='k', alpha=0.15)
-
-ax.set_xticks([0, 1])
-ax.set_xticklabels(stages)
-ax.set_ylabel('Delay centroid (A/B Overlap)')
-ax.set_title('Sample axis (supplement)')
-ax.axhline(0, ls='--', color='k')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2F_delay_xcentroid_supp.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_64.png]]
-
-
----
-
-**/ 4) Refined Fig. 2G — use interpretable geometry metrics
-
-Instead of only =dy=, I suggest comparing behavior change against:
-- =dy= : shift in delay choice centroid
-- =dfrac= : change in fraction below zero
-
-This is more interpretable and gives you some flexibility for the manuscript.
-
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2G
-# Geometry-behavior relationship
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    row = {'mouse': mouse}
-
-    # geometry
-    for stage in stages:
-        mask = get_stage_mask(y_single, stage, tasks=task_sel, laser=0, perf=1)
-        mask &= (y_single.mouse.values == mouse)
-
-        if np.sum(mask) < 5:
-            continue
-
-        met = get_delay_metrics(X_single[mask], bins_state, x_idx=x_idx, y_idx=y_idx)
-        row[f'x_{stage}'] = np.nanmean(met['x_centroid'])
-        row[f'y_{stage}'] = np.nanmean(met['y_centroid'])
-        row[f'frac_{stage}'] = np.nanmean(met['frac_lower'])
-
-    # DPA performance
-    for stage in stages:
-        mask = (y_single.mouse == mouse)
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.tasks == 'DPA')
-        mask &= (y_single.laser == 0)
-        row[f'dpa_{stage}'] = np.nanmean(y_single.loc[mask, 'performance'])
-
-    # GNG performance (simple definition)
-    for stage in stages:
-        mask = (y_single.mouse == mouse)
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.tasks != 'DPA')
-        mask &= (y_single.laser == 0)
-        row[f'gng_{stage}'] = np.nanmean(y_single.loc[mask, 'odr_perf'])
-
-    rows.append(row)
-
-df_rel = pd.DataFrame(rows)
-df_rel['dx'] = df_rel['x_Expert'] - df_rel['x_Naive']
-df_rel['dy'] = df_rel['y_Expert'] - df_rel['y_Naive']
-df_rel['dfrac'] = df_rel['frac_Expert'] - df_rel['frac_Naive']
-df_rel['dDPA'] = df_rel['dpa_Expert'] - df_rel['dpa_Naive']
-df_rel['dGNG'] = df_rel['gng_Expert'] - df_rel['gng_Naive']
-
-df_rel
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-|   | mouse   | x_Naive    | y_Naive   | frac_Naive | x_Expert   | y_Expert  | frac_Expert | dpa_Naive | dpa_Expert | gng_Naive | gng_Expert | dx        | dy        | dfrac     | dDPA     | dGNG      |
-|---+---------+------------+-----------+------------+------------+-----------+-------------+-----------+------------+-----------+------------+-----------+-----------+-----------+----------+-----------|
-| 0 | JawsM01 | -7.368778  | 1.257271  | 0.253333   | -7.608942  | -0.410214 | 0.548387    | 0.781250  | 0.968750   | 0.947917  | 0.984375   | -0.240164 | -1.667484 | 0.295054  | 0.187500 | 0.036458  |
-| 1 | JawsM06 | -3.485188  | -0.056764 | 0.466667   | -3.006540  | -0.231667 | 0.440476    | 0.625000  | 0.875000   | 0.875000  | 0.776042   | 0.478647  | -0.174903 | -0.026190 | 0.250000 | -0.098958 |
-| 2 | JawsM12 | -4.187242  | 0.560836  | 0.467742   | -2.353736  | 0.169049  | 0.540000    | 0.645833  | 0.781250   | 0.791667  | 0.945312   | 1.833506  | -0.391787 | 0.072258  | 0.135417 | 0.153646  |
-| 3 | JawsM15 | -18.452473 | -1.479109 | 0.471429   | -17.858196 | -1.116282 | 0.483146    | 0.729167  | 0.927083   | 0.744792  | 0.718750   | 0.594277  | 0.362827  | 0.011717  | 0.197917 | -0.026042 |
-| 4 | JawsM18 | -29.304064 | 0.866758  | 0.425000   | -26.570036 | 0.614078  | 0.452632    | 0.833333  | 0.989583   | 0.848958  | 0.968750   | 2.734027  | -0.252680 | 0.027632  | 0.156250 | 0.119792  |
-| 5 | ChRM04  | -49.765451 | 4.322640  | 0.262500   | -46.169255 | -0.390953 | 0.534091    | 0.833333  | 0.916667   | 0.890625  | 0.859375   | 3.596197  | -4.713593 | 0.271591  | 0.083333 | -0.031250 |
-| 6 | ChRM23  | -14.715155 | 0.860540  | 0.444444   | -12.511259 | 1.722979  | 0.333333    | 0.656250  | 0.750000   | 0.697917  | 0.820312   | 2.203896  | 0.862440  | -0.111111 | 0.093750 | 0.122396  |
-| 7 | ACCM03  | -25.010011 | 3.996422  | 0.383459   | -21.499245 | 0.491592  | 0.500000    | 0.692708  | 0.953125   | 0.692708  | 0.871094   | 3.510766  | -3.504830 | 0.116541  | 0.260417 | 0.178385  |
-| 8 | ACCM04  | -8.716558  | 1.223649  | 0.305556   | -8.433033  | 1.114868  | 0.290323    | 0.562500  | 0.726562   | 0.609375  | 0.910156   | 0.283524  | -0.108782 | -0.015233 | 0.164062 | 0.300781  |
-:END:
-
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=False, sharey=False)
-
-palette = dict(zip(df_rel['mouse'], sns.color_palette("tab10", n_colors=len(df_rel))))
-
-# left: geometry vs DPA
-sns.regplot(
-    data=df_rel, x='dy', y='dDPA', ax=ax[0],
-    scatter=False, color='k', line_kws={'ls':'--', 'lw':2}
-)
-sns.scatterplot(
-    data=df_rel, x='dy', y='dDPA', hue='mouse',
-    palette=palette, s=70, edgecolor='k', linewidth=0.3,
-    legend=False, ax=ax[0]
-)
-r, p = pearsonr(df_rel['dy'], df_rel['dDPA'])
-ax[0].annotate(f"Pearson r = {r:.2f}\np = {p:.3f}",
-               xy=(0.05, 0.95), xycoords='axes fraction',
-               ha='left', va='top',
-               bbox=dict(facecolor='white', edgecolor='none'))
-ax[0].axvline(0, ls='--', color='0.5')
-ax[0].axhline(0, ls='--', color='0.5')
-ax[0].set_xlabel('Δ Choice-axis centroid')
-ax[0].set_ylabel('Δ DPA performance')
-
-# right: geometry vs GNG
-sns.regplot(
-    data=df_rel, x='dy', y='dGNG', ax=ax[1],
-    scatter=False, color='k', line_kws={'ls':'--', 'lw':2}
-)
-sns.scatterplot(
-    data=df_rel, x='dy', y='dGNG', hue='mouse',
-    palette=palette, s=70, edgecolor='k', linewidth=0.3,
-    legend=False, ax=ax[1]
-)
-r, p = pearsonr(df_rel['dy'], df_rel['dGNG'])
-ax[1].annotate(f"Pearson r = {r:.2f}\np = {p:.3f}",
-               xy=(0.05, 0.95), xycoords='axes fraction',
-               ha='left', va='top',
-               bbox=dict(facecolor='white', edgecolor='none'))
-ax[1].axvline(0, ls='--', color='0.5')
-ax[1].axhline(0, ls='--', color='0.5')
-ax[1].set_xlabel('Δ Choice-axis centroid')
-ax[1].set_ylabel('Δ GNG performance')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2G_geometry_behavior_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_66.png]]
-
-
-***** Optional alternate version using =dfrac=
-Sometimes =dfrac= is cleaner and more intuitive.
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height))
-
-for i, beh in enumerate(['dDPA', 'dGNG']):
-    sns.regplot(
-        data=df_rel, x='dfrac', y=beh, ax=ax[i],
-        scatter=False, color='k', line_kws={'ls':'--', 'lw':2}
-    )
-    sns.scatterplot(
-        data=df_rel, x='dfrac', y=beh, hue='mouse',
-        palette=palette, s=70, edgecolor='k', linewidth=0.3,
-        legend=False, ax=ax[i]
-    )
-    r, p = pearsonr(df_rel['dfrac'], df_rel[beh])
-    ax[i].annotate(f"Pearson r = {r:.2f}\np = {p:.3f}",
-                   xy=(0.05, 0.95), xycoords='axes fraction',
-                   ha='left', va='top',
-                   bbox=dict(facecolor='white', edgecolor='none'))
-    ax[i].axvline(0, ls='--', color='0.5')
-    ax[i].axhline(0, ls='--', color='0.5')
-    ax[i].set_xlabel('Δ Fraction in no-lick half-plane')
-    ax[i].set_ylabel(f'Δ {"DPA" if i==0 else "GNG"} performance')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2G_fraclower_behavior_alt.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_67.png]]
-
-
----
-
-**/ 5) Refined Fig. 2H — correct vs false alarm without seaborn bug
-
-I would refine this panel by:
-- restricting to /unpaired DPA/ as you already do,
-- plotting /mean trajectories/ for CR vs FA,
-- replacing the broken =pointplot= with a small custom paired plot or box/strip plot.
-
-This version is robust.
-
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2H
-# Correct reject vs false alarm trajectories
-# =========================
-
-unpaired_pairs = [1, 3]
-bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY'], options['bins_TEST']))
-stage = 'Naive'   # or 'Expert'
-
-mask0 = (y_single.tasks == 'DPA')
-mask0 &= (y_single.learning == stage)
-mask0 &= (y_single.laser == 0)
-mask0 &= (y_single.odor_pair.isin(unpaired_pairs))
-
-mask_cr = mask0 & (y_single.performance == 1)
-mask_fa = mask0 & (y_single.performance == 0)
-
-print('CR:', np.sum(mask_cr), 'FA:', np.sum(mask_fa))
-#+end_src
-
-#+RESULTS:
-: CR: 283 FA: 245
-
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=False, sharey=False)
-
-# ---- left: mean trajectories
-for mask, color, lab in zip([mask_cr, mask_fa], [col_CR, col_FA], ['Correct reject', 'False alarm']):
-    X_ = X_single[mask]
-    if X_.shape[0] == 0:
-        continue
-
-    x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
-    y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
-
-    ax[0].plot(x, y, color=color, lw=2.5, label=lab)
-    ax[0].scatter(x[0], y[0], color=color, s=40, zorder=5)
-    ax[0].scatter(x[-1], y[-1], color=color, s=65, marker='s', zorder=5)
-
-format_overlap_ax(ax[0], xlim=[-14, 14], ylim=[-14, 14])
-ax[0].set_title(f'{stage}: unpaired DPA')
-ax[0].legend(frameon=0)
-
-# ---- right: late-delay choice overlap per mouse
-vals = []
-for mouse in y_single.mouse.unique():
-    for lab, mask in zip(['CR', 'FA'], [mask_cr, mask_fa]):
-        mm = mask & (y_single.mouse == mouse)
-        if np.sum(mm) < 3:
-            continue
-        yv = np.nanmean(X_single[mm][:, y_idx, bins_late], axis=(0, 1))
-        vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
-
-df_err = pd.DataFrame(vals)
-
-if len(df_err):
-    # strip + mean
-    sns.stripplot(data=df_err, x='type', y='late_choice', hue='mouse',
-                  dodge=False, ax=ax[1], size=6, palette='tab10')
-    sns.pointplot(data=df_err, x='type', y='late_choice',
-                  errorbar='se', join=False, capsize=0.15,
-                  color='k', ax=ax[1])
-
-    ax[1].legend([], [], frameon=False)
-    ax[1].axhline(0, ls='--', color='k')
-    ax[1].set_xlabel('')
-    ax[1].set_ylabel('Late-delay choice overlap')
-    ax[1].set_title('Error trials drift toward lick sector')
-
-plt.tight_layout()
-plt.savefig(f'./figures/single/fig2H_correct_vs_FA_{stage}_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_69.png]]
-
-
-***** Optional two-stage version
-If you want a cleaner paper figure, I would actually make:
-- main text: Naive only
-- supplement: Naive and Expert side by side
-
-But if you want both in one go:
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=True)
-
-for i, stage in enumerate(['Naive', 'Expert']):
-    mask0 = (y_single.tasks == 'DPA')
-    mask0 &= (y_single.learning == stage)
-    mask0 &= (y_single.laser == 0)
-    mask0 &= (y_single.odor_pair.isin(unpaired_pairs))
-
-    mask_cr = mask0 & (y_single.performance == 1)
-    mask_fa = mask0 & (y_single.performance == 0)
-
-    for mask, color, lab in zip([mask_cr, mask_fa], [col_CR, col_FA], ['CR', 'FA']):
-        X_ = X_single[mask]
-        if X_.shape[0] == 0:
-            continue
-        x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
-        y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
-        ax[i].plot(x, y, color=color, lw=2.5, label=lab)
-
-    format_overlap_ax(ax[i], xlim=[-14, 14], ylim=[-14, 14])
-    ax[i].set_title(stage)
-    ax[i].legend(frameon=0)
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2H_correct_vs_FA_both_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_70.png]]
-
-
----
-
-**/ 6) Suggested save block
-
-
-#+begin_src jupyter-python
-pkl_save(df_geom, 'fig2F_delay_geometry_refined', path="../data/pca/")
-pkl_save(df_rel,  'fig2G_geometry_behavior_refined', path="../data/pca/")
-#+end_src
-
-#+RESULTS:
-: saving to ../data/pca//fig2F_delay_geometry_refined.pkl
-: saving to ../data/pca//fig2G_geometry_behavior_refined.pkl
-
-
----
-
-**** Refined blocks
-
----
-
-**/ 1) Re-orient the choice axis first
-
-Add this once before the figure blocks.
-
-
-#+begin_src jupyter-python
-# =========================
-# Orient PC2 so that higher values = more lick-like
-# =========================
-
-# use response-relevant bins; if you prefer, use bins_TEST or bins_RWD-like epoch
-bins_choice = options['bins_CHOICE']
-
-mask_lick = (y_single.laser == 0) & (y_single.performance == 1) & (y_single.choice == 1)
-mask_nolick = (y_single.laser == 0) & (y_single.performance == 1) & (y_single.choice == 0)
-
-m_lick = np.nanmean(X_single[mask_lick][:, 1, bins_choice])
-m_nolick = np.nanmean(X_single[mask_nolick][:, 1, bins_choice])
-
-print('PC2 mean lick    :', m_lick)
-print('PC2 mean no-lick :', m_nolick)
-
-if m_lick < m_nolick:
-    print('Flipping PC2 sign so that positive values are more lick-like')
-    X_single[:, 1, :] *= -1
-else:
-    print('Keeping PC2 sign')
-#+end_src
-
-#+RESULTS:
-: PC2 mean lick    : 3.2428565479551192
-: PC2 mean no-lick : 2.5984880775561954
-: Keeping PC2 sign
-
-
-This will make all later interpretations more stable.
-
----
-
-**/ 2) Better helper for occupancy maps
-
-
-#+begin_src jupyter-python
-# =========================
-# Helper: occupancy map in latent plane
-# =========================
-
-def occupancy_map(x, y, bins=25, zlim=None, smooth=1.0):
-    """
-    x, y: (n_trials, n_time)
-    returns:
-      xedges, yedges, occ
-    """
-    xf = x.flatten()
-    yf = y.flatten()
-
-    if zlim is None:
-        lim = np.nanmax(np.abs(np.r_[xf, yf]))
-        zlim = lim
-
-    xedges = np.linspace(-zlim, zlim, bins + 1)
-    yedges = np.linspace(-zlim, zlim, bins + 1)
-
-    H, _, _ = np.histogram2d(xf, yf, bins=[xedges, yedges])
-    H = H.T
-
-    if smooth is not None and smooth > 0:
-        H = gaussian_filter(H, smooth)
-
-    H = H / np.nanmax(H) if np.nanmax(H) > 0 else H
-    return xedges, yedges, H
-
-
-def plot_occ_field(ax, xedges, yedges, occ, title='', cmap='Blues', zlim=None):
-    pcm = ax.pcolormesh(xedges, yedges, occ, shading='auto', cmap=cmap)
-    ax.axhline(0, ls='--', color='k', lw=1)
-    ax.axvline(0, ls='--', color='k', lw=1)
-    ax.set_xlabel('A/B Overlap')
-    ax.set_ylabel('Choice Overlap')
-    ax.set_title(title)
-    ax.set_aspect('equal')
-    if zlim is not None:
-        ax.set_xlim([-zlim, zlim])
-        ax.set_ylim([-zlim, zlim])
-    return pcm
-
-
-def plot_mean_traj_by_group(ax, X, y, bins, group_col, levels, colors, labels):
-    for lev, c, lab in zip(levels, colors, labels):
-        mask = y[group_col].values == lev
-        if np.sum(mask) == 0:
-            continue
-
-        x = np.nanmean(X[mask][:, x_idx, bins], axis=0)
-        yy = np.nanmean(X[mask][:, y_idx, bins], axis=0)
-
-        ax.plot(x, yy, color=c, lw=2, label=lab)
-        ax.scatter(x[0], yy[0], color=c, s=35, zorder=5)
-        ax.scatter(x[-1], yy[-1], color=c, s=55, marker='s', zorder=5)
-#+end_src
-
-#+RESULTS:
-
-
----
-
-**/ 3) Refined Fig. 2E — delay-state occupancy + sample trajectories
-
-This version keeps the trajectories restricted to BL+DELAY and uses occupancy background.
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2E
-# Delay-state geometry only
-# =========================
-
-# bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY']))
-bins_plot = options['bins_DELAY']
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2.2*width, 1.15*height), sharex=True, sharey=True)
-
-zlim = 12
-pcms = []
-
-for i, stage in enumerate(stages):
-    mask = (y_single.tasks == 'DPA')
-    mask &= (y_single.learning == stage)
-    mask &= (y_single.laser == 0)
-    mask &= (y_single.performance == 1)
-
-    X_stage = X_single[mask]
-    y_stage = y_single.loc[mask].reset_index(drop=True)
-
-    x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
-
-    xedges, yedges, occ = occupancy_map(x_traj, y_traj, bins=28, zlim=zlim, smooth=1.2)
-    pcm = plot_occ_field(ax[i], xedges, yedges, occ, title=stage, cmap='Blues', zlim=zlim)
-    pcms.append(pcm)
-
-    plot_mean_traj_by_group(
-        ax[i], X_stage, y_stage, bins_plot,
-        group_col='sample_odor',
-        levels=[0, 1],
-        colors=['#44AA99', '#332288'],
-        labels=['A', 'B']
-    )
-
-    ax[i].legend(frameon=0, fontsize=10, loc='best')
-
-cbar = fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02)
-cbar.set_label('Normalized occupancy')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2E_state_maps_occ.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_74.png]]
-
-
-Why this is better:
-- trajectories now match the delay-state claim
-- A/B lines are not contaminated by test-period divergence
-- occupancy better highlights where trajectories are maintained
-
----
-
-**/ 4) Optional variant: keep flow arrows, but overlay only delay trajectories
-
-If you still want the “field” look:
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2E alternative
-# flow field + delay trajectories only
-# =========================
-
-bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY']))
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2.4*width, 1.15*height), sharex=True, sharey=True)
-
-zlim = 12
-pcms = []
-
-for i, stage in enumerate(stages):
-    mask = (y_single.tasks == 'DPA')
-    mask &= (y_single.learning == stage)
-    mask &= (y_single.laser == 0)
-    mask &= (y_single.performance == 1)
-
-    X_stage = X_single[mask]
-    y_stage = y_single.loc[mask].reset_index(drop=True)
-
-    x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
-
-    xedges, yedges, speed, U, V, C = compute_speed_field(
-        x_traj, y_traj, bins=18, dt=1.0, smooth=1.0, min_count=5
-    )
-
-    pcm = plot_speed_field(
-        ax[i], xedges, yedges, speed, U, V, C,
-        zlim=zlim, title=stage, quiver_scale=0.3, min_count=5
-    )
-    pcms.append(pcm)
-
-    plot_mean_traj_by_group(
-        ax[i], X_stage, y_stage, bins_plot,
-        group_col='sample_odor',
-        levels=[0, 1],
-        colors=['#44AA99', '#332288'],
-        labels=['A', 'B']
-    )
-
-    ax[i].legend(frameon=0, fontsize=10, loc='best')
-
-cbar = fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02)
-cbar.set_label('Speed')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2E_state_maps_flow_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_75.png]]
-
-
----
-
-**/ 5) Refined Fig. 2F — centroid shifts using late delay
-
-Late delay is probably more directly relevant than full delay.
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2F
-# Use late-delay centroids
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    for stage in stages:
-        mask = (y_single.tasks == 'DPA')
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.laser == 0)
-        mask &= (y_single.performance == 1)
-        mask &= (y_single.mouse == mouse)
-
-        if np.sum(mask) < 5:
-            continue
-
-        x, y = epoch_xy(X_single[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
-
-        rows.append({
-            'mouse': mouse,
-            'learning': stage,
-            'x_centroid': np.nanmean(x),
-            'y_centroid': np.nanmean(y),
-            'frac_nolick': np.nanmean(y < 0),
-            'n_trials': np.sum(mask),
-        })
-
-df_cent = pd.DataFrame(rows)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
-
-vars_ = ['x_centroid', 'y_centroid', 'frac_nolick']
-ylabs = ['Late-delay centroid (A/B Overlap)',
-         'Late-delay centroid (Choice Overlap)',
-         'Fraction in no-lick half-plane']
-
-for k, var in enumerate(vars_):
-    for mouse in df_cent.mouse.unique():
-        dfm = df_cent[df_cent.mouse == mouse].set_index('learning').loc[stages]
-        ax[k].plot([0, 1], dfm[var], '-o', color='0.7', alpha=0.8)
-
-    mean_ = df_cent.groupby('learning')[var].mean().loc[stages].values
-    sem_  = df_cent.groupby('learning')[var].sem().loc[stages].values
-    ax[k].plot([0, 1], mean_, '-o', color='k', lw=2)
-    ax[k].fill_between([0,1], mean_-sem_, mean_+sem_, color='k', alpha=0.15)
-
-    ax[k].set_xticks([0,1])
-    ax[k].set_xticklabels(stages)
-    ax[k].set_ylabel(ylabs[k])
-
-ax[0].axhline(0, ls='--', color='k')
-ax[1].axhline(0, ls='--', color='k')
-ax[2].set_ylim([0,1])
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2F_delay_centroids_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_77.png]]
-
-
-This is better than the earlier version because:
-- it emphasizes /late delay/
-- it includes a direct no-lick occupancy measure
-
----
-
-**/ 6) Refined Fig. 2G — use late-delay y shift
-
-Keep it simple and focused.
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2G
-# use late-delay y-centroid shift
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    dumdf = {'mouse': mouse}
-
-    for stage in stages:
-        mask = (y_single.tasks == 'DPA')
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.laser == 0)
-        mask &= (y_single.performance == 1)
-        mask &= (y_single.mouse == mouse)
-
-        if np.sum(mask) >= 5:
-            x, y = epoch_xy(X_single[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
-            dumdf[f'x_{stage}'] = np.nanmean(x)
-            dumdf[f'y_{stage}'] = np.nanmean(y)
-
-        mask_dpa = (y_single.mouse == mouse) & (y_single.learning == stage) & (y_single.tasks == 'DPA') & (y_single.laser == 0)
-        dumdf[f'dpa_{stage}'] = np.nanmean(y_single.loc[mask_dpa, 'performance'])
-
-        mask_gng = (y_single.mouse == mouse) & (y_single.learning == stage) & (y_single.tasks != 'DPA') & (y_single.laser == 0)
-        dumdf[f'gng_{stage}'] = np.nanmean(y_single.loc[mask_gng, 'odr_perf'])
-
-    rows.append(dumdf)
-
-df_rel = pd.DataFrame(rows)
-df_rel['dy'] = df_rel['y_Expert'] - df_rel['y_Naive']
-df_rel['dDPA'] = df_rel['dpa_Expert'] - df_rel['dpa_Naive']
-df_rel['dGNG'] = df_rel['gng_Expert'] - df_rel['gng_Naive']
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
-
-palette = dict(zip(df_rel['mouse'], sns.color_palette("tab10", n_colors=len(df_rel))))
-
-for i, (beh, lab) in enumerate(zip(['dDPA', 'dGNG'], ['Δ DPA performance', 'Δ GNG performance'])):
-    sns.regplot(
-        data=df_rel, x='dy', y=beh, ax=ax[i],
-        scatter=False, color='k', line_kws={'ls':'--', 'lw':2}
-    )
-    sns.scatterplot(
-        data=df_rel, x='dy', y=beh, hue='mouse',
-        palette=palette, s=70, edgecolor='k', linewidth=0.3,
-        legend=False, ax=ax[i]
-    )
-
-    r, p = pearsonr(df_rel['dy'], df_rel[beh])
-    ax[i].annotate(f"Pearson r = {r:.2f}\np = {p:.3f}",
-                   xy=(0.05, 0.95), xycoords='axes fraction',
-                   ha='left', va='top',
-                   bbox=dict(facecolor='none', edgecolor='none'), fontsize=10)
-
-    ax[i].axvline(0, ls='--', color='0.5')
-    ax[i].axhline(0, ls='--', color='0.5')
-    ax[i].set_xlabel('Δ late-delay choice centroid')
-    ax[i].set_ylabel(lab)
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2G_geometry_behavior_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_79.png]]
-
-
----
-
-**/ 7) Refined Fig. 2H — use full-trial only for error analysis
-
-This is where full trajectories belong.
-
-Also, your current =pointplot= call may fail with recent seaborn when no hue exists. Use =barplot= or a manual summary.
-
-
-#+begin_src jupyter-python
-# =========================
-# Refined Fig 2H
-# unpaired DPA: correct reject vs false alarm
-# =========================
-
-unpaired_pairs = [1, 3]
-bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY'], options['bins_TEST']))
-
-stage = 'Naive'   # try Expert too
-
-mask0 = (y_single.tasks == 'DPA')
-mask0 &= (y_single.learning == stage)
-mask0 &= (y_single.laser == 0)
-mask0 &= (y_single.odor_pair.isin(unpaired_pairs))
-
-mask_cr = mask0 & (y_single.performance == 1)
-mask_fa = mask0 & (y_single.performance == 0)
-
-print(stage, 'CR:', np.sum(mask_cr), 'FA:', np.sum(mask_fa))
-#+end_src
-
-#+RESULTS:
-: Naive CR: 283 FA: 245
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True, sharey=False)
-
-for mask, color, lab in zip([mask_cr, mask_fa], ['#377eb8', '#e41a1c'], ['Correct reject', 'False alarm']):
-    if np.sum(mask) == 0:
-        continue
-
-    X_ = X_single[mask]
-    x = np.nanmean(X_[:, x_idx, bins_plot], axis=0)
-    y = np.nanmean(X_[:, y_idx, bins_plot], axis=0)
-
-    ax[0].plot(x, y, color=color, lw=2, label=lab)
-    ax[0].scatter(x[0], y[0], color=color, s=40)
-    ax[0].scatter(x[-1], y[-1], color=color, s=70, marker='s')
-
-ax[0].axhline(0, ls='--', color='k')
-ax[0].axvline(0, ls='--', color='k')
-ax[0].set_xlabel('A/B Overlap')
-ax[0].set_ylabel('Choice Overlap')
-ax[0].set_title(f'{stage}: unpaired DPA')
-ax[0].legend(frameon=0)
-
-# late-delay summary by mouse
-vals = []
-for mouse in y_single.mouse.unique():
-    for lab, mask in zip(['CR', 'FA'], [mask_cr, mask_fa]):
-        mm = mask & (y_single.mouse == mouse)
-        if np.sum(mm) < 3:
-            continue
-        yv = np.nanmean(X_single[mm][:, y_idx, bins_late])
-        vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
-
-df_err = pd.DataFrame(vals)
-
-if len(df_err):
-    sns.barplot(data=df_err, x='type', y='late_choice', errorbar='se',
-                color='white', edgecolor='black', ax=ax[1])
-    sns.stripplot(data=df_err, x='type', y='late_choice', hue='mouse',
-                  dodge=False, ax=ax[1], size=6)
-    ax[1].legend([], [], frameon=False)
-    ax[1].axhline(0, ls='--', color='k')
-    ax[1].set_ylabel('Late-delay choice overlap')
-    ax[1].set_xlabel('')
-    ax[1].set_title('False alarms drift toward lick sector')
-
-plt.tight_layout()
-plt.savefig(f'./figures/single/fig2H_correct_vs_FA_{stage}_refined.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_81.png]]
-
-
----
-
-**** Corrected DPA geometry blocks
-
----
-
-**/ 1) Helper: subtract Go/NoGo mean at each time point
-
-This version works /within mouse and stage/, which is the safest approach.
-
-
-#+begin_src jupyter-python
-# =========================
-# Helper: DPA correction by subtracting mean Go/NoGo trajectory
-# =========================
-
-def get_dual_mean_traj(X, y, stage=None, mouse=None, tasks_exclude=['DPA'], laser=0):
-    """
-    Compute the mean latent trajectory over non-DPA dual-task trials
-    (e.g. Go/NoGo trials), to be subtracted from DPA trajectories.
-
-    Returns
-    -------
-    mu : array, shape (n_comp, n_time)
-    """
-    mask = (y.laser == laser)
-
-    if stage is not None:
-        mask &= (y.learning == stage)
-
-    if mouse is not None:
-        mask &= (y.mouse == mouse)
-
-    # if tasks_exclude is not None:
-    #     mask &= (y.tasks != 'DPA')
-    # else:
-    #     mask &= (y.tasks != 'DPA')
-
-    if np.sum(mask) == 0:
-        return np.zeros((X.shape[1], X.shape[2]))
-
-    mu = np.nanmean(X[mask], axis=0)
-    return mu
-
-
-def correct_dpa_by_dual_mean(X, y, by_mouse=True, by_stage=True, laser=0):
-    """
-    Return a corrected copy of X where DPA trials are recentered by subtracting
-    the mean Go/NoGo trajectory at each time point.
-
-    Correction is done within mouse and stage by default.
-    """
-    Xc = X.copy()
-
-    mice = y.mouse.unique() if by_mouse else [None]
-    stages_ = y.learning.unique() if by_stage else [None]
-
-    for mouse in mice:
-        for stage in stages_:
-            mask_dpa = (y.tasks == 'DPA') & (y.laser == laser)
-
-            if mouse is not None:
-                mask_dpa &= (y.mouse == mouse)
-            if stage is not None:
-                mask_dpa &= (y.learning == stage)
-
-            if np.sum(mask_dpa) == 0:
-                continue
-
-            mu = get_dual_mean_traj(X, y, stage=stage, mouse=mouse, laser=laser)
-            Xc[mask_dpa] = Xc[mask_dpa] - mu
-
-    return Xc
-#+end_src
-
-#+RESULTS:
-
-
----
-
-**/ 2) Build corrected latent array for DPA analyses
-
-
-#+begin_src jupyter-python
-# =========================
-# Build corrected latent representation
-# =========================
-
-X_single_corr = correct_dpa_by_dual_mean(X_single, y_single, by_mouse=True, by_stage=True, laser=0)
-
-print(X_single.shape, X_single_corr.shape)
-#+end_src
-
-#+RESULTS:
-: (9216, 10, 84) (9216, 10, 84)
-
-
-You can sanity check the correction:
-
-#+begin_src jupyter-python
-# sanity check on DPA means before/after correction
-for stage in ['Naive', 'Expert']:
-    mask_dpa = (y_single.tasks == 'DPA') & (y_single.learning == stage) & (y_single.laser == 0)
-    mask_dual = (y_single.tasks != 'DPA') & (y_single.learning == stage) & (y_single.laser == 0)
-
-    m_dpa_before = np.nanmean(X_single[mask_dpa][:, :2, bins_late], axis=(0,2))
-    m_dpa_after  = np.nanmean(X_single_corr[mask_dpa][:, :2, bins_late], axis=(0,2))
-    m_dual       = np.nanmean(X_single[mask_dual][:, :2, bins_late], axis=(0,2))
-
-    print(stage)
-    print(' DPA before:', m_dpa_before)
-    print(' DPA after :', m_dpa_after)
-    print(' dual mean :', m_dual)
-#+end_src
-
-#+RESULTS:
-: Naive
-:  DPA before: [ 1.49644465 -4.11422736]
-:  DPA after : [ 1.74984677 -4.79119008]
-:  dual mean : [-1.1283255   3.07255776]
-: Expert
-:  DPA before: [ 2.06893882 -4.93691945]
-:  DPA after : [ 2.43110927 -5.75543317]
-:  dual mean : [-1.57772509  3.69623031]
-
-
----
-
-**/ 3) Use corrected coordinates in Fig. 2E
-
-If you want the hero panel itself corrected, just replace =X_single= by =X_single_corr=.
-
-#+begin_src jupyter-python
-# =========================
-# Fig 2E with corrected DPA coordinates
-# =========================
-
-bins_plot = np.concatenate((options['bins_BL'], options['bins_DELAY']))
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2.2*width, 1.15*height), sharex=True, sharey=True)
-
-zlim = 12
-pcms = []
-
-for i, stage in enumerate(stages):
-    mask = (y_single.tasks == 'DPA')
-    mask &= (y_single.learning == stage)
-    mask &= (y_single.laser == 0)
-    # mask &= (y_single.performance == 1)
-
-    X_stage = X_single_corr[mask]
-    y_stage = y_single.loc[mask].reset_index(drop=True)
-
-    x_traj, y_traj = traj_xy(X_stage, bins=bins_plot, x_idx=x_idx, y_idx=y_idx)
-
-    xedges, yedges, occ = occupancy_map(x_traj, y_traj, bins=28, zlim=zlim, smooth=1.2)
-    pcm = plot_occ_field(ax[i], xedges, yedges, occ, title=stage, cmap='Blues', zlim=zlim)
-    pcms.append(pcm)
-
-    plot_mean_traj_by_group(
-        ax[i], X_stage, y_stage, bins_plot,
-        group_col='sample_odor',
-        levels=[0, 1],
-        colors=['#44AA99', '#332288'],
-        labels=['A', 'B']
-    )
-
-    ax[i].legend(frameon=0, fontsize=10, loc='best')
-
-# cbar = fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02)
-# cbar.set_label('Normalized occupancy')
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2E_state_maps_occ_corrected.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_85.png]]
-
-
----
-
-**/ 4) Corrected Fig. 2F — centroid shift
-
-This is where the correction really matters.
-
-#+begin_src jupyter-python
-# =========================
-# Corrected Fig 2F
-# Late-delay centroids after Go/NoGo mean subtraction
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    for stage in stages:
-        mask = (y_single.tasks == 'DPA')
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.laser == 0)
-        # mask &= (y_single.performance == 1)
-        mask &= (y_single.mouse == mouse)
-
-        if np.sum(mask) < 5:
-            continue
-
-        x, y = epoch_xy(X_single_corr[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
-
-        rows.append({
-            'mouse': mouse,
-            'learning': stage,
-            'x_centroid': np.nanmean(x),
-            'y_centroid': np.nanmean(y),
-            'frac_nolick': np.nanmean(y < 0),
-            'n_trials': np.sum(mask),
-        })
-
-df_cent_corr = pd.DataFrame(rows)
-df_cent_corr.head()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-|   | mouse   | learning | x_centroid | y_centroid | frac_nolick | n_trials |
-|---+---------+----------+------------+------------+-------------+----------|
-| 0 | JawsM01 | Naive    | -1.390945  | -1.720655  | 0.687500    | 96       |
-| 1 | JawsM01 | Expert   | -2.859099  | -1.313824  | 0.812500    | 32       |
-| 2 | JawsM06 | Naive    | 0.239262   | -0.064414  | 0.468750    | 96       |
-| 3 | JawsM06 | Expert   | 0.355736   | 0.055094   | 0.479167    | 96       |
-| 4 | JawsM12 | Naive    | 0.629458   | 0.837852   | 0.375000    | 96       |
-:END:
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=3, figsize=(3*width, height))
-
-vars_ = ['x_centroid', 'y_centroid', 'frac_nolick']
-ylabs = ['Late-delay centroid (A/B Overlap)',
-         'Late-delay centroid (Choice Overlap)',
-         'Fraction in no-lick half-plane']
-
-for k, var in enumerate(vars_):
-    for mouse in df_cent_corr.mouse.unique():
-        dfm = df_cent_corr[df_cent_corr.mouse == mouse].set_index('learning').loc[stages]
-        ax[k].plot([0, 1], dfm[var], '-o', color='0.7', alpha=0.8)
-
-    mean_ = df_cent_corr.groupby('learning')[var].mean().loc[stages].values
-    sem_  = df_cent_corr.groupby('learning')[var].sem().loc[stages].values
-    ax[k].plot([0, 1], mean_, '-o', color='k', lw=2)
-    ax[k].fill_between([0,1], mean_-sem_, mean_+sem_, color='k', alpha=0.15)
-
-    ax[k].set_xticks([0,1])
-    ax[k].set_xticklabels(stages)
-    ax[k].set_ylabel(ylabs[k])
-
-ax[0].axhline(0, ls='--', color='k')
-ax[1].axhline(0, ls='--', color='k')
-ax[2].set_ylim([0,1])
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2F_delay_centroids_corrected.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_87.png]]
-
-
----
-
-**/ 5) Corrected Fig. 2G — geometry-behavior relation
-
-Use the corrected late-delay DPA centroids.
-
-
-#+begin_src jupyter-python
-# =========================
-# Corrected Fig 2G
-# Geometry-behavior relation using corrected DPA centroids
-# =========================
-
-rows = []
-
-for mouse in y_single.mouse.unique():
-    dum = {'mouse': mouse}
-
-    for stage in stages:
-        mask = (y_single.tasks == 'DPA')
-        mask &= (y_single.learning == stage)
-        mask &= (y_single.laser == 0)
-        mask &= (y_single.performance == 1)
-        mask &= (y_single.mouse == mouse)
-
-        if np.sum(mask) >= 5:
-            x, y = epoch_xy(X_single_corr[mask], bins_late, x_idx=x_idx, y_idx=y_idx)
-            dum[f'x_{stage}'] = np.nanmean(x)
-            dum[f'y_{stage}'] = np.nanmean(y)
-
-        mask_dpa = (y_single.mouse == mouse) & (y_single.learning == stage) & (y_single.tasks == 'DPA') & (y_single.laser == 0)
-        dum[f'dpa_{stage}'] = np.nanmean(y_single.loc[mask_dpa, 'performance'])
-
-        mask_gng = (y_single.mouse == mouse) & (y_single.learning == stage) & (y_single.tasks != 'DPA') & (y_single.laser == 0)
-        dum[f'gng_{stage}'] = np.nanmean(y_single.loc[mask_gng, 'odr_perf'])
-
-    rows.append(dum)
-
-df_rel_corr = pd.DataFrame(rows)
-df_rel_corr['dy'] = df_rel_corr['y_Expert'] - df_rel_corr['y_Naive']
-df_rel_corr['dx'] = df_rel_corr['x_Expert'] - df_rel_corr['x_Naive']
-df_rel_corr['dDPA'] = df_rel_corr['dpa_Expert'] - df_rel_corr['dpa_Naive']
-df_rel_corr['dGNG'] = df_rel_corr['gng_Expert'] - df_rel_corr['gng_Naive']
-#+end_src
-
-#+RESULTS:
-
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharex=True)
-
-palette = dict(zip(df_rel_corr['mouse'], sns.color_palette("tab10", n_colors=len(df_rel_corr))))
-
-for i, (beh, lab) in enumerate(zip(['dDPA', 'dGNG'], ['Δ DPA performance', 'Δ GNG performance'])):
-    sns.regplot(
-        data=df_rel_corr, x='dy', y=beh, ax=ax[i],
-        scatter=False, color='k', line_kws={'ls':'--', 'lw':2}
-    )
-    sns.scatterplot(
-        data=df_rel_corr, x='dy', y=beh, hue='mouse',
-        palette=palette, s=70, edgecolor='k', linewidth=0.3,
-        legend=False, ax=ax[i]
-    )
-
-    r, p = pearsonr(df_rel_corr['dy'], df_rel_corr[beh])
-    ax[i].annotate(f"Pearson r = {r:.2f}\np = {p:.3f}",
-                   xy=(0.05, 0.95), xycoords='axes fraction',
-                   ha='left', va='top',
-                   bbox=dict(facecolor='white', edgecolor='none'))
-
-    ax[i].axvline(0, ls='--', color='0.5')
-    ax[i].axhline(0, ls='--', color='0.5')
-    ax[i].set_xlabel('Δ corrected late-delay choice centroid')
-    ax[i].set_ylabel(lab)
-
-plt.tight_layout()
-plt.savefig('./figures/single/fig2G_geometry_behavior_corrected.svg')
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_89.png]]
-
-
----
-
-**/ 6) Optional: also correct Fig. 2H late-delay summary
-
-For the /trajectory panel/ in 2H, I would probably keep the original full-trial latent coordinates, because that panel is more about visible drift than about absolute corrected centroids.
-
-But for the /late-delay choice summary/ in 2H, correction is sensible.
-
-
-#+begin_src jupyter-python
-# =========================
-# Optional corrected late-delay summary for Fig 2H
-# =========================
-
-vals = []
-for mouse in y_single.mouse.unique():
-    for lab, mask in zip(['CR', 'FA'], [mask_cr, mask_fa]):
-        mm = mask & (y_single.mouse == mouse)
-        if np.sum(mm) < 3:
-            continue
-        yv = np.nanmean(X_single_corr[mm][:, y_idx, bins_late])
-        vals.append({'mouse': mouse, 'type': lab, 'late_choice': yv})
-
-df_err_corr = pd.DataFrame(vals)
-df_err_corr.head()
-#+end_src
-
-#+RESULTS:
-:RESULTS:
-|   | mouse   | type | late_choice |
-|---+---------+------+-------------|
-| 0 | JawsM01 | CR   | -1.668531   |
-| 1 | JawsM01 | FA   | -1.375789   |
-| 2 | JawsM06 | CR   | 0.462211    |
-| 3 | JawsM06 | FA   | 0.165297    |
-| 4 | JawsM12 | CR   | 1.627242    |
-:END:
-
-
----
-
-
-
-** Comparison
-
-#+begin_src jupyter-python
-# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
-import numpy as np
-import pandas as pd
-# import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-assert isinstance(y_single, pd.DataFrame)
-assert X_single.shape[0] == len(y_single)
-
-pcs = [0, 1, 2]
-pc_names = [f"PC{p+1}" for p in pcs]
-
-# ---- build trial table + filter ----
-df = y_single.reset_index(drop=True).copy()
-
-# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
-df["traj"] = list(X_single[:, pcs, :]*10)
-
-df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
-# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
-bins = options["bins_DELAY"]
-
-rows = []
-for (mouse, odor, learning), g in df.groupby(["mouse", "sample_odor", "learning"], sort=False):
-    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
-    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
-    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
-    for i, pc in enumerate(pc_names):
-        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
-
-plot_df = pd.DataFrame(rows)
-
-# make mouse categorical for stable order
-mouse_order = sorted(plot_df["mouse"].unique())
-plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
-
-# ---- BAR FIGURE ----
-g = sns.catplot(
-    data=plot_df, kind="bar",
-    x="mouse", y="value",
-    col="pc", col_order=pc_names,
-    hue="learning",
-    height=3.4, aspect=1.15,
-    errorbar=None,
-)
-g.set_titles("{col_name}")
-g.set_axis_labels("Mouse", "Sample Code")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    for lab in ax.get_xticklabels():
-        lab.set_rotation(45)
-        lab.set_rotation_mode("anchor")
-        lab.set_ha("right")
-        lab.set_va("top")
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-    ax.set_ylim([0, 0.5])
-    ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
-
-# legend outside
-g._legend.set_title("Learning")
-g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
-g._legend.set_bbox_to_anchor((0.98, 0.5))
-
-plt.savefig('./figures/pca/pca_bars_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_48.png]]
-
-
-#+begin_src jupyter-python
-# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
-import numpy as np
-import pandas as pd
-
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-df = plot_df.copy()
-
-# normalize learning labels -> stage in {"Naive","Expert"}
-if np.issubdtype(df["learning"].dtype, np.number):
-    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
-else:
-    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
-                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
-
-df = df[df["stage"].isin(["Naive", "Expert"])]
-
-# average across odors -> one value per (mouse, stage, pc)
-mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
-
-wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
-        .reset_index()
-        .dropna(subset=["Naive", "Expert"]))
-
-mice = pd.Index(wide["mouse"].unique()).sort_values()
-palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
-
-g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
-g.map_dataframe(
-    sns.scatterplot,
-    x="Naive", y="Expert",
-    hue="mouse", palette=palette,
-    s=70, edgecolor="black", linewidth=0.3,
-    legend=False
-)
-
-g.set_titles("{col_name}")
-g.set_xlabels("")
-g.set_ylabels("")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    x0, x1 = ax.get_xlim()
-    y0, y1 = ax.get_ylim()
-    lo, hi = min(x0, y0), max(x1, y1)
-    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-
-    ax.set_xlim([0, 0.3])
-    ax.set_ylim([0, 0.3])
-
-    ax.set_xticks([0, 0.1, 0.2, 0.3])
-    ax.set_yticks([0, 0.1, 0.2, 0.3])
-    ax.set_xlabel('Naive')
-    ax.set_ylabel('Expert')
-    ax.set_title('Sample Code')
-# g.fig.supxlabel("Naive")
-# g.fig.supylabel("Expert")
-g.fig.tight_layout()
-
-plt.savefig('./figures/single/pca_scatter_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_49.png]]
-
-#+begin_src jupyter-python
-# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-assert isinstance(y_single, pd.DataFrame)
-assert X_single.shape[0] == len(y_single)
-
-pcs = [0, 1, 2]
-pc_names = [f"PC{p+1}" for p in pcs]
-
-# ---- build trial table + filter ----
-df = y_single.reset_index(drop=True).copy()
-
-# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
-df["traj"] = list(X_single[:, pcs, :]*10)
-
-df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
-# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
-bins = options["bins_POSTTASK"]
-
-rows = []
-for (mouse, odor, learning), g in df.groupby(["mouse", "choice", "learning"], sort=False):
-    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
-
-    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
-    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
-
-    for i, pc in enumerate(pc_names):
-        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
-
-plot_df = pd.DataFrame(rows)
-
-# make mouse categorical for stable order
-mouse_order = sorted(plot_df["mouse"].unique())
-plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
-
-# ---- BAR FIGURE ----
-g = sns.catplot(
-    data=plot_df, kind="bar",
-    x="mouse", y="value",
-    col="pc", col_order=pc_names,
-    hue="learning",
-    height=3.4, aspect=1.15,
-    errorbar=None,
-)
-g.set_titles("{col_name}")
-g.set_axis_labels("Mouse", "Choice Code")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    for lab in ax.get_xticklabels():
-        lab.set_rotation(45)
-        lab.set_rotation_mode("anchor")
-        lab.set_ha("right")
-        lab.set_va("top")
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-    # ax.set_ylim([0, 0.5])
-    # ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
-
-# legend outside
-g._legend.set_title("Learning")
-g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
-g._legend.set_bbox_to_anchor((0.98, 0.5))
-
-plt.savefig('./figures/pca/pca_bars_choice_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_49.png]]
-
-#+begin_src jupyter-python
-# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-df = plot_df.copy()
-
-# normalize learning labels -> stage in {"Naive","Expert"}
-if np.issubdtype(df["learning"].dtype, np.number):
-    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
-else:
-    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
-                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
-
-df = df[df["stage"].isin(["Naive", "Expert"])]
-
-# average across odors -> one value per (mouse, stage, pc)
-mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
-
-wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
-        .reset_index()
-        .dropna(subset=["Naive", "Expert"]))
-
-mice = pd.Index(wide["mouse"].unique()).sort_values()
-palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
-
-g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
-g.map_dataframe(
-    sns.scatterplot,
-    x="Naive", y="Expert",
-    hue="mouse", palette=palette,
-    s=70, edgecolor="black", linewidth=0.3,
-    legend=False
-)
-
-g.set_titles("{col_name}")
-g.set_xlabels("")
-g.set_ylabels("")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    x0, x1 = ax.get_xlim()
-    y0, y1 = ax.get_ylim()
-    lo, hi = min(x0, y0), max(x1, y1)
-    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-
-    ax.set_xlim([0, 0.3])
-    ax.set_ylim([0, 0.3])
-
-    ax.set_xticks([0, 0.1, 0.2, 0.3])
-    ax.set_yticks([0, 0.1, 0.2, 0.3])
-    ax.set_xlabel('Naive')
-    ax.set_ylabel('Expert')
-    ax.set_title('Choice Code')
-
-# g.fig.supxlabel("Naive")
-# g.fig.supylabel("Expert")
-g.fig.tight_layout()
-
-plt.savefig('./figures/single/pca_scatter_choice_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_50.png]]
-
-#+begin_src jupyter-python
-# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-assert isinstance(y_single, pd.DataFrame)
-assert X_single.shape[0] == len(y_single)
-
-pcs = [0, 1, 2]
-pc_names = [f"PC{p+1}" for p in pcs]
-
-# ---- build trial table + filter ----
-df = y_single.reset_index(drop=True).copy()
-
-# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
-df["traj"] = list(X_single[:, pcs, :]*10)
-
-df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
-# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
-bins = options["bins_POSTTASK"]
-
-rows = []
-for (mouse, odor, learning), g in df.groupby(["mouse", "test_odor", "learning"], sort=False):
-    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
-
-    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
-    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
-
-    for i, pc in enumerate(pc_names):
-        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
-
-plot_df = pd.DataFrame(rows)
-
-# make mouse categorical for stable order
-mouse_order = sorted(plot_df["mouse"].unique())
-plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
-
-# ---- BAR FIGURE ----
-g = sns.catplot(
-    data=plot_df, kind="bar",
-    x="mouse", y="value",
-    col="pc", col_order=pc_names,
-    hue="learning",
-    height=3.4, aspect=1.15,
-    errorbar=None,
-)
-g.set_titles("{col_name}")
-g.set_axis_labels("Mouse", "Test Code")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    for lab in ax.get_xticklabels():
-        lab.set_rotation(45)
-        lab.set_rotation_mode("anchor")
-        lab.set_ha("right")
-        lab.set_va("top")
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-    # ax.set_ylim([0, 0.5])
-    # ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
-
-# legend outside
-g._legend.set_title("Learning")
-g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
-g._legend.set_bbox_to_anchor((0.98, 0.5))
-
-plt.savefig('./figures/pca/pca_bars_test_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_51.png]]
-
-#+begin_src jupyter-python
-# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# sns.set_theme(style="white", context="talk")
-
-df = plot_df.copy()
-
-# normalize learning labels -> stage in {"Naive","Expert"}
-if np.issubdtype(df["learning"].dtype, np.number):
-    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
-else:
-    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
-                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
-
-df = df[df["stage"].isin(["Naive", "Expert"])]
-
-# average across odors -> one value per (mouse, stage, pc)
-mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
-
-wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
-        .reset_index()
-        .dropna(subset=["Naive", "Expert"]))
-
-mice = pd.Index(wide["mouse"].unique()).sort_values()
-palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
-
-g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
-g.map_dataframe(
-    sns.scatterplot,
-    x="Naive", y="Expert",
-    hue="mouse", palette=palette,
-    s=70, edgecolor="black", linewidth=0.3,
-    legend=False
-)
-
-g.set_titles("{col_name}")
-g.set_xlabels("")
-g.set_ylabels("")
-
-for ax in g.axes.flat:
-    ax.grid(False)
-    x0, x1 = ax.get_xlim()
-    y0, y1 = ax.get_ylim()
-    lo, hi = min(x0, y0), max(x1, y1)
-    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
-
-    ax.set_xlim([0, 0.3])
-    ax.set_ylim([0, 0.3])
-
-    ax.set_xticks([0, 0.1, 0.2, 0.3])
-    ax.set_yticks([0, 0.1, 0.2, 0.3])
-    ax.set_xlabel('Naive')
-    ax.set_ylabel('Expert')
-    ax.set_title('Test Code')
-
-# g.fig.supxlabel("Naive")
-# g.fig.supylabel("Expert")
-g.fig.tight_layout()
-
-plt.savefig('./figures/single/pca_scatter_test_%s.svg' % dum)
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_52.png]]
+[[file:./figures/singlePCA/figure_45.png]]
 
 #+begin_src jupyter-python
 
@@ -4444,7 +1603,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_98.png]]
+[[file:./figures/singlePCA/figure_47.png]]
 
 #+begin_src jupyter-python
 from scipy.ndimage import gaussian_filter1d, gaussian_filter1d
@@ -4465,7 +1624,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_99.png]]
+[[file:./figures/singlePCA/figure_48.png]]
 
 #+begin_src jupyter-python
 from scipy.ndimage import gaussian_filter1d, uniform_filter1d
@@ -4497,7 +1656,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_100.png]]
+[[file:./figures/singlePCA/figure_49.png]]
 
 *** theta space
 
@@ -4572,7 +1731,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_102.png]]
+[[file:./figures/singlePCA/figure_51.png]]
 
 ** Opto
 
@@ -4598,7 +1757,7 @@ for i_mouse, mouse in enumerate(laser_mice):
 
     for j in stages:
         for i in range(2):
-            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) & (y_idx.performance==1)
+            mask = (y_idx.sample_odor==i) & (y_idx.tasks.isin(tasks)) & (y_idx.learning==j) # & (y_idx.performance==1)
             traj_.append(X_idx[mask].mean(0))
 
     traj_mouse.append(traj_)
@@ -4637,8 +1796,8 @@ print(traj_opto.shape)
 fp_mouse = np.nanmean(traj_mouse[..., options['bins_DELAY']], -1)
 fp_opto = np.nanmean(traj_opto[..., options['bins_DELAY']], -1)
 
-fp_mouse = np.nanmean(traj_mouse[..., options['bins_LD']], -1)
-fp_opto = np.nanmean(traj_opto[..., options['bins_LD']], -1)
+# fp_mouse = np.nanmean(traj_mouse[..., options['bins_LD']], -1)
+# fp_opto = np.nanmean(traj_opto[..., options['bins_LD']], -1)
 
 print(fp_mouse.shape)
 
@@ -4674,7 +1833,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_107.png]]
+[[file:./figures/singlePCA/figure_56.png]]
 
 #+begin_src jupyter-python
 perf_off = y_single[y_single['mouse'].isin(laser_mice) & (y_single.laser==0)].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
@@ -4781,7 +1940,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_112.png]]
+[[file:./figures/singlePCA/figure_61.png]]
 
 #+begin_src jupyter-python
 import matplotlib.pyplot as plt
@@ -4820,7 +1979,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_113.png]]
+[[file:./figures/singlePCA/figure_62.png]]
 
 #+begin_src jupyter-python
 import matplotlib.pyplot as plt
@@ -4859,7 +2018,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singlePCA/figure_114.png]]
+[[file:./figures/singlePCA/figure_63.png]]
 
 #+begin_src jupyter-python
 
@@ -4867,1478 +2026,462 @@ plt.show()
 
 #+RESULTS:
 
-** Binned Flow Fields
-*** utils
+** Comparison
 
 #+begin_src jupyter-python
+# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
 import numpy as np
-
-def flow_field_from_trajectories(x, y, dt=1.0, bins=25, xrange=None, yrange=None,
-                                 statistic="mean", min_count=1):
-    """
-    x, y: arrays (n_trials, n_time)
-    dt: timestep
-    bins: int or (nx, ny)
-    xrange, yrange: (min, max); if None inferred from data
-    statistic: "mean" (default). (You can extend to median easily.)
-    Returns:
-      xedges, yedges
-      u, v: (nx, ny) average velocities in each spatial bin
-      count: (nx, ny) number of samples per bin
-    """
-    x = np.asarray(x); y = np.asarray(y)
-    n_trials, n_time = x.shape
-    assert y.shape == x.shape
-
-    # step velocities, shape (n_trials, n_time-1)
-    u = (x[:, 1:] - x[:, :-1]) / dt
-    v = (y[:, 1:] - y[:, :-1]) / dt
-
-    # positions to bin (start of each step)
-    xs = x[:, :-1]
-    ys = y[:, :-1]
-
-    if xrange is None:
-        xrange = (xs.min(), xs.max())
-    if yrange is None:
-        yrange = (ys.min(), ys.max())
-
-    if isinstance(bins, int):
-        nx = ny = bins
-    else:
-        nx, ny = bins
-
-    xedges = np.linspace(xrange[0], xrange[1], nx + 1)
-    yedges = np.linspace(yrange[0], yrange[1], ny + 1)
-
-    # flatten all steps across trials/time
-    xsf = xs.ravel()
-    ysf = ys.ravel()
-    uf = u.ravel()
-    vf = v.ravel()
-
-    # bin index for each sample
-    ix = np.searchsorted(xedges, xsf, side="right") - 1
-    iy = np.searchsorted(yedges, ysf, side="right") - 1
-
-    valid = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
-    ix = ix[valid]; iy = iy[valid]
-    uf = uf[valid]; vf = vf[valid]
-
-    # accumulate sums and counts
-    count = np.zeros((nx, ny), dtype=int)
-    usum  = np.zeros((nx, ny), dtype=float)
-    vsum  = np.zeros((nx, ny), dtype=float)
-
-    np.add.at(count, (ix, iy), 1)
-    np.add.at(usum,  (ix, iy), uf)
-    np.add.at(vsum,  (ix, iy), vf)
-
-    # mean velocity per bin
-    ugrid = np.full((nx, ny), np.nan, dtype=float)
-    vgrid = np.full((nx, ny), np.nan, dtype=float)
-    mask = count >= min_count
-    ugrid[mask] = usum[mask] / count[mask]
-    vgrid[mask] = vsum[mask] / count[mask]
-
-    return xedges, yedges, ugrid, vgrid, count
-
-
-# Example usage:
-# x, y = diffusion_2d(n_trials=200, n_time=2000, dt=0.01, D=0.5, seed=0)
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-
-def flow_field_midpoint(x, y, dt=1.0, bins=25, xrange=None, yrange=None, min_count=1):
-    """
-    Mid-point binning: each velocity sample is assigned to the bin containing
-    the segment midpoint ((x_t+x_{t+1})/2, (y_t+y_{t+1})/2).
-
-    x, y: (n_trials, n_time)
-    Returns: xedges, yedges, U, V, count with U,V,count shaped (nx, ny)
-    """
-    x = np.asarray(x); y = np.asarray(y)
-    assert x.shape == y.shape
-    n_trials, n_time = x.shape
-
-    # step velocities (n_trials, n_time-1)
-    u = (x[:, 1:] - x[:, :-1]) / dt
-    v = (y[:, 1:] - y[:, :-1]) / dt
-
-    # midpoints to bin (n_trials, n_time-1)
-    xm = 0.5 * (x[:, 1:] + x[:, :-1])
-    ym = 0.5 * (y[:, 1:] + y[:, :-1])
-
-    if xrange is None:
-        xrange = (xm.min(), xm.max())
-    if yrange is None:
-        yrange = (ym.min(), ym.max())
-
-    if isinstance(bins, int):
-        nx = ny = bins
-    else:
-        nx, ny = bins
-
-    xedges = np.linspace(xrange[0], xrange[1], nx + 1)
-    yedges = np.linspace(yrange[0], yrange[1], ny + 1)
-
-    # flatten samples
-    xf = xm.ravel()
-    yf = ym.ravel()
-    uf = u.ravel()
-    vf = v.ravel()
-
-    # bin indices
-    ix = np.searchsorted(xedges, xf, side="right") - 1
-    iy = np.searchsorted(yedges, yf, side="right") - 1
-
-    valid = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
-    ix = ix[valid]; iy = iy[valid]
-    uf = uf[valid]; vf = vf[valid]
-
-    # accumulate
-    count = np.zeros((nx, ny), dtype=int)
-    usum  = np.zeros((nx, ny), dtype=float)
-    vsum  = np.zeros((nx, ny), dtype=float)
-
-    np.add.at(count, (ix, iy), 1)
-    np.add.at(usum,  (ix, iy), uf)
-    np.add.at(vsum,  (ix, iy), vf)
-
-    U = np.full((nx, ny), np.nan, dtype=float)
-    V = np.full((nx, ny), np.nan, dtype=float)
-    mask = count >= min_count
-    U[mask] = usum[mask] / count[mask]
-    V[mask] = vsum[mask] / count[mask]
-
-    return xedges, yedges, U, V, count
-
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-
-def radial_angular_speeds(x, y, dt=1.0):
-    # step velocities at times t -> t+1
-    vx = (x[:, 1:] - x[:, :-1]) / dt
-    vy = (y[:, 1:] - y[:, :-1]) / dt
-    xs = x[:, :-1]
-    ys = y[:, :-1]
-
-    r = np.sqrt(xs**2 + ys**2)
-    theta = np.arctan2(ys, xs)  # [-pi, pi)
-
-    # avoid r=0 issues
-    eps = 1e-12
-    r_safe = np.maximum(r, eps)
-
-    vr = (xs*vx + ys*vy) / r_safe
-    omega = (xs*vy - ys*vx) / (r_safe**2)
-
-    return r, theta, vr, omega
-
-def bin_mean_1d(xvals, yvals, edges, min_count=1):
-    xvals = np.asarray(xvals).ravel()
-    yvals = np.asarray(yvals).ravel()
-
-    idx = np.searchsorted(edges, xvals, side="right") - 1
-    nbin = len(edges) - 1
-    valid = (idx >= 0) & (idx < nbin) & np.isfinite(yvals) & np.isfinite(xvals)
-    idx = idx[valid]
-    yvals = yvals[valid]
-
-    count = np.zeros(nbin, dtype=int)
-    ysum  = np.zeros(nbin, dtype=float)
-    np.add.at(count, idx, 1)
-    np.add.at(ysum,  idx, yvals)
-
-    ymean = np.full(nbin, np.nan, float)
-    m = count >= min_count
-    ymean[m] = ysum[m] / count[m]
-    centers = 0.5*(edges[:-1] + edges[1:])
-    return centers, ymean, count
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-
-def radial_angular_from_binned_uv(U, V, C, xedges, yedges, r_edges, th_edges,
-                                 min_count_bin=1, min_count_1d=1):
-    """
-    Option (2): convert binned mean velocity field (U,V) into polar components at bin centers,
-    then compute weighted 1D profiles vs radius r and angle theta using weights=C.
-
-    Inputs:
-      U,V,C: (nx, ny) arrays from flow_field_from_trajectories
-      xedges,yedges: bin edges
-      r_edges: 1D edges for radius bins
-      th_edges: 1D edges for theta bins in [-pi, pi]
-      min_count_bin: require C>=this to use a spatial bin at all
-      min_count_1d: require total weight in a 1D bin >= this
-
-    Returns:
-      r_cent, vr_r, w_r
-      th_cent, om_th, w_th
-      plus (vr_grid, om_grid) for inspection
-    """
-    U = np.asarray(U); V = np.asarray(V); C = np.asarray(C)
-    nx, ny = U.shape
-
-    xc = 0.5 * (xedges[:-1] + xedges[1:])
-    yc = 0.5 * (yedges[:-1] + yedges[1:])
-    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")  # (nx, ny)
-
-    r = np.sqrt(Xc**2 + Yc**2)
-    th = np.arctan2(Yc, Xc)
-    eps = 1e-12
-    r_safe = np.maximum(r, eps)
-
-    # polar components derived from mean flow vector in each spatial bin
-    vr_grid = np.abs(Xc*U + Yc*V) / r_safe
-    om_grid = np.abs(Xc*V - Yc*U) / (r_safe**2)   # angular speed dtheta/dt
-
-    # flatten
-    rf = r.ravel()
-    thf = th.ravel()
-    vrf = vr_grid.ravel()
-    omf = om_grid.ravel()
-    wf = C.ravel().astype(float)
-
-    # keep only bins with enough samples and finite values
-    valid = (wf >= min_count_bin) & np.isfinite(vrf) & np.isfinite(omf) & np.isfinite(rf) & np.isfinite(thf)
-    rf, thf, vrf, omf, wf = rf[valid], thf[valid], vrf[valid], omf[valid], wf[valid]
-
-    def weighted_bin_mean(xvals, yvals, wvals, edges, min_w=1.0):
-        idx = np.searchsorted(edges, xvals, side="right") - 1
-        nbin = len(edges) - 1
-        ok = (idx >= 0) & (idx < nbin) & np.isfinite(yvals) & np.isfinite(wvals)
-        idx = idx[ok]; yvals = yvals[ok]; wvals = wvals[ok]
-
-        wsum = np.zeros(nbin, float)
-        ywsum = np.zeros(nbin, float)
-        np.add.at(wsum, idx, wvals)
-        np.add.at(ywsum, idx, wvals * yvals)
-
-        ymean = np.full(nbin, np.nan, float)
-        m = wsum >= min_w
-        ymean[m] = ywsum[m] / wsum[m]
-        centers = 0.5*(edges[:-1] + edges[1:])
-        return centers, ymean, wsum
-
-    r_cent, vr_r, w_r   = weighted_bin_mean(rf,  vrf, wf, r_edges,  min_w=min_count_1d)
-    th_cent, om_th, w_th = weighted_bin_mean(thf, omf, wf, th_edges, min_w=min_count_1d)
-
-    return r_cent, vr_r, w_r, th_cent, om_th, w_th, vr_grid, om_grid
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-from scipy.ndimage import gaussian_filter1d
-
-def gaussian_filter1d_nan(x, sigma, mode="nearest", truncate=4.0):
-    x = np.asarray(x, float)
-    m = np.isfinite(x).astype(float)          # 1 where valid, 0 where NaN
-    x0 = np.where(np.isfinite(x), x, 0.0)
-
-    xs = gaussian_filter1d(x0, sigma=sigma, mode=mode, truncate=truncate)
-    ms = gaussian_filter1d(m,  sigma=sigma, mode=mode, truncate=truncate)
-
-    out = xs / ms
-    out[ms == 0] = np.nan
-    return out
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
-
-def weighted_binned_mean(xvals, yvals, edges, weights=None,
-                         min_count=1, min_weight_1d=1.0):
-    """
-    Bin yvals as a function of xvals using weighted mean.
-
-    min_count: require at least this many contributing samples in each 1D bin
-    min_weight_1d: require at least this much total weight in each 1D bin
-    """
-    xvals = np.asarray(xvals).ravel()
-    yvals = np.asarray(yvals).ravel()
-
-    if weights is None:
-        weights = np.ones_like(yvals, float)
-    else:
-        weights = np.asarray(weights).ravel().astype(float)
-
-    idx = np.searchsorted(edges, xvals, side="right") - 1
-    nb = len(edges) - 1
-
-    ok = (
-        (idx >= 0) & (idx < nb) &
-        np.isfinite(xvals) & np.isfinite(yvals) &
-        np.isfinite(weights) & (weights > 0)
-    )
-    idx = idx[ok]
-    yvals = yvals[ok]
-    weights = weights[ok]
-
-    wsum  = np.zeros(nb, float)
-    ywsum = np.zeros(nb, float)
-    cnt   = np.zeros(nb, int)
-
-    np.add.at(wsum,  idx, weights)
-    np.add.at(ywsum, idx, weights * yvals)
-    np.add.at(cnt,   idx, 1)
-
-    ymean = np.full(nb, np.nan)
-    m = (cnt >= min_count) & (wsum >= min_weight_1d)
-    ymean[m] = ywsum[m] / wsum[m]
-
-    centers = 0.5 * (edges[:-1] + edges[1:])
-    return centers, ymean, cnt, wsum
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-def binned_mean_1d(xvals, yvals, edges, min_count=1):
-    xvals = np.asarray(xvals).ravel()
-    yvals = np.asarray(yvals).ravel()
-    idx = np.searchsorted(edges, xvals, side="right") - 1
-    nb = len(edges) - 1
-    ok = (idx >= 0) & (idx < nb) & np.isfinite(xvals) & np.isfinite(yvals)
-    idx = idx[ok]; yvals = yvals[ok]
-
-    cnt = np.zeros(nb, int)
-    ysum = np.zeros(nb, float)
-    np.add.at(cnt, idx, 1)
-    np.add.at(ysum, idx, yvals)
-
-    ymean = np.full(nb, np.nan)
-    m = cnt >= min_count
-    ymean[m] = ysum[m] / cnt[m]
-    centers = 0.5*(edges[:-1] + edges[1:])
-    return centers, ymean, cnt
-
-def speed_vs_r_theta(x_coor, y_coor, dt=1.0,
-                     r_edges=None, theta_edges=None,
-                     min_count=50, use_midpoint=False, nbins=32):
-    x = np.asarray(x_coor); y = np.asarray(y_coor)
-
-    vx = (x[:, 1:] - x[:, :-1]) / dt
-    vy = (y[:, 1:] - y[:, :-1]) / dt
-    speed = np.sqrt(vx**2 + vy**2)  # (n_trials, n_time-1)
-
-    if use_midpoint:
-        xs = 0.5*(x[:, 1:] + x[:, :-1])
-        ys = 0.5*(y[:, 1:] + y[:, :-1])
-    else:
-        xs = x[:, :-1]
-        ys = y[:, :-1]
-
-    r = np.sqrt(xs**2 + ys**2)
-    theta = np.arctan2(ys, xs)
-
-    eps = 1e-12
-    r_safe = np.maximum(r, eps)
-    omega = (xs*vy - ys*vx) / (r_safe**2)
-
-    if r_edges is None:
-        r_edges = np.linspace(0, np.nanmax(r), nbins)
-    if theta_edges is None:
-        theta_edges = np.linspace(-np.pi, np.pi, nbins)
-
-    r_cent, speed_r, r_cnt = binned_mean_1d(r, np.abs(speed), r_edges, min_count=min_count)
-    th_cent, speed_th, th_cnt = binned_mean_1d(theta, np.abs(speed), theta_edges, min_count=min_count)
-
-    return (r_cent, speed_r, r_cnt), (th_cent, speed_th, th_cnt)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-import numpy as np
+import pandas as pd
+# import seaborn as sns
 import matplotlib.pyplot as plt
 
-def vr_vth_omega_from_xy(x, y, dt=1.0, eps=1e-12):
-    x = np.asarray(x); y = np.asarray(y)
-    vx = (x[:, 1:] - x[:, :-1]) / dt
-    vy = (y[:, 1:] - y[:, :-1]) / dt
-    xs = x[:, :-1]; ys = y[:, :-1]
-
-    r = np.sqrt(xs**2 + ys**2)
-    th = np.arctan2(ys, xs)
-    r_safe = np.maximum(r, eps)
-
-    vr  = (xs*vx + ys*vy) / r_safe
-    vth = (-ys*vx + xs*vy) / r_safe              # = (xs*vy - ys*vx)/r
-    omega = (xs*vy - ys*vx) / (r_safe**2)        # = vth / r
-    return r, th, vr, vth, omega
-
-def binned_mean(xvals, yvals, edges, min_count=50):
-    xvals = np.asarray(xvals).ravel()
-    yvals = np.asarray(yvals).ravel()
-    idx = np.searchsorted(edges, xvals, side="right") - 1
-    nb = len(edges) - 1
-    ok = (idx >= 0) & (idx < nb) & np.isfinite(xvals) & np.isfinite(yvals)
-    idx = idx[ok]; yvals = yvals[ok]
-
-    cnt = np.zeros(nb, int)
-    ysum = np.zeros(nb, float)
-    np.add.at(cnt, idx, 1)
-    np.add.at(ysum, idx, yvals)
-
-    ymean = np.full(nb, np.nan)
-    m = cnt >= min_count
-    ymean[m] = ysum[m] / cnt[m]
-    centers = 0.5*(edges[:-1] + edges[1:])
-    return centers, ymean, cnt
-#+end_src
-
-#+RESULTS:
-
-*** all mice
-
-#+begin_src jupyter-python
-from scipy.ndimage import gaussian_filter1d, uniform_filter1d
-dt = 1
-nbins = 32
-min_count = 1  # choose based on how noisy you expect things to be
-min_w=1
-sigma_r, sigma_th= 1, 1
-#+end_src
-
-#+RESULTS:
-
-**** cartesian speeds
-
-#+begin_src jupyter-python
-r_list, sp_r_list = [], []
-th_list, sp_th_list = [], []
-
-for i_mouse in range(len(options['mice'])):
-    idx = (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse])
-    X_delay = X_single[idx].copy()
-
-    x_coor = X_delay[:, 0, options['bins_DELAY']]
-    y_coor = X_delay[:, 1, options['bins_DELAY']]
-
-    (r_c, sp_r, r_cnt), (th_c, sp_th, th_cnt) = speed_vs_r_theta(x_coor, y_coor, dt=dt, min_count=min_count, use_midpoint=True)
-
-    r_c /= np.nanmax(r_c)
-
-    m_sp_r = np.nanmean(sp_r)
-    std_sp_r = np.nanstd(sp_r)
-
-    sp_r = (sp_r - m_sp_r) / std_sp_r
-
-    r_list.append(r_c)
-    th_list.append(th_c)
-
-    m_sp_th = np.nanmean(sp_th)
-    std_sp_th = np.nanstd(sp_th)
-
-    sp_th = (sp_th - m_sp_th) / std_sp_th
-
-    sp_r_list.append(sp_r)
-    sp_th_list.append(sp_th)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-from scipy.stats import circmean
-r_list = pad_list(r_list, axis=0, max_len=None)
-sp_r_list = pad_list(sp_r_list, axis=0, max_len=None)
-mean_sp_r = np.nanmean(uniform_filter1d(np.array(sp_r_list), sigma_r), 0)
-
-th_list = pad_list(th_list, axis=0, max_len=None)
-sp_th_list = pad_list(sp_th_list, axis=0, max_len=None)
-mean_sp_th = np.nanmean(uniform_filter1d(np.array(sp_th_list), sigma_th), 0)
-#+end_src
-
-#+RESULTS:
-: cfd4df66-dbc0-457c-ba5f-7c6509053efe
-
-#+begin_src jupyter-python
-from scipy.ndimage import gaussian_filter1d, uniform_filter1d
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-for i in range(len(options['mice'])):
-    r_c = r_list[i]
-    sp_r = sp_r_list[i]
-
-    ax[0].plot(r_c, uniform_filter1d(sp_r, sigma_r), alpha=0.25)
-
-    th_c = th_list[i]
-    sp_th = sp_th_list[i]
-
-    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(sp_th, sigma_th, mode='wrap'), alpha=0.25)
-
-ax[0].plot(r_c, mean_sp_r, 'k')
-ax[1].plot(th_c * 180 / np.pi, mean_sp_th, 'k')
-
-ax[0].set_xlabel("r")
-ax[0].set_ylabel(r'$\langle v\rangle(r)$')
-
-ax[1].set_xlabel(r'$\theta$ (rad)')
-ax[1].set_ylabel(r'$\langle v\rangle(\theta)$')
-plt.show()
-#+end_src
-
-#+RESULTS:
-: f343e1c3-b05b-48e3-bef3-22e64ee2a4ae
-
-**** binned cartesian speeds
-
-#+begin_src jupyter-python
-r_list, sp_r_list = [], []
-th_list, sp_th_list = [], []
-
-for i_mouse in range(len(options['mice'])):
-    idx = (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse])
-    X_delay = X_single[idx].copy()
-
-    x_coor = X_delay[:, 0, options['bins_DELAY']]
-    y_coor = X_delay[:, 1, options['bins_DELAY']]
-
-    xedges, yedges, U, V, C = flow_field_midpoint(x_coor, y_coor, dt=1, bins=nbins)
-
-    speed = np.sqrt(U**2 + V**2)
-    speed = np.where(C >= min_count, speed, np.nan)
-
-    # bin centers -> R, TH
-    xc = 0.5*(xedges[:-1] + xedges[1:])
-    yc = 0.5*(yedges[:-1] + yedges[1:])
-    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
-    R  = np.sqrt(Xc**2 + Yc**2)
-    TH = np.arctan2(Yc, Xc)
-
-    # speed vs radius (weighted by C)
-    r_edges = np.linspace(0, np.nanmax(R), nbins)
-    r_c, sp_r, cnt_r, wsum_r = weighted_binned_mean(R, speed, r_edges, weights=C,min_count=min_count, min_weight_1d=min_w)
-
-    # speed vs theta (weighted by C)
-    th_edges = np.linspace(-np.pi, np.pi, nbins)
-    th_c, sp_th, cnt_th, wsum_th = weighted_binned_mean(TH, speed, th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
-
-    r_c /= np.nanmax(r_c)
-
-    m_sp_r = np.nanmean(sp_r)
-    std_sp_r = np.nanstd(sp_r)
-
-    sp_r = (sp_r - m_sp_r) / std_sp_r
-
-    r_list.append(r_c)
-    th_list.append(th_c)
-
-    m_sp_th = np.nanmean(sp_th)
-    std_sp_th = np.nanstd(sp_th)
-
-    sp_th = (sp_th - m_sp_th) / std_sp_th
-
-    sp_r_list.append(sp_r)
-    sp_th_list.append(sp_th)
-#+end_src
-
-#+RESULTS:
-: 701ca3b2-fe77-42a6-8275-8bcb3e02ce4d
-
-#+begin_src jupyter-python
-from scipy.stats import circmean
-r_list = pad_list(r_list, axis=0, max_len=None)
-sp_r_list = pad_list(sp_r_list, axis=0, max_len=None)
-
-mean_sp_r = np.nanmean(sp_r_list, 0)
-std_sp_r = np.nanstd(sp_r_list, 0) / np.sqrt(len(options['mice']))
-
-
-th_list = pad_list(th_list, axis=0, max_len=None)
-sp_th_list = pad_list(sp_th_list, axis=0, max_len=None)
-mean_sp_th = circmean(sp_th_list, -np.pi, np.pi, 0)
-std_sp_th = np.nanstd(sp_th_list, 0) / np.sqrt(len(options['mice']))
-#+end_src
-
-#+RESULTS:
-: a2925d6a-b860-476f-9e77-011b24a7e589
-
-#+begin_src jupyter-python
-sigma_r = 5
-sigma_th = 5
-
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-for i in range(len(options['mice'])):
-    r_c = r_list[i]
-    sp_r = sp_r_list[i]
-
-    r_c /= np.nanmax(r_c)
-
-    m_sp_r = np.nanmean(sp_r)
-    std_sp_r = np.nanstd(sp_r)
-
-    sp_r = (sp_r - m_sp_r) / std_sp_r
-
-    ax[0].plot(r_c, uniform_filter1d(sp_r, sigma_r), alpha=0.25)
-
-    th_c = th_list[i]
-    sp_th = sp_th_list[i]
-
-    m_sp_th = np.nanmean(sp_th)
-    std_sp_th = np.nanstd(sp_th)
-
-    sp_th = (sp_th - m_sp_th) / std_sp_th
-
-    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(sp_th, sigma_th, mode='wrap'), alpha=0.25)
-
-ax[0].plot(r_c, uniform_filter1d(mean_sp_r, sigma_r), 'k')
-ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(mean_sp_th, sigma_th), 'k')
-
-ax[0].set_xlabel("r")
-ax[0].set_ylabel(r'$\langle v_{bin} \rangle(r)$')
-
-ax[1].set_xlabel(r'$\theta$ (rad)')
-ax[1].set_ylabel(r'$\langle v_{bin}\rangle(\theta)$')
-plt.show()
-#+end_src
-
-#+RESULTS:
-: 06149a90-6eb3-4271-bf61-7201e028b949
-
-#+begin_src jupyter-python
-
-
-#+end_src
-
-#+RESULTS:
-: d05889a0-6d68-49ce-9844-c9270b01fa5d
-
-**** polar speeds
-
-#+begin_src jupyter-python
-r_list = []
-avr_r_list, avr_th_list = [], []
-avth_r_list, avth_th_list = [], []
-aw_r_list, aw_th_list = [], []
-
-for i_mouse in range(len(options['mice'])):
-    idx = (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse])
-    X_delay = X_single[idx].copy()
-
-    x_coor = X_delay[:, 0, options['bins_DELAY']]
-    y_coor = X_delay[:, 1, options['bins_DELAY']]
-
-    # --- compute components
-    r, th, vr, vth, omega = vr_vth_omega_from_xy(x_coor, y_coor, dt=dt)
-
-    # magnitudes
-    avr  = np.abs(vr)
-    avth = np.abs(vth)
-    aw = omega
-
-    # --- bin vs radius
-    r_edges = np.linspace(0, np.nanmax(r), nbins)
-    r_c, avr_r,  _ = binned_mean(r,  avr,  r_edges, min_count=min_count)
-    _,   avth_r, _ = binned_mean(r,  avth, r_edges, min_count=min_count)
-    _, aw_r, _ = binned_mean(r, aw, r_edges, min_count=min_count)
-
-    th_edges = np.linspace(-np.pi, np.pi, nbins)
-    th_c, avr_th,  _ = binned_mean(th, avr,  th_edges, min_count=min_count)
-    _,    avth_th, _ = binned_mean(th, avth, th_edges, min_count=min_count)
-    _, aw_th, _ = binned_mean(th, aw, th_edges, min_count=min_count)
-
-    r_c /= np.nanmax(r_c)
-
-    # m_avr_r = np.nanmean(avr_r)
-    # std_avr_r = np.nanstd(avr_r)
-    # avr_r = (avr_r - m_avr_r) / std_avr_r
-
-    # m_avr_th = np.nanmean(avr_th)
-    # std_avr_th = np.nanstd(avr_th)
-    # avr_th = (avr_th - m_avr_th) / std_avr_th
-
-    # m_avth_r = np.nanmean(avth_r)
-    # std_avth_r = np.nanstd(avth_r)
-    # avth_r = (avth_r - m_avth_r) / std_avth_r
-
-    # m_avth_th = np.nanmean(avth_th)
-    # std_avth_th = np.nanstd(avth_th)
-    # avth_th = (avth_th - m_avth_th) / std_avth_th
-
-    # m_aw_r = np.nanmean(aw_r)
-    # std_aw_r = np.nanstd(aw_r)
-    # aw_r = (aw_r - m_aw_r) / std_aw_r
-
-    # m_aw_th = np.nanmean(aw_th)
-    # std_aw_th = np.nanstd(aw_th)
-    # aw_th = (aw_th - m_aw_th) / std_aw_th
-
-    r_list.append(r_c)
-    th_list.append(th_c)
-
-    avr_r_list.append(avr_r)
-    avr_th_list.append(avr_th)
-
-    avth_r_list.append(avth_r)
-    avth_th_list.append(avth_th)
-
-    aw_r_list.append(aw_r)
-    aw_th_list.append(aw_th)
-#+end_src
-
-#+RESULTS:
-: 4f05f15d-ded9-469c-818a-51ac1eb0f3ec
-
-#+begin_src jupyter-python
-r_list = pad_list(r_list, axis=0, max_len=None)
-
-avr_r_list = pad_list(avr_r_list, axis=0, max_len=None)
-avth_r_list = pad_list(avth_r_list, axis=0, max_len=None)
-aw_r_list = pad_list(aw_r_list, axis=0, max_len=None)
-
-mean_avr_r = np.nanmean(uniform_filter1d(avr_r_list, sigma_r, axis=-1), 0)
-mean_avth_r = np.nanmean(uniform_filter1d(avth_r_list, sigma_r, axis=-1), 0)
-mean_aw_r = np.nanmean(uniform_filter1d(aw_r_list, sigma_r, axis=-1), 0)
-
-mean_avr_r = uniform_filter1d(np.nanmean(avr_r_list, 0), sigma_r)
-mean_avth_r = uniform_filter1d(np.nanmean(avth_r_list, 0), sigma_r)
-mean_awr = uniform_filter1d(circmean(aw_r_list, low=-np.pi, high=np.pi, axis=0), sigma_r)
-
-std_avr_r = uniform_filter1d(np.nanstd(avr_r_list, 0), sigma_r) / np.sqrt(len(options['mice']))
-std_avth_r = uniform_filter1d(np.nanstd(avth_r_list, 0), sigma_r) / np.sqrt(len(options['mice']))
-std_aw_r = uniform_filter1d(np.nanstd(aw_r_list, 0), sigma_r) / np.sqrt(len(options['mice']))
-
-th_list = pad_list(th_list, axis=0, max_len=None)
-
-avr_th_list = pad_list(avr_th_list, axis=0, max_len=None)
-avth_th_list = pad_list(avth_th_list, axis=0, max_len=None)
-aw_th_list = pad_list(aw_th_list, axis=0, max_len=None)
-
-mean_avr_th = uniform_filter1d(np.mean(avr_th_list, 0), sigma_th, mode='wrap')
-mean_avth_th = uniform_filter1d(np.mean(avth_th_list, axis=0), sigma_th, mode='wrap')
-mean_aw_th = uniform_filter1d(circmean(aw_th_list, low=-np.pi, high=np.pi, axis=0), sigma_th, mode='wrap')
-
-std_avr_th = uniform_filter1d(np.nanstd(avr_th_list, 0), sigma_th) / np.sqrt(len(options['mice']))
-std_avth_th = uniform_filter1d(np.nanstd(avth_th_list, 0), sigma_th) / np.sqrt(len(options['mice']))
-std_aw_th = uniform_filter1d(np.nanstd(aw_th_list, 0), sigma_th) / np.sqrt(len(options['mice']))
-#+end_src
-
-#+RESULTS:
-: ec8df3e2-28c3-447b-a487-87551b095dea
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-for i in range(len(options['mice'])):
-    r_c = r_list[i]
-    th_c = th_list[i]
-
-    avr_r = avr_r_list[i]
-    avr_th = avr_th_list[i]
-
-    ax[0].plot(r_c, uniform_filter1d(avr_r, sigma_r), alpha=0.25)
-    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(avr_th, sigma_th), alpha=0.2)
-
-ax[0].plot(r_c, mean_avr_r, 'k')
-ax[1].plot(th_c*180 / np.pi, mean_avr_th, 'k')
-
-ax[0].fill_between(r_c, mean_avr_r-std_avr_r, mean_avr_r+std_avr_r, alpha=.2)
-ax[1].fill_between(th_c*180/np.pi, mean_avr_th-std_avr_th, mean_avr_th+std_avr_th, alpha=.2)
-
-ax[0].axhline(0, color='k', ls='--')
-ax[0].set_xlabel("radius r")
-ax[0].set_ylabel("$<v_r>$")
-
-ax[1].axhline(0, color='k', ls='--')
-ax[1].set_xlabel("angle θ (°)")
-ax[1].set_ylabel("$<v_r>$")
-
-# plt.legend()
-plt.show()
-#+end_src
-
-#+RESULTS:
-: 2ae097d8-3f1f-436c-81a9-e830e02bc28e
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-for i in range(len(options['mice'])):
-    r_c = r_list[i]
-    th_c = th_list[i]
-
-    avth_r = avth_r_list[i]
-    avth_th = avth_th_list[i]
-
-    ax[0].plot(r_c, uniform_filter1d(avth_r, sigma_r), alpha=0.25)
-    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(avth_th, sigma_th), alpha=0.25)
-
-ax[0].plot(r_c, mean_avth_r, 'k')
-ax[1].plot(th_c*180 / np.pi, mean_avth_th, 'k')
-
-ax[0].fill_between(r_c, mean_avth_r-std_avth_r, mean_avth_r+std_avth_r, alpha=.2)
-ax[1].fill_between(th_c*180/np.pi, mean_avth_th-std_avth_th, mean_avth_th+std_avth_th, alpha=.2)
-
-ax[0].axhline(0, color='k', ls='--')
-ax[0].set_xlabel("radius r")
-ax[0].set_ylabel("$<v_\\theta>$")
-
-ax[1].axhline(0, color='k', ls='--')
-ax[1].set_xlabel("angle θ (°)")
-ax[1].set_ylabel("$<v_\\theta>$")
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-: cbb1e108-b494-4042-9ef6-95160022852f
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-for i in range(len(options['mice'])):
-    r_c = r_list[i]
-    th_c = th_list[i]
-
-    aw_r = aw_r_list[i]
-    aw_th = aw_th_list[i]
-
-    ax[0].plot(r_c, uniform_filter1d(aw_r, sigma_r), alpha=0.2)
-    ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(aw_th, sigma_th), alpha=0.2)
-
-ax[0].plot(r_c, mean_aw_r, 'k')
-ax[1].plot(th_c * 180 / np.pi, mean_aw_th, 'k')
-
-ax[0].fill_between(r_c, mean_aw_r-std_aw_r, mean_aw_r+std_aw_r, alpha=.2)
-ax[1].fill_between(th_c*180/np.pi, mean_aw_th-std_aw_th, mean_aw_th+std_aw_th, alpha=.2)
-
-ax[0].axhline(0, color='k', ls='--')
-ax[0].set_xlabel("radius r")
-ax[0].set_ylabel("$<\\omega>$")
-
-ax[1].axhline(0, color='k', ls='--')
-ax[1].set_xlabel("angle θ (°)")
-ax[1].set_ylabel("$<\\omega>$")
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-: 2d0ee18d-d6e6-4d98-adc3-f6ee20e8113d
-
-#+begin_src jupyter-python
-
-#+end_src
-
-#+RESULTS:
-: f7dd0eaf-9588-4688-a3ed-6b6ce2340669
-
-*** data
-**** data
-
- #+begin_src jupyter-python
-n_comp = 3
-laser = 0
-i_mouse = 3
-
-idx_mouse = True
-if i_mouse !=-1:
-    idx_mouse = (y_single.mouse==options['mice'][i_mouse])
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-dt = 1
-nbins = 16
-min_count = 5
-min_w = 1
-sigma_r, sigma_th= 15, 15
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-from scipy.ndimage import gaussian_filter1d, uniform_filter1d
-
-idx = (y_single.tasks=='DPA') & (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse])
-# idx = (y_single.laser==0) & (y_single.mouse==options['mice'][i_mouse])
-
-X_delay = X_single[idx].copy()
-
-x_coor = X_delay[:, 0]
-y_coor = X_delay[:, 1]
-
-bins = np.concatenate( (options['bins_BL'], options['bins_DELAY']))
-
-x_coor = X_delay[:, 0, bins]
-y_coor = X_delay[:, 1, bins]
-
-# x_coor = X_delay[:, 0, :options['bins_DELAY'][-1]]
-# y_coor = X_delay[:, 1, :options['bins_DELAY'][-1]]
-
-# x_coor = X_delay[:, 0, options['bins_DELAY']]
-# y_coor = X_delay[:, 1, options['bins_DELAY']]
-
-print(x_coor.shape)
-#+end_src
-
-#+RESULTS:
-: (192, 48)
-
-**** binned flows
-
-#+begin_src jupyter-python
-# xedges, yedges, U, V, C = flow_field_from_trajectories(x_coor, y_coor, dt=1, bins=32)
-xedges, yedges, U, V, C = flow_field_midpoint(x_coor, y_coor, dt=dt, bins=nbins)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-from matplotlib import colors
-
-speed = np.sqrt(U**2 + V**2)
-speed = np.where(C >= min_count, speed, np.nan)
-
-vmin = 0.0
-vmax = np.nanpercentile(speed, 95)  # robust upper limit
-
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height), sharey=1, sharex=1)
-
-ax[0].plot(x_coor.T, y_coor.T, alpha=0.3)
-
-pcm = ax[1].pcolormesh(xedges, yedges, speed.T, shading="auto", vmin=vmin, vmax=vmax)
-
-cbar = fig.colorbar(pcm, ax=ax[1])
-cbar.set_label("Speed")
-
-
-# pcm = ax[2].pcolormesh(
-#     xedges, yedges, speed.T, shading="auto",
-#     norm=colors.LogNorm(vmin=np.nanmin(speed[speed>0]), vmax=vmax)
-# )
-
-# cbar = fig.colorbar(pcm, ax=ax[2])
-# cbar.set_label("Speed (log)")
-
-# optional: overlay flow direction
-xc = 0.5*(xedges[:-1] + xedges[1:])
-yc = 0.5*(yedges[:-1] + yedges[1:])
-Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
-ax[1].quiver(Xc, Yc, U, V, color="w", angles="xy", scale_units="xy", scale=.2)
-# ax[2].quiver(Xc, Yc, U, V, color="w", angles="xy", scale_units="xy", scale=.25)
-
-# ax[0].set_xlim([-6, 6])
-# ax[0].set_ylim([-4, 4])
-ax[0].set_xlabel('PC1')
-ax[0].set_ylabel('PC2')
-
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/singlePCA/figure_142.png]]
-
-
-#+begin_src jupyter-python
-(r_c, sp_r, r_cnt), (th_c, sp_th, th_cnt) = speed_vs_r_theta(x_coor, y_coor, dt=dt, min_count=min_count, use_midpoint=True)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-ax[0].plot(r_c, sp_r)
-ax[0].plot(r_c, uniform_filter1d(sp_r, sigma_r), color='k')
-
-ax[0].set_xlabel("r")
-ax[0].set_ylabel(r'$\langle \sqrt{v_x^2+v_y^2}\rangle(r)$')
-
-ax[1].plot(th_c * 180 / np.pi, sp_th)
-ax[1].plot(th_c * 180 / np.pi, uniform_filter1d(sp_th, sigma_th, mode='wrap'), color='k')
-
-ax[1].set_xlabel(r'$\theta$ (rad)')
-ax[1].set_ylabel(r'$\langle \sqrt{v_x^2+v_y^2}\rangle(\theta)$')
-plt.show()
-#+end_src
-
-#+RESULTS:
-: 939d646a-92ac-429b-b5a3-5907cffe5a4e
-
-
-#+begin_src jupyter-python
-import numpy as np
-
-# per (x,y) bin:
-speed = np.sqrt(U**2 + V**2)
-speed = np.where(C >= min_count, speed, np.nan)  # optional mask low-occupancy bins
-
-# bin centers -> R, TH
-xc = 0.5*(xedges[:-1] + xedges[1:])
-yc = 0.5*(yedges[:-1] + yedges[1:])
-Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
-R  = np.sqrt(Xc**2 + Yc**2)
-TH = np.arctan2(Yc, Xc)
-
-# speed vs radius (weighted by C)
-r_edges = np.linspace(0, np.nanmax(R), nbins)
-r_c, speed_r, cnt_r, wsum_r = weighted_binned_mean(
-    R, speed, r_edges, weights=C,
-    min_count=min_count, min_weight_1d=min_w
+# sns.set_theme(style="white", context="talk")
+
+assert isinstance(y_single, pd.DataFrame)
+assert X_single.shape[0] == len(y_single)
+
+pcs = [0, 1, 2]
+pc_names = [f"PC{p+1}" for p in pcs]
+
+# ---- build trial table + filter ----
+df = y_single.reset_index(drop=True).copy()
+
+# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
+df["traj"] = list(X_single[:, pcs, :]*10)
+
+df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
+# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
+bins = options["bins_DELAY"]
+
+rows = []
+for (mouse, odor, learning), g in df.groupby(["mouse", "sample_odor", "learning"], sort=False):
+    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
+    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
+    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
+    for i, pc in enumerate(pc_names):
+        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
+
+plot_df = pd.DataFrame(rows)
+
+# make mouse categorical for stable order
+mouse_order = sorted(plot_df["mouse"].unique())
+plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
+
+# ---- BAR FIGURE ----
+g = sns.catplot(
+    data=plot_df, kind="bar",
+    x="mouse", y="value",
+    col="pc", col_order=pc_names,
+    hue="learning",
+    height=3.4, aspect=1.15,
+    errorbar=None,
 )
+g.set_titles("{col_name}")
+g.set_axis_labels("Mouse", "Sample Code")
 
-# speed vs theta (weighted by C)
-th_edges = np.linspace(-np.pi, np.pi, nbins)
-th_c, speed_th, cnt_th, wsum_th = weighted_binned_mean(
-    TH, speed, th_edges, weights=C,
-    min_count=min_count, min_weight_1d=min_w
-)
-#+end_src
+for ax in g.axes.flat:
+    ax.grid(False)
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(45)
+        lab.set_rotation_mode("anchor")
+        lab.set_ha("right")
+        lab.set_va("top")
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+    ax.set_ylim([0, 0.5])
+    ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
 
-#+RESULTS:
-: 767aeb28-802d-4a56-9376-3d1a4a7ab2fd
+# legend outside
+g._legend.set_title("Learning")
+g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
+g._legend.set_bbox_to_anchor((0.98, 0.5))
 
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+plt.savefig('./figures/pca/pca_bars_%s.svg' % dum)
 
-ax[0].plot(r_c, speed_r)
-ax[0].plot(r_c, uniform_filter1d(speed_r, sigma_r), color='k')
-
-ax[0].set_xlabel("r")
-ax[0].set_ylabel(r'$\langle |\mathbf{v}| \rangle(r)$')
-
-
-ax[1].plot(th_c, speed_th)
-ax[1].plot(th_c, uniform_filter1d(speed_th, sigma_th, mode='wrap'), color='k')
-
-ax[1].set_xlabel(r'$\theta$ (rad)')
-ax[1].set_ylabel(r'$\langle |\mathbf{v}| \rangle(\theta)$')
 plt.show()
 #+end_src
 
 #+RESULTS:
-: 3f9b5dab-5215-4421-93b2-3427a3032625
+[[file:./figures/singlePCA/figure_46.png]]
+
 
 #+begin_src jupyter-python
+# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
 import numpy as np
+import pandas as pd
 
-def polar_components_from_steps(x, y, dt=1.0, eps=1e-12):
-    vx = (x[:,1:] - x[:,:-1]) / dt
-    vy = (y[:,1:] - y[:,:-1]) / dt
-    xs = x[:,:-1]; ys = y[:,:-1]
-    r = np.sqrt(xs**2 + ys**2)
-    th = np.arctan2(ys, xs)
-    r_safe = np.maximum(r, eps)
-    vr  = (xs*vx + ys*vy) / r_safe
-    vth = (-ys*vx + xs*vy) / r_safe
-    return r, th, vr, vth
-
-def bin2d_mean(r, th, val, r_edges, th_edges, min_count=50):
-    r = r.ravel(); th = th.ravel(); val = val.ravel()
-    ir = np.searchsorted(r_edges, r, side="right") - 1
-    it = np.searchsorted(th_edges, th, side="right") - 1
-    nr = len(r_edges)-1; nt = len(th_edges)-1
-    ok = (ir>=0)&(ir<nr)&(it>=0)&(it<nt)&np.isfinite(val)
-    ir = ir[ok]; it = it[ok]; val = val[ok]
-
-    cnt = np.zeros((nr, nt), int)
-    s   = np.zeros((nr, nt), float)
-    np.add.at(cnt, (ir, it), 1)
-    np.add.at(s,   (ir, it), val)
-
-    mean = np.full((nr, nt), np.nan)
-    m = cnt >= min_count
-    mean[m] = s[m] / cnt[m]
-    return mean, cnt
-
-def angular_anisotropy(mean_rt, eps=1e-12):
-    # mean_rt: (nr, nt) array of mean quantity vs (r,theta)
-    mu = np.nanmean(mean_rt, axis=1)          # mean over theta for each r
-    sd = np.nanstd(mean_rt, axis=1)           # std over theta for each r
-    A = sd / (np.abs(mu) + eps)               # relative angular modulation
-    return A, mu, sd
-
-# Example usage:
-r, th, vr, vth = polar_components_from_steps(x_coor, y_coor, dt=dt)
-r_edges  = np.linspace(0, np.nanmax(r), nbins)
-th_edges = np.linspace(-np.pi, np.pi, nbins)
-vr_rt, vr_cnt = bin2d_mean(r, th, np.abs(vr), r_edges, th_edges, min_count=min_w)
-A_vr, vr_mu, vr_sd = angular_anisotropy(vr_rt)
-vth_rt, vth_cnt = bin2d_mean(r, th, np.abs(vth), r_edges, th_edges, min_count=min_w)
-#+end_src
-
-#+RESULTS:
-: 2c74a212-d9d4-44de-b99f-cac6e9f21f09
-
-**** counts
-
- #+begin_src jupyter-python
-import numpy as np
 import matplotlib.pyplot as plt
 
-r_cent  = 0.5*(r_edges[:-1] + r_edges[1:])
-th_cent = 0.5*(th_edges[:-1] + th_edges[1:])
+# sns.set_theme(style="white", context="talk")
 
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+df = plot_df.copy()
 
-ax[0].pcolormesh(th_edges, r_edges, vr_rt, shading="auto")
-ax[0].set_xlabel(r'$\theta$ (rad)')
-ax[0].set_ylabel('r')
+# normalize learning labels -> stage in {"Naive","Expert"}
+if np.issubdtype(df["learning"].dtype, np.number):
+    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
+else:
+    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
+                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
 
-ax[1].pcolormesh(th_edges, r_edges, vth_rt, shading="auto")
-ax[1].set_xlabel(r'$\theta$ (rad)')
-ax[1].set_ylabel('r')
+df = df[df["stage"].isin(["Naive", "Expert"])]
 
-plt.show()
-#+end_src
+# average across odors -> one value per (mouse, stage, pc)
+mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
 
-#+RESULTS:
-: 8e817d16-de0e-41f9-8dc0-c45f0220d518
+wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
+        .reset_index()
+        .dropna(subset=["Naive", "Expert"]))
 
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+mice = pd.Index(wide["mouse"].unique()).sort_values()
+palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
 
-ax[0].pcolormesh(th_edges, r_edges, vr_cnt, shading="auto")
-ax[0].set_xlabel(r'$\theta$ (rad)')
-ax[0].set_ylabel('r')
+g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
+g.map_dataframe(
+    sns.scatterplot,
+    x="Naive", y="Expert",
+    hue="mouse", palette=palette,
+    s=70, edgecolor="black", linewidth=0.3,
+    legend=False
+)
 
-ax[1].pcolormesh(th_edges, r_edges, vth_cnt, shading="auto")
-ax[1].set_xlabel(r'$\theta$ (rad)')
-ax[1].set_ylabel('r')
+g.set_titles("{col_name}")
+g.set_xlabels("")
+g.set_ylabels("")
 
-plt.show()
-#+end_src
+for ax in g.axes.flat:
+    ax.grid(False)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    lo, hi = min(x0, y0), max(x1, y1)
+    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
 
-#+RESULTS:
-: 0dc59b4e-7461-47cc-adf8-f7246a77deb7
+    ax.set_xlim([0, 0.3])
+    ax.set_ylim([0, 0.3])
 
-#+begin_src jupyter-python
+    ax.set_xticks([0, 0.1, 0.2, 0.3])
+    ax.set_yticks([0, 0.1, 0.2, 0.3])
+    ax.set_xlabel('Naive')
+    ax.set_ylabel('Expert')
+    ax.set_title('Sample Code')
+# g.fig.supxlabel("Naive")
+# g.fig.supylabel("Expert")
+g.fig.tight_layout()
 
-#+end_src
-
-#+RESULTS:
-: 0a78d9fe-7f07-4bc3-898c-41340211731f
-
-**** speeds
-
-#+begin_src jupyter-python
-# --- compute components
-r, th, vr, vth, omega = vr_vth_omega_from_xy(x_coor, y_coor, dt=dt)
-
-# magnitudes
-avr  = np.abs(vr)
-avth = np.abs(vth)
-aw = np.abs(omega)
-
-# --- bin vs radius
-r_edges = np.linspace(0, np.nanmax(r), nbins)
-r_c, avr_r,  _ = binned_mean(r,  avr,  r_edges, min_count=min_count)
-_,   avth_r, _ = binned_mean(r,  avth, r_edges, min_count=min_count)
-_, aw_r, _ = binned_mean(r, aw, r_edges, min_count=min_count)
-
-th_edges = np.linspace(-np.pi, np.pi, nbins)  # ~5 degree bins
-th_c, avr_th,  _ = binned_mean(th, avr,  th_edges, min_count=min_count)
-_,    avth_th, _ = binned_mean(th, avth, th_edges, min_count=min_count)
-_, aw_th, _ = binned_mean(th, aw, th_edges, min_count=min_count)
-#+end_src
-
-#+RESULTS:
-: 525528ba-88f9-412b-b9ec-bcbcc809f8f8
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-ax[0].plot(r_c, avr_r,  label=r'$\langle|v_r|\rangle(r)$')
-ax[0].plot(r_c, avth_r, label=r'$\langle|v_\theta|\rangle(r)$')
-ax[0].axhline(0, color='k', ls='--')
-ax[0].set_xlabel("radius r")
-ax[0].set_ylabel("$<v_r>, <v_\\theta>$")
-
-ax[1].plot(th_c * 180 / np.pi, avr_th,  label=r'$\langle|v_r|\rangle(\theta)$')
-ax[1].plot(th_c * 180 / np.pi, avth_th, label=r'$\langle|v_\theta|\rangle(\theta)$')
-ax[1].axhline(0, color='k', ls='--')
-ax[1].set_xlabel("angle θ (°)")
-ax[1].set_ylabel("$<v_r>, <v_\\theta>$")
-
-# plt.legend()
-plt.show()
-#+end_src
-
-#+RESULTS:
-: e13111a3-6219-49ab-8832-b5f79b0f4a8c
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
-
-ax[0].plot(r_c, aw_r,  label=r'$\langle|v_r|\rangle(r)$')
-ax[0].axhline(0, color='k', ls='--')
-ax[0].set_xlabel("radius r")
-ax[0].set_ylabel("$<\\omega>$")
-
-
-ax[1].plot(th_c* 180 / np.pi, aw_th,  label=r'$\langle|v_r|\rangle(\theta)$')
-ax[1].plot(th_c* 180 / np.pi, uniform_filter1d(aw_th, sigma_th, mode='wrap'), color='k')
-ax[1].axhline(0, color='k', ls='--')
-ax[1].set_xlabel("angle θ (°)")
-ax[1].set_ylabel("$<\\omega>$")
+plt.savefig('./figures/single/pca_scatter_%s.svg' % dum)
 
 plt.show()
 #+end_src
 
 #+RESULTS:
-: 486262e8-8178-4bd2-bc25-31010efc5e16
-
-**** speeds from binned field
+: d307ba9d-898c-41b0-9ab6-92c733e5c81e
 
 #+begin_src jupyter-python
+# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
 import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-def binned_velocity_and_speed(
-    x, y, dt,
-    xedges, yedges,
-    min_count=1,
-    nan_empty=True,
-):
-    """
-    Compute per-bin:
-      U,V  = mean(vx), mean(vy)               (mean velocity components)
-      S    = mean(speed) = mean(sqrt(vx^2+vy^2))  (mean speed; NOT sqrt(U^2+V^2))
-      C    = counts per bin (# velocity samples falling in bin)
+# sns.set_theme(style="white", context="talk")
 
-    x,y: arrays (n_trials, n_time)
-    dt:  scalar timestep
-    xedges,yedges: bin edges
-    """
-    x = np.asarray(x); y = np.asarray(y)
-    assert x.shape == y.shape
-    n_trials, n_time = x.shape
-    if n_time < 2:
-        raise ValueError("Need at least 2 timepoints per trial to compute velocity.")
+assert isinstance(y_single, pd.DataFrame)
+assert X_single.shape[0] == len(y_single)
 
-    # per-sample velocities (n_trials, n_time-1)
-    vx = np.diff(x, axis=1) / dt
-    vy = np.diff(y, axis=1) / dt
-    sp = np.sqrt(vx * vx + vy * vy)
+pcs = [0, 1, 2]
+pc_names = [f"PC{p+1}" for p in pcs]
 
-    # position associated with each velocity sample: midpoint of segment
-    xm = 0.5 * (x[:, 1:] + x[:, :-1])
-    ym = 0.5 * (y[:, 1:] + y[:, :-1])
+# ---- build trial table + filter ----
+df = y_single.reset_index(drop=True).copy()
 
-    # flatten all samples
-    xm = xm.ravel()
-    ym = ym.ravel()
-    vx = vx.ravel()
-    vy = vy.ravel()
-    sp = sp.ravel()
+# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
+df["traj"] = list(X_single[:, pcs, :]*10)
 
-    # keep finite
-    ok = np.isfinite(xm) & np.isfinite(ym) & np.isfinite(vx) & np.isfinite(vy) & np.isfinite(sp)
-    xm, ym, vx, vy, sp = xm[ok], ym[ok], vx[ok], vy[ok], sp[ok]
+df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
+# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
+bins = options["bins_POSTTASK"]
 
-    nx = len(xedges) - 1
-    ny = len(yedges) - 1
+rows = []
+for (mouse, odor, learning), g in df.groupby(["mouse", "choice", "learning"], sort=False):
+    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
 
-    # bin indices
-    ix = np.searchsorted(xedges, xm, side="right") - 1
-    iy = np.searchsorted(yedges, ym, side="right") - 1
-    inside = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
+    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
 
-    ix, iy = ix[inside], iy[inside]
-    vx, vy, sp = vx[inside], vy[inside], sp[inside]
+    for i, pc in enumerate(pc_names):
+        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
 
-    # accumulate sums and counts
-    C = np.zeros((nx, ny), dtype=np.int64)
-    sum_vx = np.zeros((nx, ny), dtype=float)
-    sum_vy = np.zeros((nx, ny), dtype=float)
-    sum_sp = np.zeros((nx, ny), dtype=float)
+plot_df = pd.DataFrame(rows)
 
-    np.add.at(C, (ix, iy), 1)
-    np.add.at(sum_vx, (ix, iy), vx)
-    np.add.at(sum_vy, (ix, iy), vy)
-    np.add.at(sum_sp, (ix, iy), sp)
+# make mouse categorical for stable order
+mouse_order = sorted(plot_df["mouse"].unique())
+plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
 
-    # means
-    with np.errstate(invalid="ignore", divide="ignore"):
-        U = sum_vx / C
-        V = sum_vy / C
-        S = sum_sp / C  # <-- mean speed per bin (the "fixed" part)
+# ---- BAR FIGURE ----
+g = sns.catplot(
+    data=plot_df, kind="bar",
+    x="mouse", y="value",
+    col="pc", col_order=pc_names,
+    hue="learning",
+    height=3.4, aspect=1.15,
+    errorbar=None,
+)
+g.set_titles("{col_name}")
+g.set_axis_labels("Mouse", "Choice Code")
 
-    if nan_empty:
-        mask = C >= min_count
-        U = np.where(mask, U, np.nan)
-        V = np.where(mask, V, np.nan)
-        S = np.where(mask, S, np.nan)
+for ax in g.axes.flat:
+    ax.grid(False)
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(45)
+        lab.set_rotation_mode("anchor")
+        lab.set_ha("right")
+        lab.set_va("top")
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+    # ax.set_ylim([0, 0.5])
+    # ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
 
-    return U, V, S, C
+# legend outside
+g._legend.set_title("Learning")
+g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
+g._legend.set_bbox_to_anchor((0.98, 0.5))
 
+plt.savefig('./figures/pca/pca_bars_choice_%s.svg' % dum)
 
-def polar_from_binned_field(xedges, yedges, U, V, C=None, min_count=1, eps=1e-12, mask_r0=None):
-    """
-    Convert mean velocity components (U,V) defined at bin centers to polar components.
-    Optionally mask low-count bins and optionally mask a central disk (mask_r0).
-    """
-    U = np.asarray(U); V = np.asarray(V)
-    nx, ny = U.shape
-
-    xc = 0.5 * (xedges[:-1] + xedges[1:])
-    yc = 0.5 * (yedges[:-1] + yedges[1:])
-    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")
-
-    R = np.sqrt(Xc**2 + Yc**2)
-    TH = np.arctan2(Yc, Xc)
-    R_safe = np.maximum(R, eps)
-
-    Vr  = (Xc*U + Yc*V) / R_safe
-    Vth = (-Yc*U + Xc*V) / R_safe
-    Omega = (Xc*V - Yc*U) / (R_safe**2)
-
-    mask = np.isfinite(U) & np.isfinite(V)
-    if C is not None:
-        mask &= (C >= min_count)
-    if mask_r0 is not None:
-        mask &= (R >= mask_r0)
-
-    Vr    = np.where(mask, Vr, np.nan)
-    Vth   = np.where(mask, Vth, np.nan)
-    Omega = np.where(mask, Omega, np.nan)
-
-    return Xc, Yc, R, TH, Vr, Vth, Omega
-
-
-# -------------------------
-# Example usage:
-# U,V are mean velocity components; S is mean speed (recommended for "speed map")
-# -------------------------
-# U, V, S, C = binned_velocity_and_speed(x, y, dt, xedges, yedges, min_count=10)
-# Xc, Yc, R, TH, Vr, Vth, Omega = polar_from_binned_field(xedges, yedges, U, V, C=C, min_count=10, mask_r0=1e-6)
-# speed_of_mean_flow = np.sqrt(U**2 + V**2)   # different quantity than S
+plt.show()
 #+end_src
 
 #+RESULTS:
-: 53de1495-9eb8-4d46-acfd-0990fe5abe51
+: c8b09fa7-44da-4cfb-a726-37887df18040
 
 #+begin_src jupyter-python
+# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
 import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-def polar_from_binned_field(xedges, yedges, U, V, C=None, min_count=1, eps=1e-12):
-    """
-    xedges, yedges: bin edges (nx+1), (ny+1)
-    U, V: mean velocity per bin, shape (nx, ny)
-    C: counts per bin, shape (nx, ny) (optional but recommended)
-    Returns:
-      Xc, Yc, R, TH (nx, ny)
-      Vr, Vth, Omega (nx, ny) with NaNs where invalid/low count
-    """
-    U = np.asarray(U); V = np.asarray(V)
-    nx, ny = U.shape
+# sns.set_theme(style="white", context="talk")
 
-    xc = 0.5 * (xedges[:-1] + xedges[1:])
-    yc = 0.5 * (yedges[:-1] + yedges[1:])
-    Xc, Yc = np.meshgrid(xc, yc, indexing="ij")  # (nx, ny)
+df = plot_df.copy()
 
-    R = np.sqrt(Xc**2 + Yc**2)
-    TH = np.arctan2(Yc, Xc)
-    R_safe = np.maximum(R, eps)
+# normalize learning labels -> stage in {"Naive","Expert"}
+if np.issubdtype(df["learning"].dtype, np.number):
+    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
+else:
+    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
+                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
 
-    Vr  = (Xc*U + Yc*V) / R_safe
-    Vth = (-Yc*U + Xc*V) / R_safe
-    Omega = (Xc*V - Yc*U) / (R_safe**2)
+df = df[df["stage"].isin(["Naive", "Expert"])]
 
-    # mask out empty/low-sample bins
-    if C is not None:
-        mask = (C >= min_count) & np.isfinite(U) & np.isfinite(V)
-        Vr    = np.where(mask, Vr, np.nan)
-        Vth   = np.where(mask, Vth, np.nan)
-        Omega = np.where(mask, Omega, np.nan)
+# average across odors -> one value per (mouse, stage, pc)
+mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
 
-    return Xc, Yc, R, TH, Vr, Vth, Omega
-#+end_src
+wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
+        .reset_index()
+        .dropna(subset=["Naive", "Expert"]))
 
-#+RESULTS:
-: 6b6dc593-4053-44c6-b027-56d9304b0477
+mice = pd.Index(wide["mouse"].unique()).sort_values()
+palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
 
-#+begin_src jupyter-python
-min_w = 1
-U, V, S, C = binned_velocity_and_speed(x_coor, y_coor, dt, xedges, yedges, min_count=1)
-Xc, Yc, R, TH, Vr, Vth, Om = polar_from_binned_field(xedges, yedges, U, V, C=C, min_count=1)
+g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
+g.map_dataframe(
+    sns.scatterplot,
+    x="Naive", y="Expert",
+    hue="mouse", palette=palette,
+    s=70, edgecolor="black", linewidth=0.3,
+    legend=False
+)
 
-# magnitudes per bin
-aVr  = np.abs(Vr)
-aVth = np.abs(Vth)
-aOm  = np.abs(Om)
+g.set_titles("{col_name}")
+g.set_xlabels("")
+g.set_ylabels("")
 
-# vs radius (weighted by C)
-r_edges = np.linspace(0, np.nanmax(R), nbins)
-r_c, aVr_r,  _, _ = weighted_binned_mean(R,  aVr,  r_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
-_,   aVth_r, _, _ = weighted_binned_mean(R,  aVth, r_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
-_,   aOm_r,  _, _ = weighted_binned_mean(R,  aOm,  r_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
+for ax in g.axes.flat:
+    ax.grid(False)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    lo, hi = min(x0, y0), max(x1, y1)
+    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
 
-th_edges = np.linspace(-np.pi, np.pi, nbins)
-th_c, aVr_th,  _, _ = weighted_binned_mean(TH, aVr,  th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
-_,    aVth_th, _, _ = weighted_binned_mean(TH, aVth, th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
-_,    aOm_th,  _, _ = weighted_binned_mean(TH, aOm,  th_edges, weights=C, min_count=min_count, min_weight_1d=min_w)
-#+end_src
+    ax.set_xlim([0, 0.3])
+    ax.set_ylim([0, 0.3])
 
-#+RESULTS:
-: 7ce54e53-c17e-4bf9-ad94-b2ecbc12da01
+    ax.set_xticks([0, 0.1, 0.2, 0.3])
+    ax.set_yticks([0, 0.1, 0.2, 0.3])
+    ax.set_xlabel('Naive')
+    ax.set_ylabel('Expert')
+    ax.set_title('Choice Code')
 
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+# g.fig.supxlabel("Naive")
+# g.fig.supylabel("Expert")
+g.fig.tight_layout()
 
-ax[0].plot(r_c, aVr_r,  label=r'$\langle|v_r|\rangle(r)$')
-ax[0].plot(r_c, aVth_r, label=r'$\langle|v_\theta|\rangle(r)$')
-ax[0].axhline(0, color='k', ls='--')
-ax[0].set_xlabel("radius r")
-ax[0].set_ylabel("$<v_r>, <v_\\theta>$")
-
-
-ax[1].plot(th_c * 180 / np.pi, aVr_th,  label=r'$\langle|v_r|\rangle(\theta)$')
-ax[1].plot(th_c * 180 / np.pi, aVth_th, label=r'$\langle|v_\theta|\rangle(\theta)$')
-ax[1].axhline(0, color='k', ls='--')
-ax[1].set_xlabel("angle θ (°)")
-ax[1].set_ylabel("$<v_r>, <v_\\theta>$")
+plt.savefig('./figures/single/pca_scatter_choice_%s.svg' % dum)
 
 plt.show()
 #+end_src
 
 #+RESULTS:
-: d3d9e558-23f2-47fb-93cc-9736f1966aa9
+: 52d92672-34df-4cba-9726-312eb2c9b122
 
 #+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(2*width, height),)
+# BLOCK 1: compute plot_df (and set pc_names) + BAR FIGURE
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-ax[0].plot(r_c, aOm_r,  label=r'$\langle|v_r|\rangle(r)$')
-ax[0].axhline(0, color='k', ls='--')
-ax[0].set_xlabel("radius r")
-ax[0].set_ylabel("$<\\omega>$")
+# sns.set_theme(style="white", context="talk")
 
-ax[1].plot(th_c * 180 / np.pi, aOm_th,  label=r'$\langle|v_r|\rangle(\theta)$')
-ax[1].axhline(0, color='k', ls='--')
-ax[1].set_xlabel("angle θ (°)")
-ax[1].set_ylabel("$<\\omega>$")
+assert isinstance(y_single, pd.DataFrame)
+assert X_single.shape[0] == len(y_single)
+
+pcs = [0, 1, 2]
+pc_names = [f"PC{p+1}" for p in pcs]
+
+# ---- build trial table + filter ----
+df = y_single.reset_index(drop=True).copy()
+
+# keep only selected PCs: (n_trials, 3, n_time); store per-trial arrays
+df["traj"] = list(X_single[:, pcs, :]*10)
+
+df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
+# ---- aggregate to plot_df: one row per (mouse, odor, learning, pc) ----
+bins = options["bins_POSTTASK"]
+
+rows = []
+for (mouse, odor, learning), g in df.groupby(["mouse", "test_odor", "learning"], sort=False):
+    T = np.stack(g["traj"].to_numpy(), axis=0)           # (n_trials, 3, n_time)
+
+    mean_traj = (T / (np.max(np.abs(T), axis=0) + 1e-12) ).mean(axis=0)
+    val = np.abs(mean_traj[..., bins]).mean(axis=1)      # (3,)
+
+    for i, pc in enumerate(pc_names):
+        rows.append({"mouse": mouse, "sample_odor": odor, "learning": learning, "pc": pc, "value": val[i]})
+
+plot_df = pd.DataFrame(rows)
+
+# make mouse categorical for stable order
+mouse_order = sorted(plot_df["mouse"].unique())
+plot_df["mouse"] = pd.Categorical(plot_df["mouse"], categories=mouse_order, ordered=True)
+
+# ---- BAR FIGURE ----
+g = sns.catplot(
+    data=plot_df, kind="bar",
+    x="mouse", y="value",
+    col="pc", col_order=pc_names,
+    hue="learning",
+    height=3.4, aspect=1.15,
+    errorbar=None,
+)
+g.set_titles("{col_name}")
+g.set_axis_labels("Mouse", "Test Code")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(45)
+        lab.set_rotation_mode("anchor")
+        lab.set_ha("right")
+        lab.set_va("top")
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+    # ax.set_ylim([0, 0.5])
+    # ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4 ,0.5])
+
+# legend outside
+g._legend.set_title("Learning")
+g.fig.subplots_adjust(right=0.86, wspace=0.15, top=0.90)
+g._legend.set_bbox_to_anchor((0.98, 0.5))
+
+plt.savefig('./figures/pca/pca_bars_test_%s.svg' % dum)
 
 plt.show()
 #+end_src
 
 #+RESULTS:
-: 6432b10a-6637-4ee9-a429-1b7616829027
+: 20e05271-0c78-41cf-a952-c9c4a4093e3a
+
+#+begin_src jupyter-python
+# BLOCK 2: SCATTER FIGURE (Naive vs Expert), one dot per mouse (color-coded)
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# sns.set_theme(style="white", context="talk")
+
+df = plot_df.copy()
+
+# normalize learning labels -> stage in {"Naive","Expert"}
+if np.issubdtype(df["learning"].dtype, np.number):
+    df["stage"] = df["learning"].map({0: "Naive", 1: "Expert"})
+else:
+    df["stage"] = (df["learning"].astype(str).str.strip().str.lower()
+                   .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"}))
+
+df = df[df["stage"].isin(["Naive", "Expert"])]
+
+# average across odors -> one value per (mouse, stage, pc)
+mouse_stage = df.groupby(["mouse", "stage", "pc"], as_index=False)["value"].mean()
+
+wide = (mouse_stage.pivot(index=["mouse", "pc"], columns="stage", values="value")
+        .reset_index()
+        .dropna(subset=["Naive", "Expert"]))
+
+mice = pd.Index(wide["mouse"].unique()).sort_values()
+palette = dict(zip(mice, sns.color_palette("tab20", n_colors=len(mice))))
+
+g = sns.FacetGrid(wide, col="pc", col_order=pc_names, height=height, aspect=1.0, sharex=True, sharey=False)
+g.map_dataframe(
+    sns.scatterplot,
+    x="Naive", y="Expert",
+    hue="mouse", palette=palette,
+    s=70, edgecolor="black", linewidth=0.3,
+    legend=False
+)
+
+g.set_titles("{col_name}")
+g.set_xlabels("")
+g.set_ylabels("")
+
+for ax in g.axes.flat:
+    ax.grid(False)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    lo, hi = min(x0, y0), max(x1, y1)
+    ax.plot([lo, hi], [lo, hi], color="0.3", lw=1, ls="--")
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.tick_params(axis="both", which="both", bottom=True, left=True, direction="out", length=4, width=1)
+
+    ax.set_xlim([0, 0.3])
+    ax.set_ylim([0, 0.3])
+
+    ax.set_xticks([0, 0.1, 0.2, 0.3])
+    ax.set_yticks([0, 0.1, 0.2, 0.3])
+    ax.set_xlabel('Naive')
+    ax.set_ylabel('Expert')
+    ax.set_title('Test Code')
+
+# g.fig.supxlabel("Naive")
+# g.fig.supylabel("Expert")
+g.fig.tight_layout()
+
+plt.savefig('./figures/single/pca_scatter_test_%s.svg' % dum)
+
+plt.show()
+#+end_src
+
+#+RESULTS:
+: 46c86216-6734-4572-9a79-fc692607b9fe
 
 #+begin_src jupyter-python
 
 #+end_src
 
 #+RESULTS:
-: 9693dace-8972-44bc-b265-a448a75b6c3d
+: 4ff02b30-f72a-4bfb-9c4f-3a7ab2c35c9d

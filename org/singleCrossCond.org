@@ -157,6 +157,7 @@ def pad_list(arrays, axis=0, max_len=None):
 #+end_src
 
 #+RESULTS:
+: 5ff00d4f-afae-4ddf-ba6c-a86652c26592
 
 #+begin_src jupyter-python
 def pad_with_nans(array, target_shape):
@@ -345,6 +346,7 @@ def plot_field(xi, yi, ui, vi, ax=None, density=1.0, show_cbar=0):
 #+end_src
 
 #+RESULTS:
+: fa5c4ccf-59f5-42aa-b06a-e23f314d0e4a
 
 #+begin_src jupyter-python
 import numpy as np
@@ -695,223 +697,47 @@ print(y_all.keys())
 ** CV Scores
 *** utils
 
+ #+begin_src jupyter-python
+import mne
+mne.set_log_level("ERROR")
+#+end_src
+
+#+RESULTS:
+
 #+begin_src jupyter-python
-def _get_base_estimator(estimator):
-    est = getattr(estimator, "best_estimator_", estimator)
-    if hasattr(est, "named_steps"):  # Pipeline
-        return list(est.named_steps.values())[-1]
-    return est
-
-
 def overlaps_scorer(estimator, X, y, IF_SIGN=0, eps=1e-6):
-    clf = getattr(estimator, "best_estimator_", estimator)
+    """
+    Custom scorer called by MNE on a single fitted estimator, typically a Pipeline.
+    """
+    if not hasattr(estimator, "decision_function"):
+        raise AttributeError("Estimator has no decision_function method.")
 
-    if not hasattr(clf, "decision_function"):
-        raise AttributeError("Resolved estimator has no decision_function method.")
+    dec = np.asarray(estimator.decision_function(X))
 
-    model = _get_base_estimator(estimator)
-
-    if not hasattr(model, "coef_"):
-        raise AttributeError("Underlying model has no coef_ attribute.")
-
-    norm_w = np.linalg.norm(np.ravel(model.coef_)) + eps
-    # scores = clf.decision_function(X) / norm_w
-    scores = np.dot(X, model.coef_[0]) / norm_w
+    coef = _get_coef_single(estimator)
+    norm = np.linalg.norm(np.ravel(coef)) + eps
+    dec_norm = dec / norm
 
     if IF_SIGN:
-        scores = (2 * y - 1) * scores
+        sgn = 2 * np.asarray(y) - 1
+        dec_norm = sgn * dec_norm
 
-    return np.nanmean(scores)
+    return np.nanmean(dec_norm)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src jupyter-python
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
-from sklearn.pipeline import Pipeline
-from mne.decoding import SlidingEstimator, GeneralizingEstimator
-from tqdm.auto import tqdm
-from joblib import Parallel, delayed
-
-import numpy as np
-from sklearn.pipeline import Pipeline
-
-def _unwrap_to_coef_estimator(est):
-    """Return an estimator that exposes coef_, unwrapping common sklearn wrappers."""
-    seen = set()
-    while True:
-        if id(est) in seen:
-            raise RuntimeError(f"Cycle detected while unwrapping {est!r}")
-        seen.add(id(est))
-
-        if hasattr(est, "coef_"):
-            return est
-
-        # GridSearchCV / RandomizedSearchCV
-        if hasattr(est, "best_estimator_"):
-            est = est.best_estimator_
-            continue
-
-        # Pipeline: take final step
-        if isinstance(est, Pipeline) or hasattr(est, "named_steps") or hasattr(est, "steps"):
-            steps = est.steps if hasattr(est, "steps") else list(est.named_steps.items())
-            est = steps[-1][1]
-            continue
-
-        # generic meta-estimator pattern
-        if hasattr(est, "estimator_"):
-            est = est.estimator_
-            continue
-
-        raise AttributeError(f"Cannot find coef_ in {type(est)}")
-
-def _get_coefs(estimator):
-    coefs = []
-    for est_t in estimator.estimators_:
-        est_c = _unwrap_to_coef_estimator(est_t)
-        coefs.append(est_c.coef_)
-    return np.stack(coefs, axis=0)
-
-def cross_val_score(
-    X,
-    y,
-    clf=None,
-    label_col="sample_odor",
-    cv=None,
-    groups=None,
-    scoring="accuracy",
-    mode="generalizing",
-    stage="Expert",
-    task="DPA",
-    scaler=None,
-    n_jobs=128,
-):
-
-    start = perf_counter()
-
-    if isinstance(y, pd.DataFrame):
-        y_df = y.reset_index(drop=True)
-        labels = y_df[label_col].to_numpy()
-    else:
-        labels = np.asarray(y)
-        y_df = pd.DataFrame({label_col: labels})
-
-    m_clean = (
-        (y_df.laser == 0)
-        & (y_df.learning == stage)
-        & (y_df.performance == 1)
-        # & ((y_df.tasks == "DPA") | (y_df.odr_perf == 1))
-        & (y_df.tasks == task)
-    )
-
-    Xc = X[m_clean]
-    yc = y_df.loc[m_clean].reset_index(drop=True)
-    yc_labels = yc[label_col].to_numpy()
-
-    if clf is None:
-        clf = LogisticRegressionCV(cv=5, solver="liblinear", max_iter=100, class_weight="balanced", n_jobs=None)
-        # clf = LogisticRegression(solver="liblinear", max_iter=100, class_weight="balanced", n_jobs=None)
-        # clf = LinearDiscriminantAnalysis()
-
-    pipeline = []
-    if scaler is not None:
-        if scaler == 'standard':
-            pipeline.append(("scaler", StandardScaler()))
-        elif self.scaler == 'center':
-            pipeline.append(("scaler", StandardScaler(with_std=False)))
-
-    pipeline.append(("model", clf))
-    pipe = Pipeline(pipeline)
-
-    if mode == "sliding":
-        estimator = SlidingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-    else:
-        estimator = GeneralizingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-
-    if cv is None:
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
-
-    cv_scores, y_cv, cv_coefs = [], [], []
-    split_groups = None if groups is None else np.asarray(groups)[m_clean]
-
-    for train_idx, test_idx in cv.split(Xc, yc_labels, split_groups):
-
-        X_train, X_test = Xc[train_idx], Xc[test_idx]
-        y_train, y_test = yc_labels[train_idx], yc_labels[test_idx]
-
-        est = clone(estimator)
-        est.fit(X_train, y_train)
-
-        cv_coefs.append(_get_coefs(est))
-
-        # if folds == LeaveOneOut():
-        cv_score = est.score(X_test, y_test)
-        cv_scores.append(cv_score)
-        # else:
-
-        # for i in range(X_test.shape[0]):
-        #     cv_score = est.score(X_test[i:i+1], y_test[i:i+1])
-        #     cv_scores.append(cv_score)
-
-        # cv_scores = np.asarray(
-        #     Parallel(n_jobs=-1, backend="loky")(
-        #         delayed(est.score)(X_test[i:i+1], y_test[i:i+1])
-        #         for i in range(X_test.shape[0])
-        #     )
-        # )
-
-        y_cv.append(yc.iloc[test_idx].reset_index(drop=True))
-
-    cv_scores = np.asarray(cv_scores)
-    cv_coefs = np.asarray(cv_coefs)
-    y_cv = pd.concat(y_cv, axis=0, ignore_index=True)
-
-    print(cv_scores.shape, cv_coefs.shape, y_cv.shape)
-
-    est = clone(estimator)
-    est.fit(Xc, yc_labels)
-    coefs = _get_coefs(est)
-
-    m_pert = ~m_clean
-    if m_pert.mean() != 0:
-        Xp = X[m_pert]
-        yp = y.loc[m_pert].reset_index(drop=True)
-        yp_labels = yp[label_col].to_numpy()
-
-        print(Xp.shape, yp_labels.shape)
-
-        pert_scores = np.asarray(
-            Parallel(n_jobs=-1, backend="loky")(
-                delayed(est.score)(Xp[i:i+1], yp_labels[i:i+1])
-                for i in range(Xp.shape[0])
-            )
-        )
-
-        print(pert_scores.shape, cv_scores.shape)
-
-        Z_all = np.concatenate([cv_scores, pert_scores], axis=0)
-        y_all = pd.concat([y_cv, yp], axis=0, ignore_index=True)
-
-        end = perf_counter()
-        print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-
-        return Z_all, y_all, coefs
-
-    return cv_scores, y_cv, cv_coefs
+def smooth_and_bin2(X, sigma=1.0):
+    X_s = gaussian_filter1d(X, sigma=sigma, axis=-1, mode='nearest')
+    T = X_s.shape[-1]
+    assert T % 2 == 0
+    return X_s.reshape(*X_s.shape[:-1], T//2, 2).mean(-1)
 #+end_src
 
 #+RESULTS:
 
 #+begin_src jupyter-python
-import numpy as np
-from sklearn.base import clone
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import StratifiedKFold
-from sklearn.linear_model import LogisticRegressionCV
-
-
 def _unwrap_to_final_estimator(est):
     seen = set()
     while True:
@@ -971,66 +797,23 @@ def _normalize_decision_function(dec, coefs, eps=1e-6):
 #+RESULTS:
 
 #+begin_src jupyter-python
-def overlaps_scorer(estimator, X, y, IF_SIGN=0, eps=1e-6):
-    """
-    Custom scorer called by MNE on a single fitted estimator, typically a Pipeline.
-    """
-    if not hasattr(estimator, "decision_function"):
-        raise AttributeError("Estimator has no decision_function method.")
-
-    dec = np.asarray(estimator.decision_function(X))
-
-    coef = _get_coef_single(estimator)
-    norm = np.linalg.norm(np.ravel(coef)) + eps
-    dec_norm = dec / norm
-
-    if IF_SIGN:
-        sgn = 2 * np.asarray(y) - 1
-        dec_norm = sgn * dec_norm
-
-    return np.nanmean(dec_norm)
-#+end_src
-
-#+RESULTS:
-
-
-#+begin_src jupyter-python
+import numpy as np
+from sklearn.base import clone
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import StratifiedKFold
+from sklearn.linear_model import LogisticRegressionCV
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from mne.decoding import SlidingEstimator, GeneralizingEstimator
+from joblib import Parallel, delayed
 
-def cross_val_score(
-    X,
-    y,
-    clf=None,
-    label_col="sample_odor",
-    cv=None,
-    groups=None,
-    scoring="accuracy",
-    mode="generalizing",
-    scaler='standard',
-    stage='Expert',
-    context='DPA',
-    n_jobs=128,
-    return_decision_function=False,
-    normalize_decision_function=False,
+def get_estimator(
+        clf=None,
+        scoring="accuracy",
+        mode="generalizing",
+        scaler='standard',
+        n_jobs=-1,
 ):
-    start = perf_counter()
-
-    if isinstance(y, pd.DataFrame):
-        y_df = y.reset_index(drop=True)
-    else:
-        y_df = pd.DataFrame({label_col: np.asarray(y)})
-
-    m_clean = (
-        (y_df.laser == 0)
-        & (y_df.learning == stage)
-        & (y_df.performance == 1)
-        & (y_df.tasks == context)
-    )
-
-    Xc = X[m_clean]
-    yc = y_df.loc[m_clean].reset_index(drop=True)
-    yc_labels = yc[label_col].to_numpy()
-
     if clf is None:
         clf = LogisticRegressionCV(
             cv=5,
@@ -1038,7 +821,7 @@ def cross_val_score(
             max_iter=100,
             class_weight="balanced",
             n_jobs=None,
-            penalty='l1'
+            # penalty='l1',
         )
 
         # clf = LinearDiscriminantAnalysis(shrinkage='auto', solver='lsqr')
@@ -1058,143 +841,125 @@ def cross_val_score(
     else:
         estimator = GeneralizingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
 
+    return estimator
+
+def cross_val_score(
+    X,
+    y_df,
+    estimator,
+    label_col="sample_odor",
+    cv=None,
+    stage='Expert',
+    context='DPA',
+    n_jobs=-1,
+):
+    start = perf_counter()
+
     if cv is None:
-        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=None)
 
-    cv_scores, y_cv, cv_coefs, cv_intercepts = [], [], [], []
-    cv_decisions = [] if return_decision_function else None
+    m_within = (
+        (y_df.laser == 0)
+        & (y_df.learning == stage)
+        & (y_df.performance == 1)
+        & (y_df.tasks == context)
+    )
 
-    split_groups = None if groups is None else np.asarray(groups)[m_clean]
+    X_within = X[m_within]
+    y_within = y_df.loc[m_within].reset_index(drop=True)
+    y_within_labels = y_within[label_col].to_numpy()
 
-    for train_idx, test_idx in cv.split(Xc, yc_labels, split_groups):
-        X_train, X_test = Xc[train_idx], Xc[test_idx]
-        y_train, y_test = yc_labels[train_idx], yc_labels[test_idx]
+    print('X_within', X_within.shape, 'y_within', y_within.shape)
+
+    m_cross = (
+        (y_df.laser == 0)
+        & (y_df.learning == stage)
+        & (y_df.performance == 1)
+        & (y_df.tasks != context)
+    )
+
+    X_cross = X[m_cross]
+    y_cross = y_df.loc[m_cross].reset_index(drop=True)
+    y_cross_labels = y_cross[label_col].to_numpy()
+
+    print('X_cross', X_cross.shape, 'y_cross', y_cross.shape)
+
+    strata = (y_within["odor_pair"].astype(str) + "_" + y_within["day"].astype(str)).values
+
+    within_scores, y_cv_within = [], []
+    cross_scores, y_cv_cross = [], []
+
+    for train_idx, test_idx in cv.split(X_within, strata):
+        X_train, X_test = X_within[train_idx], X_within[test_idx]
+        y_train, y_test = y_within_labels[train_idx], y_within_labels[test_idx]
 
         est = clone(estimator)
         est.fit(X_train, y_train)
 
-        coefs_fold = _get_coefs(est)
-        cv_coefs.append(coefs_fold)
-        cv_intercepts.append(_get_intercepts(est))
+        within_proba = est.predict_proba(X_test)[..., 1]
+        within_score = y_test[:, None, None] * within_proba + (1 - y_test[:, None, None]) * (1 - within_proba)
 
-        # cv_scores.append(est.score(X_test, y_test))
+        within_scores.append(within_score)
+        y_cv_within.append(y_within.iloc[test_idx].reset_index(drop=True))
 
-        cv_score = np.asarray(
-            Parallel(n_jobs=-1, backend="loky")(
-                delayed(est.score)(X_test[i:i+1], y_test[i:i+1])
-                for i in range(X_test.shape[0])
-            )
-        )
-        cv_scores.append(cv_score)
+        cross_proba = est.predict_proba(X_cross)[..., 1]
+        cross_score = y_cross_labels[:, None, None] * cross_proba + (1 - y_cross_labels[:, None, None]) * (1 - cross_proba)
 
-        if return_decision_function:
-            dec = np.asarray(est.decision_function(X_test))
-            if normalize_decision_function:
-                dec = _normalize_decision_function(dec, coefs_fold)
-            cv_decisions.append(dec)
+        cross_scores.append(cross_score)
+        y_cv_cross.append(y_cross.reset_index(drop=True))
 
-        y_cv.append(yc.iloc[test_idx].reset_index(drop=True))
+    within_scores = np.vstack(within_scores)
+    y_cv_within = pd.concat(y_cv_within, axis=0, ignore_index=True)
 
-    cv_scores = np.vstack(cv_scores)
-    cv_coefs = np.asarray(cv_coefs)
-    cv_intercepts = np.asarray(cv_intercepts)
-    y_cv = pd.concat(y_cv, axis=0, ignore_index=True)
+    # cross_scores = np.vstack(cross_scores)
+    # y_cv_cross = pd.concat(y_cv_cross, axis=0, ignore_index=True)
 
-    print('cv_score', cv_scores.shape, 'y_cv', y_cv.shape)
+    cross_scores = np.stack(cross_scores, axis=0)   # (n_folds, n_cross, n_train_t, n_test_t)
+    cross_scores = cross_scores.mean(axis=0)        # (n_cross, n_train_t, n_test_t)
+    y_cv_cross = y_cross.reset_index(drop=True)
 
-    est = clone(estimator)
-    est.fit(Xc, yc_labels)
-    coefs = _get_coefs(est)
-    intercepts = _get_intercepts(est)
+    print('within_score', within_scores.shape, 'y_within', y_cv_within.shape)
+    print('cross_score', cross_scores.shape, 'y_cross', y_cv_cross.shape)
 
-    tasks = y_df.tasks.unique()
-    tasks = tasks[tasks!=context]
-
-    scores_list = [cv_scores]
-    y_list = [y_cv]
-
-    for task in tasks:
-        m_task = (
-            (y_df.laser == 0)
-            & (y_df.learning == stage)
-            & (y_df.performance == 1)
-            & (y_df.tasks == task)
-        )
-
-        if m_task.mean() != 0:
-            X_task = X[m_task]
-            y_task = y_df.loc[m_task].reset_index(drop=True)
-            y_task_labels = y_task[label_col].to_numpy()
-
-            print(X_task.shape, y_task_labels.shape)
-
-            task_scores = np.asarray(
-                Parallel(n_jobs=-1, backend="loky")(
-                    delayed(est.score)(X_task[i:i+1], y_task_labels[i:i+1])
-                    for i in range(X_task.shape[0])
-                )
-            )
-
-            print('task score X', task_scores.shape, 'y', y_task.shape)
-            scores_list.append(task_scores)
-            y_list.append(y_task)
-
-    Z_all = np.vstack(scores_list)
-    y_all = pd.concat(y_list, axis=0, ignore_index=True)
+    scores = np.vstack([within_scores, cross_scores])
+    y_cv = pd.concat([y_cv_within, y_cv_cross], axis=0, ignore_index=True)
 
     end = perf_counter()
     print("Elapsed (with compilation) = %dh %dm %ds" % convert_seconds(end - start))
-    return Z_all, y_all, coefs, intercepts
+
+    return scores, y_cv
 #+end_src
 
 #+RESULTS:
 
 *** model
 
- #+begin_src jupyter-python
-import mne
-mne.set_log_level("ERROR")
-#+end_src
-
-#+RESULTS:
-
 #+begin_src jupyter-python
-options['epochs'] = ['all']
-epoch = options['bins_' + options['epochs'][0]]
+dum = 'CCGD'
 
-dum = options['epochs'][0]
-options['learning'] = 'Expert'
-if options['learning'] is not None:
-    dum += '_' + options['learning']
+labels = 'sample'
+dum += '_' + labels
 
-dum += '_DPA'
-print(dum)
-#+end_src
-
-#+RESULTS:
-: all_Expert_DPA
-
-#+begin_src jupyter-python
-def smooth_and_bin2(X, sigma=1.0):
-    X_s = gaussian_filter1d(X, sigma=sigma, axis=-1, mode='nearest')
-    T = X_s.shape[-1]
-    assert T % 2 == 0
-    return X_s.reshape(*X_s.shape[:-1], T//2, 2).mean(-1)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
 mne_estimator = "generalizing"
-scoring = "f1_weighted"
+dum += '_' + mne_estimator
+
+scoring = "accuracy"
 dum += '_' + scoring
 
 if scoring=="overlaps":
     scoring = overlaps_scorer
 
+print(dum)
+#+end_src
+
+#+RESULTS:
+: CCGD_sample_generalizing_accuracy
+
+#+begin_src jupyter-python
 n_splits = 5
 n_repeats = 1
 folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+estimator = get_estimator(clf=None, scoring=scoring, mode=mne_estimator, scaler='standard', n_jobs=-1)
 # folds = LeaveOneOut()
 #+end_src
 
@@ -1211,31 +976,27 @@ print(options['mice'])
 stages = ['Naive', 'Expert']
 contexts = ['DPA', 'DualGo', 'DualNoGo']
 
-stages = ['Naive']
-contexts = ['DPA']
-
 X_mice, y_mice, w_mice = [], [], []
-for mouse in [options['mice'][3]]:
+for mouse in options['mice']:
+# for mouse in [options['mice'][5]]:
 
     X_stage, y_stage, w_stage = [], [], []
 
-    for stage in ['Naive', 'Expert']:
+    for stage in stages:
         idx = (y_all.mouse == mouse) & (y_all.learning == stage)
 
-        X_pca = X_all[idx]
-        y_pca = y_all.loc[idx].reset_index(drop=True)
+        X_df = X_all[idx]
+        y_df = y_all.loc[idx].reset_index(drop=True)
 
-        valid_neurons = ~np.all(np.isnan(X_pca), axis=(0, 2))
-        X_pca = X_pca[:, valid_neurons, :]
-        X_pca = smooth_and_bin2(X_pca, sigma=1.0)
+        valid_neurons = ~np.all(np.isnan(X_df), axis=(0, 2))
+        X_df = X_df[:, valid_neurons, :]
+        X_df = smooth_and_bin2(X_df, sigma=1.0)
 
-        Z_list, y_list, w_list = [], [], []
-        for context in ['DPA', 'DualGo', 'DualNoGo']:
+        Z_list, y_list = [], []
+        for context in contexts:
             print('mouse', mouse, 'stage', stage, 'context', context)
 
-            Z_, y_, _, _ = cross_val_score(X_pca, y_pca, clf=None, label_col="sample_odor", cv=folds, scoring=scoring ,
-                                            mode=mne_estimator, stage=stage, context=context)
-
+            Z_, y_ = cross_val_score(X_df, y_df,  estimator, label_col=labels, cv=folds, stage=stage, context=context)
             y_['context'] = context
 
             print('X', Z_.shape, 'y', y_.shape)
@@ -1252,95 +1013,436 @@ for mouse in [options['mice'][3]]:
         X_stage.append(Z_mouse)
         y_stage.append(y_mouse)
 
-    X_mice.append(X_stage)
+    X_mice.append(np.vstack(X_stage))
     y_mice.append(pd.concat(y_stage, axis=0, ignore_index=True))
 #+end_src
 
 #+RESULTS:
 #+begin_example
+mouse JawsM01 stage Naive context DPA
+X_within (75, 184, 42) y_within (75, 18)
+X_cross (141, 184, 42) y_cross (141, 18)
+within_score (75, 42, 42) y_within (75, 18)
+cross_score (141, 42, 42) y_cross (141, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (216, 42, 42) y (216, 19)
+mouse JawsM01 stage Naive context DualGo
+X_within (68, 184, 42) y_within (68, 18)
+X_cross (148, 184, 42) y_cross (148, 18)
+within_score (68, 42, 42) y_within (68, 18)
+cross_score (148, 42, 42) y_cross (148, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (216, 42, 42) y (216, 19)
+mouse JawsM01 stage Naive context DualNoGo
+X_within (73, 184, 42) y_within (73, 18)
+X_cross (143, 184, 42) y_cross (143, 18)
+within_score (73, 42, 42) y_within (73, 18)
+cross_score (143, 42, 42) y_cross (143, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (216, 42, 42) y (216, 19)
+Z (648, 42, 42) y (648, 20)
+mouse JawsM01 stage Expert context DPA
+X_within (31, 184, 42) y_within (31, 18)
+X_cross (60, 184, 42) y_cross (60, 18)
+within_score (31, 42, 42) y_within (31, 18)
+cross_score (60, 42, 42) y_cross (60, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (91, 42, 42) y (91, 19)
+mouse JawsM01 stage Expert context DualGo
+X_within (31, 184, 42) y_within (31, 18)
+X_cross (60, 184, 42) y_cross (60, 18)
+within_score (31, 42, 42) y_within (31, 18)
+cross_score (60, 42, 42) y_cross (60, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (91, 42, 42) y (91, 19)
+mouse JawsM01 stage Expert context DualNoGo
+X_within (29, 184, 42) y_within (29, 18)
+X_cross (62, 184, 42) y_cross (62, 18)
+within_score (29, 42, 42) y_within (29, 18)
+cross_score (62, 42, 42) y_cross (62, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (91, 42, 42) y (91, 19)
+Z (273, 42, 42) y (273, 20)
+mouse JawsM06 stage Naive context DPA
+X_within (60, 201, 42) y_within (60, 18)
+X_cross (123, 201, 42) y_cross (123, 18)
+within_score (60, 42, 42) y_within (60, 18)
+cross_score (123, 42, 42) y_cross (123, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (183, 42, 42) y (183, 19)
+mouse JawsM06 stage Naive context DualGo
+X_within (63, 201, 42) y_within (63, 18)
+X_cross (120, 201, 42) y_cross (120, 18)
+within_score (63, 42, 42) y_within (63, 18)
+cross_score (120, 42, 42) y_cross (120, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (183, 42, 42) y (183, 19)
+mouse JawsM06 stage Naive context DualNoGo
+X_within (60, 201, 42) y_within (60, 18)
+X_cross (123, 201, 42) y_cross (123, 18)
+within_score (60, 42, 42) y_within (60, 18)
+cross_score (123, 42, 42) y_cross (123, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (183, 42, 42) y (183, 19)
+Z (549, 42, 42) y (549, 20)
+mouse JawsM06 stage Expert context DPA
+X_within (84, 201, 42) y_within (84, 18)
+X_cross (164, 201, 42) y_cross (164, 18)
+within_score (84, 42, 42) y_within (84, 18)
+cross_score (164, 42, 42) y_cross (164, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (248, 42, 42) y (248, 19)
+mouse JawsM06 stage Expert context DualGo
+X_within (79, 201, 42) y_within (79, 18)
+X_cross (169, 201, 42) y_cross (169, 18)
+within_score (79, 42, 42) y_within (79, 18)
+cross_score (169, 42, 42) y_cross (169, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (248, 42, 42) y (248, 19)
+mouse JawsM06 stage Expert context DualNoGo
+X_within (85, 201, 42) y_within (85, 18)
+X_cross (163, 201, 42) y_cross (163, 18)
+within_score (85, 42, 42) y_within (85, 18)
+cross_score (163, 42, 42) y_cross (163, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (248, 42, 42) y (248, 19)
+Z (744, 42, 42) y (744, 20)
+mouse JawsM12 stage Naive context DPA
+X_within (62, 423, 42) y_within (62, 18)
+X_cross (120, 423, 42) y_cross (120, 18)
+within_score (62, 42, 42) y_within (62, 18)
+cross_score (120, 42, 42) y_cross (120, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (182, 42, 42) y (182, 19)
+mouse JawsM12 stage Naive context DualGo
+X_within (60, 423, 42) y_within (60, 18)
+X_cross (122, 423, 42) y_cross (122, 18)
+within_score (60, 42, 42) y_within (60, 18)
+cross_score (122, 42, 42) y_cross (122, 18)
+Elapsed (with compilation) = 0h 0m 7s
+X (182, 42, 42) y (182, 19)
+mouse JawsM12 stage Naive context DualNoGo
+X_within (60, 423, 42) y_within (60, 18)
+X_cross (122, 423, 42) y_cross (122, 18)
+within_score (60, 42, 42) y_within (60, 18)
+cross_score (122, 42, 42) y_cross (122, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (182, 42, 42) y (182, 19)
+Z (546, 42, 42) y (546, 20)
+mouse JawsM12 stage Expert context DPA
+X_within (50, 423, 42) y_within (50, 18)
+X_cross (91, 423, 42) y_cross (91, 18)
+within_score (50, 42, 42) y_within (50, 18)
+cross_score (91, 42, 42) y_cross (91, 18)
+Elapsed (with compilation) = 0h 0m 7s
+X (141, 42, 42) y (141, 19)
+mouse JawsM12 stage Expert context DualGo
+X_within (43, 423, 42) y_within (43, 18)
+X_cross (98, 423, 42) y_cross (98, 18)
+within_score (43, 42, 42) y_within (43, 18)
+cross_score (98, 42, 42) y_cross (98, 18)
+Elapsed (with compilation) = 0h 0m 7s
+X (141, 42, 42) y (141, 19)
+mouse JawsM12 stage Expert context DualNoGo
+X_within (48, 423, 42) y_within (48, 18)
+X_cross (93, 423, 42) y_cross (93, 18)
+within_score (48, 42, 42) y_within (48, 18)
+cross_score (93, 42, 42) y_cross (93, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (141, 42, 42) y (141, 19)
+Z (423, 42, 42) y (423, 20)
 mouse JawsM15 stage Naive context DPA
-cv_score (70, 42, 42) y_cv (70, 18)
-(70, 693, 42) (70,)
-task score X (70, 42, 42) y (70, 18)
-(55, 693, 42) (55,)
-task score X (55, 42, 42) y (55, 18)
-Elapsed (with compilation) = 0h 2m 0s
+X_within (70, 693, 42) y_within (70, 18)
+X_cross (125, 693, 42) y_cross (125, 18)
+within_score (70, 42, 42) y_within (70, 18)
+cross_score (125, 42, 42) y_cross (125, 18)
+Elapsed (with compilation) = 0h 0m 12s
 X (195, 42, 42) y (195, 19)
 mouse JawsM15 stage Naive context DualGo
-cv_score (55, 42, 42) y_cv (55, 18)
-(70, 693, 42) (70,)
-task score X (70, 42, 42) y (70, 18)
-(70, 693, 42) (70,)
-task score X (70, 42, 42) y (70, 18)
-Elapsed (with compilation) = 0h 2m 8s
+X_within (55, 693, 42) y_within (55, 18)
+X_cross (140, 693, 42) y_cross (140, 18)
+within_score (55, 42, 42) y_within (55, 18)
+cross_score (140, 42, 42) y_cross (140, 18)
+Elapsed (with compilation) = 0h 0m 11s
 X (195, 42, 42) y (195, 19)
 mouse JawsM15 stage Naive context DualNoGo
-cv_score (70, 42, 42) y_cv (70, 18)
-(55, 693, 42) (55,)
-task score X (55, 42, 42) y (55, 18)
-(70, 693, 42) (70,)
-task score X (70, 42, 42) y (70, 18)
-Elapsed (with compilation) = 0h 2m 7s
+X_within (70, 693, 42) y_within (70, 18)
+X_cross (125, 693, 42) y_cross (125, 18)
+within_score (70, 42, 42) y_within (70, 18)
+cross_score (125, 42, 42) y_cross (125, 18)
+Elapsed (with compilation) = 0h 0m 11s
 X (195, 42, 42) y (195, 19)
 Z (585, 42, 42) y (585, 20)
 mouse JawsM15 stage Expert context DPA
-cv_score (89, 42, 42) y_cv (89, 18)
-(82, 693, 42) (82,)
-task score X (82, 42, 42) y (82, 18)
-(78, 693, 42) (78,)
-task score X (78, 42, 42) y (78, 18)
-Elapsed (with compilation) = 0h 2m 0s
+X_within (89, 693, 42) y_within (89, 18)
+X_cross (160, 693, 42) y_cross (160, 18)
+within_score (89, 42, 42) y_within (89, 18)
+cross_score (160, 42, 42) y_cross (160, 18)
+Elapsed (with compilation) = 0h 0m 12s
 X (249, 42, 42) y (249, 19)
 mouse JawsM15 stage Expert context DualGo
-cv_score (78, 42, 42) y_cv (78, 18)
-(82, 693, 42) (82,)
-task score X (82, 42, 42) y (82, 18)
-(89, 693, 42) (89,)
-task score X (89, 42, 42) y (89, 18)
-Elapsed (with compilation) = 0h 2m 6s
+X_within (78, 693, 42) y_within (78, 18)
+X_cross (171, 693, 42) y_cross (171, 18)
+within_score (78, 42, 42) y_within (78, 18)
+cross_score (171, 42, 42) y_cross (171, 18)
+Elapsed (with compilation) = 0h 0m 11s
 X (249, 42, 42) y (249, 19)
 mouse JawsM15 stage Expert context DualNoGo
-cv_score (82, 42, 42) y_cv (82, 18)
-(89, 693, 42) (89,)
-task score X (89, 42, 42) y (89, 18)
-(78, 693, 42) (78,)
-task score X (78, 42, 42) y (78, 18)
-Elapsed (with compilation) = 0h 2m 3s
+X_within (82, 693, 42) y_within (82, 18)
+X_cross (167, 693, 42) y_cross (167, 18)
+within_score (82, 42, 42) y_within (82, 18)
+cross_score (167, 42, 42) y_cross (167, 18)
+Elapsed (with compilation) = 0h 0m 11s
 X (249, 42, 42) y (249, 19)
 Z (747, 42, 42) y (747, 20)
+mouse JawsM18 stage Naive context DPA
+X_within (80, 444, 42) y_within (80, 18)
+X_cross (155, 444, 42) y_cross (155, 18)
+within_score (80, 42, 42) y_within (80, 18)
+cross_score (155, 42, 42) y_cross (155, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (235, 42, 42) y (235, 19)
+mouse JawsM18 stage Naive context DualGo
+X_within (78, 444, 42) y_within (78, 18)
+X_cross (157, 444, 42) y_cross (157, 18)
+within_score (78, 42, 42) y_within (78, 18)
+cross_score (157, 42, 42) y_cross (157, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (235, 42, 42) y (235, 19)
+mouse JawsM18 stage Naive context DualNoGo
+X_within (77, 444, 42) y_within (77, 18)
+X_cross (158, 444, 42) y_cross (158, 18)
+within_score (77, 42, 42) y_within (77, 18)
+cross_score (158, 42, 42) y_cross (158, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (235, 42, 42) y (235, 19)
+Z (705, 42, 42) y (705, 20)
+mouse JawsM18 stage Expert context DPA
+X_within (95, 444, 42) y_within (95, 18)
+X_cross (188, 444, 42) y_cross (188, 18)
+within_score (95, 42, 42) y_within (95, 18)
+cross_score (188, 42, 42) y_cross (188, 18)
+Elapsed (with compilation) = 0h 0m 9s
+X (283, 42, 42) y (283, 19)
+mouse JawsM18 stage Expert context DualGo
+X_within (94, 444, 42) y_within (94, 18)
+X_cross (189, 444, 42) y_cross (189, 18)
+within_score (94, 42, 42) y_within (94, 18)
+cross_score (189, 42, 42) y_cross (189, 18)
+Elapsed (with compilation) = 0h 0m 9s
+X (283, 42, 42) y (283, 19)
+mouse JawsM18 stage Expert context DualNoGo
+X_within (94, 444, 42) y_within (94, 18)
+X_cross (189, 444, 42) y_cross (189, 18)
+within_score (94, 42, 42) y_within (94, 18)
+cross_score (189, 42, 42) y_cross (189, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (283, 42, 42) y (283, 19)
+Z (849, 42, 42) y (849, 20)
+mouse ChRM04 stage Naive context DPA
+X_within (80, 668, 42) y_within (80, 18)
+X_cross (154, 668, 42) y_cross (154, 18)
+within_score (80, 42, 42) y_within (80, 18)
+cross_score (154, 42, 42) y_cross (154, 18)
+Elapsed (with compilation) = 0h 0m 11s
+X (234, 42, 42) y (234, 19)
+mouse ChRM04 stage Naive context DualGo
+X_within (77, 668, 42) y_within (77, 18)
+X_cross (157, 668, 42) y_cross (157, 18)
+within_score (77, 42, 42) y_within (77, 18)
+cross_score (157, 42, 42) y_cross (157, 18)
+Elapsed (with compilation) = 0h 0m 11s
+X (234, 42, 42) y (234, 19)
+mouse ChRM04 stage Naive context DualNoGo
+X_within (77, 668, 42) y_within (77, 18)
+X_cross (157, 668, 42) y_cross (157, 18)
+within_score (77, 42, 42) y_within (77, 18)
+cross_score (157, 42, 42) y_cross (157, 18)
+Elapsed (with compilation) = 0h 0m 11s
+X (234, 42, 42) y (234, 19)
+Z (702, 42, 42) y (702, 20)
+mouse ChRM04 stage Expert context DPA
+X_within (88, 668, 42) y_within (88, 18)
+X_cross (176, 668, 42) y_cross (176, 18)
+within_score (88, 42, 42) y_within (88, 18)
+cross_score (176, 42, 42) y_cross (176, 18)
+Elapsed (with compilation) = 0h 0m 11s
+X (264, 42, 42) y (264, 19)
+mouse ChRM04 stage Expert context DualGo
+X_within (89, 668, 42) y_within (89, 18)
+X_cross (175, 668, 42) y_cross (175, 18)
+within_score (89, 42, 42) y_within (89, 18)
+cross_score (175, 42, 42) y_cross (175, 18)
+Elapsed (with compilation) = 0h 0m 12s
+X (264, 42, 42) y (264, 19)
+mouse ChRM04 stage Expert context DualNoGo
+X_within (87, 668, 42) y_within (87, 18)
+X_cross (177, 668, 42) y_cross (177, 18)
+within_score (87, 42, 42) y_within (87, 18)
+cross_score (177, 42, 42) y_cross (177, 18)
+Elapsed (with compilation) = 0h 0m 12s
+X (264, 42, 42) y (264, 19)
+Z (792, 42, 42) y (792, 20)
+mouse ChRM23 stage Naive context DPA
+X_within (63, 232, 42) y_within (63, 18)
+X_cross (135, 232, 42) y_cross (135, 18)
+within_score (63, 42, 42) y_within (63, 18)
+cross_score (135, 42, 42) y_cross (135, 18)
+Elapsed (with compilation) = 0h 0m 6s
+X (198, 42, 42) y (198, 19)
+mouse ChRM23 stage Naive context DualGo
+X_within (64, 232, 42) y_within (64, 18)
+X_cross (134, 232, 42) y_cross (134, 18)
+within_score (64, 42, 42) y_within (64, 18)
+cross_score (134, 42, 42) y_cross (134, 18)
+Elapsed (with compilation) = 0h 0m 6s
+X (198, 42, 42) y (198, 19)
+mouse ChRM23 stage Naive context DualNoGo
+X_within (71, 232, 42) y_within (71, 18)
+X_cross (127, 232, 42) y_cross (127, 18)
+within_score (71, 42, 42) y_within (71, 18)
+cross_score (127, 42, 42) y_cross (127, 18)
+Elapsed (with compilation) = 0h 0m 6s
+X (198, 42, 42) y (198, 19)
+Z (594, 42, 42) y (594, 20)
+mouse ChRM23 stage Expert context DPA
+X_within (48, 232, 42) y_within (48, 18)
+X_cross (97, 232, 42) y_cross (97, 18)
+within_score (48, 42, 42) y_within (48, 18)
+cross_score (97, 42, 42) y_cross (97, 18)
+Elapsed (with compilation) = 0h 0m 6s
+X (145, 42, 42) y (145, 19)
+mouse ChRM23 stage Expert context DualGo
+X_within (51, 232, 42) y_within (51, 18)
+X_cross (94, 232, 42) y_cross (94, 18)
+within_score (51, 42, 42) y_within (51, 18)
+cross_score (94, 42, 42) y_cross (94, 18)
+Elapsed (with compilation) = 0h 0m 6s
+X (145, 42, 42) y (145, 19)
+mouse ChRM23 stage Expert context DualNoGo
+X_within (46, 232, 42) y_within (46, 18)
+X_cross (99, 232, 42) y_cross (99, 18)
+within_score (46, 42, 42) y_within (46, 18)
+cross_score (99, 42, 42) y_cross (99, 18)
+Elapsed (with compilation) = 0h 0m 6s
+X (145, 42, 42) y (145, 19)
+Z (435, 42, 42) y (435, 20)
+mouse ACCM03 stage Naive context DPA
+X_within (133, 361, 42) y_within (133, 18)
+X_cross (239, 361, 42) y_cross (239, 18)
+within_score (133, 42, 42) y_within (133, 18)
+cross_score (239, 42, 42) y_cross (239, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (372, 42, 42) y (372, 19)
+mouse ACCM03 stage Naive context DualGo
+X_within (104, 361, 42) y_within (104, 18)
+X_cross (268, 361, 42) y_cross (268, 18)
+within_score (104, 42, 42) y_within (104, 18)
+cross_score (268, 42, 42) y_cross (268, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (372, 42, 42) y (372, 19)
+mouse ACCM03 stage Naive context DualNoGo
+X_within (135, 361, 42) y_within (135, 18)
+X_cross (237, 361, 42) y_cross (237, 18)
+within_score (135, 42, 42) y_within (135, 18)
+cross_score (237, 42, 42) y_cross (237, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (372, 42, 42) y (372, 19)
+Z (1116, 42, 42) y (1116, 20)
+mouse ACCM03 stage Expert context DPA
+X_within (122, 361, 42) y_within (122, 18)
+X_cross (227, 361, 42) y_cross (227, 18)
+within_score (122, 42, 42) y_within (122, 18)
+cross_score (227, 42, 42) y_cross (227, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (349, 42, 42) y (349, 19)
+mouse ACCM03 stage Expert context DualGo
+X_within (112, 361, 42) y_within (112, 18)
+X_cross (237, 361, 42) y_cross (237, 18)
+within_score (112, 42, 42) y_within (112, 18)
+cross_score (237, 42, 42) y_cross (237, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (349, 42, 42) y (349, 19)
+mouse ACCM03 stage Expert context DualNoGo
+X_within (115, 361, 42) y_within (115, 18)
+X_cross (234, 361, 42) y_cross (234, 18)
+within_score (115, 42, 42) y_within (115, 18)
+cross_score (234, 42, 42) y_cross (234, 18)
+Elapsed (with compilation) = 0h 0m 8s
+X (349, 42, 42) y (349, 19)
+Z (1047, 42, 42) y (1047, 20)
+mouse ACCM04 stage Naive context DPA
+X_within (108, 113, 42) y_within (108, 18)
+X_cross (224, 113, 42) y_cross (224, 18)
+within_score (108, 42, 42) y_within (108, 18)
+cross_score (224, 42, 42) y_cross (224, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (332, 42, 42) y (332, 19)
+mouse ACCM04 stage Naive context DualGo
+X_within (113, 113, 42) y_within (113, 18)
+X_cross (219, 113, 42) y_cross (219, 18)
+within_score (113, 42, 42) y_within (113, 18)
+cross_score (219, 42, 42) y_cross (219, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (332, 42, 42) y (332, 19)
+mouse ACCM04 stage Naive context DualNoGo
+X_within (111, 113, 42) y_within (111, 18)
+X_cross (221, 113, 42) y_cross (221, 18)
+within_score (111, 42, 42) y_within (111, 18)
+cross_score (221, 42, 42) y_cross (221, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (332, 42, 42) y (332, 19)
+Z (996, 42, 42) y (996, 20)
+mouse ACCM04 stage Expert context DPA
+X_within (93, 113, 42) y_within (93, 18)
+X_cross (190, 113, 42) y_cross (190, 18)
+within_score (93, 42, 42) y_within (93, 18)
+cross_score (190, 42, 42) y_cross (190, 18)
+Elapsed (with compilation) = 0h 0m 4s
+X (283, 42, 42) y (283, 19)
+mouse ACCM04 stage Expert context DualGo
+X_within (94, 113, 42) y_within (94, 18)
+X_cross (189, 113, 42) y_cross (189, 18)
+within_score (94, 42, 42) y_within (94, 18)
+cross_score (189, 42, 42) y_cross (189, 18)
+Elapsed (with compilation) = 0h 0m 5s
+X (283, 42, 42) y (283, 19)
+mouse ACCM04 stage Expert context DualNoGo
+X_within (96, 113, 42) y_within (96, 18)
+X_cross (187, 113, 42) y_cross (187, 18)
+within_score (96, 42, 42) y_within (96, 18)
+cross_score (187, 42, 42) y_cross (187, 18)
+Elapsed (with compilation) = 0h 0m 4s
+X (283, 42, 42) y (283, 19)
+Z (849, 42, 42) y (849, 20)
 #+end_example
 
 #+begin_src jupyter-python
-print(np.array(X_mice[0][0]).shape)
+# X_list = []
+# for i in range(9):
+#     X_list.append(np.vstack((X_mice[i][0], X_mice[i][1])))
+# X_single = np.vstack(X_list)
 #+end_src
 
 #+RESULTS:
-: (585, 42, 42)
 
 #+begin_src jupyter-python
-print(np.vstack((X_mice[0][0], X_mice[0][1])).shape)
-#+end_src
-
-#+RESULTS:
-: (1332, 42, 42)
-
-#+begin_src jupyter-python
-X_single = np.vstack(X_mice[0])
+X_single = np.vstack(X_mice)
 y_single = pd.concat(y_mice, ignore_index=True)
 print(X_single.shape, y_single.shape)
 #+end_src
 
 #+RESULTS:
-: (1332, 42, 42) (1332, 20)
+: (12600, 42, 42) (12600, 20)
 
 #+begin_src jupyter-python
-pkl_save(X_single, 'single_traj_' + dum, path="../data/cross/")
-pkl_save(y_single, 'single_labels_' + dum, path="../data/cross/")
+pkl_save(X_single, 'X_' + dum, path="../data/ccgd/")
+pkl_save(y_single, 'labels_' + dum, path="../data/ccgd/")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/cross//single_traj_all_Expert_DPA_f1_weighted_f1_weighted.pkl
-: saving to ../data/cross//single_labels_all_Expert_DPA_f1_weighted_f1_weighted.pkl
+: saving to ../data/ccgd//X_CCGD_sample_generalizing_accuracy.pkl
+: saving to ../data/ccgd//labels_CCGD_sample_generalizing_accuracy.pkl
 
 
 ** Load
@@ -1351,17 +1453,13 @@ y_single = pkl_load( 'single_labels_' + dum, path="../data/cross/")
 #+end_src
 
 #+RESULTS:
-: loading from ../data/cross//single_traj_all_Expert_DPA_accuracy.pkl
-: loading from ../data/cross//single_labels_all_Expert_DPA_accuracy.pkl
-: loading from ../data/cross//single_coefs_all_Expert_DPA_accuracy.pkl
 
 #+begin_src jupyter-python
 print(X_single.shape, y_single.shape)
 #+end_src
 
 #+RESULTS:
-: (1332, 42, 42) (1332, 18)
-
+: (12600, 42, 42) (12600, 20)
 
 ** Trajectories
 
@@ -1373,7 +1471,7 @@ print(X_epoch.shape)
 #+end_src
 
 #+RESULTS:
-: (1332, 42)
+: (12600, 42)
 
 #+begin_src jupyter-python
 n_comp = 3
@@ -1420,7 +1518,7 @@ for k, context in enumerate(contexts):
 
         ax[k].legend(fontsize=12, frameon=0, loc='best')
         ax[k].set_xlim([0, 14])
-        ax[k].set_ylim([0.4, 1.0])
+        ax[k].set_ylim([0.4, 0.8])
         ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
         ax[k].set_title(context)
 
@@ -1431,7 +1529,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singleClass/figure_43.png]]
+[[file:./figures/singleClass/figure_40.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1466,7 +1564,7 @@ for k, context in enumerate(contexts):
 
         ax[k].legend(fontsize=12, frameon=0, loc='best')
         ax[k].set_xlim([0, 14])
-        # ax[k].set_ylim([0.4, 1.0])
+        ax[k].set_ylim([0.4, 0.8])
         ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
         ax[k].set_title(context)
 
@@ -1477,10 +1575,198 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/singleClass/figure_44.png]]
+[[file:./figures/singleClass/figure_41.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+
+palette = sns.color_palette("muted")
+color = [palette[4], palette[5]]
+
+contexts = y_single.context.unique()
+tasks = y_single.tasks.unique()
+stages = y_single.stage.unique()
+
+xtime = np.linspace(0, 14, 42)
+
+for k, context in enumerate(contexts):
+    for i, stage in enumerate(stages):
+        mask = (y_single.stage==stage) & idx_mouse & (y_single.context==context)
+
+        X_sel = X_epoch[mask]
+
+        X_avg = X_sel.mean(0)
+        X_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])  # SEM
+
+        y_avg = X_avg
+        y_sem = X_sem
+
+        ax[k].plot(xtime, y_avg, color=color[i], label=stage)
+        ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+        ax[k].axhline(0.5, ls='--', color='k')
+        ax[k].set_xlabel('Time')
+        ax[k].set_ylabel('PC %d' % (k+1))
+        add_vlines(ax[k], if_dpa=0)
+
+        ax[k].legend(fontsize=12, frameon=0, loc='best')
+        ax[k].set_xlim([0, 14])
+        ax[k].set_ylim([0.4, 0.8])
+        ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+        ax[k].set_title(context)
+
+        ax[k].set_ylabel('Sample Code')
+
+plt.savefig('./figures/single/pca_traj_%s_tasks.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/singleClass/figure_42.png]]
 
 #+begin_src jupyter-python
 
 #+end_src
 
 #+RESULTS:
+
+#+begin_src jupyter-python
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+assert isinstance(y_single, pd.DataFrame)
+assert X_single.shape[0] == len(y_single)
+
+# decoding strength on the diagonal
+X_epoch = np.diagonal(X_single, axis1=-2, axis2=-1)   # (n_trials, n_time)
+
+df = y_single.reset_index(drop=True).copy()
+df["traj"] = list(X_epoch)
+
+# keep only correct non-laser trials
+df = df[(df["laser"] == 0) & (df["performance"] == 1)].copy()
+
+# delay bins after binning-by-2
+# if options["bins_DELAY"] exists in original 84-bin space, divide by 2
+delay_bins = options["bins_DELAY"] // 2
+
+rows = []
+for (mouse, context, task, stage), g in df.groupby(
+    ["mouse", "context", "tasks", "learning"], sort=False
+):
+    T = np.stack(g["traj"].to_numpy(), axis=0)   # (n_trials, n_time)
+
+    # mean decoding trajectory across trials
+    mean_traj = np.nanmean(T, axis=0)            # (n_time,)
+
+    # average strength in delay period
+    val = np.nanmean(mean_traj[delay_bins])
+
+    rows.append({
+        "mouse": mouse,
+        "context": context,
+        "task": task,
+        "stage": stage,
+        "value": val,
+        "n_trials": len(g),
+    })
+
+plot_df = pd.DataFrame(rows)
+# print(plot_df.shape)
+# display(plot_df.head())
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+df = plot_df.copy()
+
+# normalize stage labels
+if np.issubdtype(df["stage"].dtype, np.number):
+    df["stage"] = df["stage"].map({0: "Naive", 1: "Expert"})
+else:
+    df["stage"] = (
+        df["stage"].astype(str).str.strip().str.lower()
+        .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"})
+    )
+
+df = df[df["stage"].isin(["Naive", "Expert"])].copy()
+
+wide = (
+    df.pivot_table(
+        index=["mouse", "context", "task"],
+        columns="stage",
+        values="value",
+        aggfunc="mean"
+    )
+    .reset_index()
+    .dropna(subset=["Naive", "Expert"])
+)
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+mouse_order = sorted(wide["mouse"].unique())
+task_order = sorted(wide["task"].unique())
+context_order = sorted(wide["context"].unique())
+
+palette = dict(zip(mouse_order, sns.color_palette("tab10", n_colors=len(mouse_order))))
+markers = dict(zip(task_order, ["o", "s", "^", "D", "P", "X"][:len(task_order)]))
+
+g = sns.FacetGrid(
+    wide,
+    col="context",
+    col_order=context_order,
+    height=height,
+    aspect=1.0,
+    sharex=True,
+    sharey=True
+)
+
+def _scatter(data, **kwargs):
+    ax = plt.gca()
+    for task in task_order:
+        dsub = data[data["task"] == task]
+        sns.scatterplot(
+            data=dsub,
+            x="Naive", y="Expert",
+            hue="mouse", palette=palette,
+            style="task", markers=markers,
+            s=80, edgecolor="black", linewidth=0.4,
+            legend=False, ax=ax
+        )
+
+g.map_dataframe(_scatter)
+
+for ax, context in zip(g.axes.flat, context_order):
+    dsub = wide[wide["context"] == context]
+    vals = dsub[["Naive", "Expert"]].to_numpy().ravel()
+    vals = vals[np.isfinite(vals)]
+
+    if len(vals):
+        lo = vals.min()
+        hi = vals.max()
+        pad = 0.05 * (hi - lo + 1e-12)
+        lo -= pad
+        hi += pad
+    else:
+        lo, hi = 0.4, 1.0
+
+    ax.plot([lo, hi], [lo, hi], "--", color="0.4", lw=1)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_xlabel("Naive")
+    ax.set_ylabel("Expert")
+    ax.set_title(context)
+    ax.grid(False)
+    ax.tick_params(axis="both", which="both", direction="out", length=4, width=1)
+
+g.fig.tight_layout()
+plt.savefig(f'./figures/single/scatter_delay_context_task_{dum}.svg')
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/singleClass/figure_45.png]]

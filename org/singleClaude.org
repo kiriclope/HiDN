@@ -1,0 +1,1749 @@
+#+STARTUP: fold
+#+PROPERTY: header-args:jupyter-python :results both :exports both :async yes :session single :kernel dual :output-dir ./figures/fig2 :file (lc/org-babel-tangle-figure-filename)
+
+**** Notebook Settings
+
+#+begin_src jupyter-python
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/bin/python
+
+**** Imports
+
+#+begin_src jupyter-python
+import sys, os, warnings, itertools, pickle as pkl
+if not sys.warnoptions:
+    warnings.simplefilter("ignore")
+    os.environ["PYTHONWARNINGS"] = "ignore"
+
+sys.path.insert(0, '/home/leon/dual_task/dual_data/')
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import seaborn as sns
+
+from scipy.linalg import orthogonal_procrustes
+from scipy.stats import pearsonr, spearmanr, ttest_rel, wilcoxon
+from scipy.ndimage import gaussian_filter, gaussian_filter1d
+
+from sklearn.decomposition import PCA
+from sklearn.base import clone
+from sklearn.model_selection import (RepeatedStratifiedKFold, StratifiedKFold,
+                                     LeaveOneOut, cross_val_score)
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+
+from tqdm import tqdm
+
+from src.common.plot_utils import add_vlines, add_vdashed
+from src.common.options import set_options
+from src.stats.bootstrap import my_boots_ci
+from src.common.get_data import get_X_y_days, get_X_y_S1_S2
+from src.preprocess.helpers import avg_epochs
+
+os.makedirs('./figures/fig2', exist_ok=True)
+#+end_src
+
+#+RESULTS:
+
+**** Helpers
+***** IO
+
+#+begin_src jupyter-python
+def pkl_save(obj, name, path="."):
+    os.makedirs(path, exist_ok=True)
+    dest = os.path.join(path, name + ".pkl")
+    print("saving to", dest)
+    pkl.dump(obj, open(dest, "wb"))
+
+def pkl_load(name, path="."):
+    src = os.path.join(path, name + ".pkl")
+    print("loading from", src)
+    return pkl.load(open(src, "rb"))
+#+end_src
+
+#+RESULTS:
+
+***** Scalers
+
+#+begin_src jupyter-python
+class CenterScaler:
+    """Center (and optionally scale) along trial axis."""
+    def __init__(self, axis=0, scale=False):
+        self.axis = axis
+        self.scale = scale
+        self.center_ = None
+        self.scale_ = None
+
+    def fit(self, X):
+        self.center_ = np.nanmean(X, axis=self.axis, keepdims=True)
+        if self.scale:
+            self.scale_ = np.nanstd(X, axis=(self.axis, -1), keepdims=True)
+            lo, hi = np.nanpercentile(self.scale_.ravel(), [5, 95])
+            self.scale_ = np.clip(self.scale_, lo, hi)
+        return self
+
+    def transform(self, X):
+        out = X - self.center_
+        if self.scale and self.scale_ is not None:
+            out = out / self.scale_
+        return out
+
+    def fit_transform(self, X):
+        return self.fit(X).transform(X)
+#+end_src
+
+#+RESULTS:
+
+***** Array utilities
+
+#+begin_src jupyter-python
+def pad_to_common_neurons(arrays, n_neurons, neuron_offsets):
+    """Embed each mouse's array into a common neuron space with NaN padding."""
+    padded = []
+    for X, offset in zip(arrays, neuron_offsets):
+        P = np.full((X.shape[0], n_neurons, X.shape[-1]), np.nan)
+        P[:, offset:offset + X.shape[1], :] = X
+        padded.append(P)
+    return padded
+#+end_src
+
+#+RESULTS:
+
+***** Cross-validated PCA
+
+#+begin_src jupyter-python
+def get_levels(y, factors):
+    if isinstance(factors, str):
+        factors = [factors]
+    return {f: np.sort(y[f].astype(str).dropna().unique()) for f in factors}
+
+def _combo_mask(y, factors, combo):
+    m = np.ones(len(y), dtype=bool)
+    for f, v in zip(factors, combo):
+        s = y[f]
+        if np.issubdtype(s.dtype, np.number):
+            m &= (s.values == v)
+        else:
+            m &= (s.astype(str).values == str(v))
+    return m
+
+def cv_avg_cond(X, y, factors, levels, drop_missing=False):
+    if isinstance(factors, str):
+        factors = [factors]
+    combos = list(itertools.product(*[levels[f] for f in factors]))
+    X_avg = []
+    for combo in combos:
+        idx = _combo_mask(y, factors, combo)
+        if not idx.any():
+            if drop_missing:
+                continue
+            raise ValueError(f"Missing combo: {dict(zip(factors, combo))}")
+        X_avg.append(np.nanmean(X[idx], axis=0))
+    return np.stack(X_avg, axis=0), combos
+
+def anchors_from_Z(Z, y, factors, levels, drop_missing=False):
+    if isinstance(factors, str):
+        factors = [factors]
+    combos = list(itertools.product(*[levels[f] for f in factors]))
+    A = []
+    for combo in combos:
+        idx = _combo_mask(y, factors, combo)
+        if not idx.any():
+            if drop_missing:
+                continue
+            raise ValueError(f"Missing combo: {dict(zip(factors, combo))}")
+        A.append(np.nanmean(Z[idx], axis=0))
+    return np.stack(A, axis=0).reshape(-1, Z.shape[-1])
+
+def cv_pca(X, y, pca, folds, factors, X_raw=None,
+           epoch=None, scale=None, stage='Expert',
+           correct=True, context=None, show_pbar=True,
+           center_on="trialtime", align_folds=False):
+    """
+    Cross-validated PCA with optional Procrustes alignment across folds.
+
+    Parameters
+    ----------
+    X : (n_trials, n_neurons, n_time) — data for PCA fitting
+    y : DataFrame
+    X_raw : (n_trials, n_neurons, n_time) — raw data for test-set projection
+    epoch : time indices for fitting; None = full trial
+    scale : if not None, apply CenterScaler with scaling
+    stage : learning stage to include in clean mask
+    correct : if True, only use correct trials for fitting
+    """
+    if isinstance(factors, str):
+        factors = [factors]
+
+    def flat_trial_time(A):
+        # (trials, neurons, time) -> (trials*time, neurons)
+        return A.transpose(0, 2, 1).reshape(-1, A.shape[1])
+
+    # Build clean mask
+    m_clean = (y.laser == 0)
+    if stage is not None:
+        m_clean &= (y.learning == stage)
+    if correct:
+        m_clean &= (y.performance == 1)
+    if context is not None:
+        m_clean &= (y.tasks == context)
+
+    if X_raw is None:
+        X_raw = X.copy()
+
+    Xc = X[m_clean]
+    Xt = X_raw[m_clean]
+    yc = y.loc[m_clean].reset_index(drop=True)
+
+    # Optional scaling (fit on all clean data for perturbed projection)
+    sc_all = None
+    if scale is not None:
+        sc_all = CenterScaler(scale=True)
+        Xc = sc_all.fit_transform(Xc)
+
+    levels = get_levels(yc, factors)
+
+    # Fit canonical PCA on all clean data (for reference + perturbed projection)
+    Xc_ep = Xc if epoch is None else Xc[..., epoch]
+    X_avg_all, _ = cv_avg_cond(Xc_ep, yc, factors, levels, drop_missing=True)
+    X_avg_flat = flat_trial_time(X_avg_all)
+
+    if center_on == "trialtime":
+        X_mean_all = np.nanmean(flat_trial_time(Xc_ep), axis=0, keepdims=True)
+    else:
+        X_mean_all = np.nanmean(X_avg_flat, axis=0, keepdims=True)
+
+    pca_all = clone(pca).fit(X_avg_flat - X_mean_all)
+    W_ref = pca_all.components_
+    evr_all = pca_all.explained_variance_ratio_
+
+    # Reference anchors for Procrustes alignment
+    Zc_ep = pca_all.transform(flat_trial_time(Xc_ep) - X_mean_all)
+    Zc_ep = Zc_ep.reshape(Xc_ep.shape[0], Xc_ep.shape[-1], -1)
+    A_ref = anchors_from_Z(Zc_ep, yc, factors, levels, drop_missing=True)
+
+    # Build stratification for CV splits
+    strata = (yc["odor_pair"].astype(str) + "_" + yc["day"].astype(str)
+              + "_" + yc["tasks"].astype(str)).values
+
+    # Get iterator
+    n_total = folds.get_n_splits(Xc, strata)
+    it = folds.split(Xc, strata)
+    if show_pbar:
+        name = y.mouse.unique()[0] if "mouse" in y.columns else ""
+        it = tqdm(it, total=n_total, desc=name)
+
+    Z_folds, y_folds, evr_folds = [], [], []
+
+    for train, test in it:
+        X_train, y_train = Xc[train], yc.iloc[train].reset_index(drop=True)
+        X_test = Xt[test]
+        y_test = yc.iloc[test].reset_index(drop=True)
+
+        if scale is not None:
+            sc = CenterScaler(scale=True)
+            X_train = sc.fit_transform(X_train)
+            X_test = sc.transform(X_test)
+
+        X_train_ep = X_train if epoch is None else X_train[..., epoch]
+        try:
+            X_avg_tr, _ = cv_avg_cond(X_train_ep, y_train, factors, levels, drop_missing=True)
+        except ValueError:
+            # Missing condition combo in this fold — skip
+            continue
+
+        X_avg_fl = flat_trial_time(X_avg_tr)
+
+        if center_on == "trialtime":
+            X_mean = np.nanmean(flat_trial_time(X_train_ep), axis=0, keepdims=True)
+        else:
+            X_mean = np.nanmean(X_avg_fl, axis=0, keepdims=True)
+
+        pca_fold = clone(pca).fit(X_avg_fl - X_mean)
+        evr_folds.append(pca_fold.explained_variance_ratio_)
+
+        W = pca_fold.components_
+        Z_test = flat_trial_time(X_test) @ W.T
+        Z_test = Z_test.reshape(X_test.shape[0], X_test.shape[-1], -1)
+
+        if align_folds:
+            Z_tr_ep = pca_fold.transform(flat_trial_time(X_train_ep) - X_mean)
+            Z_tr_ep = Z_tr_ep.reshape(X_train_ep.shape[0], X_train_ep.shape[-1], -1)
+            A_train = anchors_from_Z(Z_tr_ep, y_train, factors, levels, drop_missing=True)
+            R, _ = orthogonal_procrustes(A_train, A_ref)
+            Z_test = Z_test @ R
+
+        Z_folds.append(Z_test)
+        y_folds.append(y_test)
+
+    # Project perturbed (laser-on) trials using full-data PCA
+    m_pert = ~m_clean
+    if np.any(m_pert):
+        Xp = X_raw[m_pert]
+        yp = y.loc[m_pert].reset_index(drop=True)
+        if sc_all is not None:
+            Xp = sc_all.transform(Xp)
+        Zp = flat_trial_time(Xp) @ W_ref.T
+        Zp = Zp.reshape(Xp.shape[0], Xp.shape[-1], -1)
+        Z_all = np.concatenate([np.concatenate(Z_folds, 0), Zp], 0)
+        y_all_out = pd.concat([pd.concat(y_folds, ignore_index=True), yp], ignore_index=True)
+    else:
+        Z_all = np.concatenate(Z_folds, 0)
+        y_all_out = pd.concat(y_folds, ignore_index=True)
+
+    return Z_all, y_all_out, W_ref, np.array(evr_folds, dtype=object)
+#+end_src
+
+#+RESULTS:
+
+***** Geometry helpers
+
+#+begin_src jupyter-python
+def participation_ratio(eigenvalues):
+    """PR = (sum lambda_i)^2 / sum(lambda_i^2)."""
+    ev = np.asarray(eigenvalues, dtype=float)
+    ev = ev[ev > 0]
+    return (ev.sum()) ** 2 / (ev ** 2).sum()
+
+def epoch_xy(X, bins, x_idx=0, y_idx=1):
+    """Mean position in a 2D plane over a time epoch."""
+    x = np.nanmean(X[:, x_idx, bins], axis=-1)
+    y = np.nanmean(X[:, y_idx, bins], axis=-1)
+    return x, y
+
+def traj_xy(X, bins=None, x_idx=0, y_idx=1):
+    if bins is None:
+        return X[:, x_idx, :], X[:, y_idx, :]
+    return X[:, x_idx, bins], X[:, y_idx, bins]
+
+def subspace_angle_vectors(w1, w2):
+    """Angle in degrees between two vectors."""
+    w1n = w1 / (np.linalg.norm(w1) + 1e-12)
+    w2n = w2 / (np.linalg.norm(w2) + 1e-12)
+    return np.rad2deg(np.arccos(np.clip(np.abs(w1n @ w2n), 0, 1)))
+
+def distance_to_boundary(X_latent, y, bins, x_idx=0, y_idx=1,
+                         label_col='choice', stage='Expert'):
+    """
+    Fit logistic boundary on expert laser-off correct trials,
+    return signed distance per trial (positive = correct side).
+    """
+    mask_fit = ((y.laser == 0) & (y.learning == stage) &
+                (y.performance == 1)).values
+    x_fit, y_fit_coord = epoch_xy(X_latent[mask_fit], bins, x_idx, y_idx)
+    features = np.column_stack([x_fit, y_fit_coord])
+    labels = y.loc[mask_fit, label_col].values.astype(int)
+
+    clf = LogisticRegression(solver='lbfgs', max_iter=1000).fit(features, labels)
+
+    # Signed distance for ALL trials
+    x_all, y_all = epoch_xy(X_latent, bins, x_idx, y_idx)
+    feat_all = np.column_stack([x_all, y_all])
+    w = clf.coef_[0]
+    b = clf.intercept_[0]
+    raw_dist = (feat_all @ w + b) / np.linalg.norm(w)
+
+    # Sign: positive if prediction matches true label
+    pred_label = (raw_dist > 0).astype(int)
+    true_label = y[label_col].values.astype(int)
+    signed = np.where(pred_label == true_label, np.abs(raw_dist), -np.abs(raw_dist))
+    return signed, clf
+#+end_src
+
+#+RESULTS:
+
+***** Flow field helpers
+
+#+begin_src jupyter-python
+def flow_field_midpoint(x, y, dt=1.0, bins=25, xrange=None, yrange=None, min_count=1):
+    """Bin-averaged velocity field using segment midpoints."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n_trials, n_time = x.shape
+
+    u = (x[:, 1:] - x[:, :-1]) / dt
+    v = (y[:, 1:] - y[:, :-1]) / dt
+    xm = 0.5 * (x[:, 1:] + x[:, :-1])
+    ym = 0.5 * (y[:, 1:] + y[:, :-1])
+
+    if xrange is None: xrange = (np.nanmin(xm), np.nanmax(xm))
+    if yrange is None: yrange = (np.nanmin(ym), np.nanmax(ym))
+
+    if isinstance(bins, int):
+        nx = ny = bins
+    else:
+        nx, ny = bins
+
+    xedges = np.linspace(xrange[0], xrange[1], nx + 1)
+    yedges = np.linspace(yrange[0], yrange[1], ny + 1)
+
+    xf, yf = xm.ravel(), ym.ravel()
+    uf, vf = u.ravel(), v.ravel()
+
+    # Remove NaNs
+    finite = np.isfinite(xf) & np.isfinite(yf) & np.isfinite(uf) & np.isfinite(vf)
+    xf, yf, uf, vf = xf[finite], yf[finite], uf[finite], vf[finite]
+
+    ix = np.searchsorted(xedges, xf, side="right") - 1
+    iy = np.searchsorted(yedges, yf, side="right") - 1
+    valid = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny)
+    ix, iy, uf, vf = ix[valid], iy[valid], uf[valid], vf[valid]
+
+    count = np.zeros((nx, ny), int)
+    usum = np.zeros((nx, ny))
+    vsum = np.zeros((nx, ny))
+    np.add.at(count, (ix, iy), 1)
+    np.add.at(usum, (ix, iy), uf)
+    np.add.at(vsum, (ix, iy), vf)
+
+    U = np.where(count >= min_count, usum / np.maximum(count, 1), np.nan)
+    V = np.where(count >= min_count, vsum / np.maximum(count, 1), np.nan)
+    return xedges, yedges, U, V, count
+
+def compute_speed_field(x, y, bins=25, dt=1.0, smooth=1.0, min_count=5):
+    xedges, yedges, U, V, C = flow_field_midpoint(x, y, dt=dt, bins=bins)
+    speed = np.sqrt(U**2 + V**2)
+    speed = np.where(C >= min_count, speed, np.nan)
+    if smooth and smooth > 0:
+        U = gaussian_filter(np.nan_to_num(U), smooth)
+        V = gaussian_filter(np.nan_to_num(V), smooth)
+        s0 = gaussian_filter(np.nan_to_num(speed), smooth)
+        n0 = gaussian_filter(np.isfinite(speed).astype(float), smooth)
+        speed = np.where(n0 > 0, s0 / n0, np.nan)
+    return xedges, yedges, speed, U, V, C
+
+def occupancy_map(x, y, bins=25, zlim=None, smooth=1.0):
+    xf, yf = x.flatten(), y.flatten()
+    finite = np.isfinite(xf) & np.isfinite(yf)
+    xf, yf = xf[finite], yf[finite]
+    if zlim is None:
+        zlim = np.nanmax(np.abs(np.r_[xf, yf]))
+    xedges = np.linspace(-zlim, zlim, bins + 1)
+    yedges = np.linspace(-zlim, zlim, bins + 1)
+    H, _, _ = np.histogram2d(xf, yf, bins=[xedges, yedges])
+    H = H.T
+    if smooth and smooth > 0:
+        H = gaussian_filter(H, smooth)
+    mx = np.nanmax(H)
+    H = H / mx if mx > 0 else H
+    return xedges, yedges, H
+#+end_src
+
+#+RESULTS:
+
+***** Plotting helpers
+
+#+begin_src jupyter-python
+def add_crosshair(ax):
+    ax.axhline(0, ls='--', color='k', lw=0.8)
+    ax.axvline(0, ls='--', color='k', lw=0.8)
+
+def get_stage_mask(y, stage, tasks=None, laser=0, perf=None):
+    mask = (y.learning == stage) & (y.laser == laser)
+    if tasks is not None:
+        if isinstance(tasks, str):
+            tasks = [tasks]
+        mask &= y.tasks.isin(tasks)
+    if perf is not None:
+        mask &= (y.performance == perf)
+    return mask.values
+
+# Canonical colors
+COL_A, COL_B = '#44AA99', '#332288'
+COL_LICK, COL_NOLICK = '#4daf4a', '#377eb8'
+COL_CR, COL_FA = '#377eb8', '#e41a1c'
+COL_PAIRS = ['#332288', '#88CCEE', '#117733', '#44AA99']
+PAIR_LABELS = ['AC', 'AD', 'BD', 'BC']
+#+end_src
+
+#+RESULTS:
+
+**** Parameters
+
+#+begin_src jupyter-python
+mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18',
+        'ChRM04', 'ChRM23', 'ACCM03', 'ACCM04']
+laser_mice = ['JawsM01', 'JawsM06', 'JawsM12', 'JawsM15', 'JawsM18',
+              'ChRM04', 'ChRM23']
+
+kwargs = dict(
+    mice=mice, tasks=['Dual'], mouse=mice[0], laser=0,
+    trials='', reload=0, data_type='dF',
+    prescreen=None, pval=0.05,
+    preprocess=True, scaler_BL='center_BL',
+    avg_noise=False, unit_var_BL=False,
+    random_state=None, T_WINDOW=0.0,
+    l1_ratio=0.95, n_comp=3, pca='pca',
+    scaler=None, bootstrap=1, n_boots=128,
+    n_splits=5, n_repeats=10,
+    class_weight=0, multilabel=0,
+    mne_estimator='generalizing', n_jobs=64,
+    days=['first', 'last'],
+)
+
+options = set_options(**kwargs)
+options['cv_B'] = False
+
+# Axis assignments
+X_IDX = 0  # PC1 = sample axis
+Y_IDX = 1  # PC2 = choice axis
+Z_IDX = 2  # PC3 = test axis
+
+stages = ['Naive', 'Expert']
+#+end_src
+
+#+RESULTS:
+
+**** Load and Concatenate Data
+
+#+begin_src jupyter-python
+X_trials, y_trials = [], []
+neuron_counts = []
+
+# Store a clean copy of options to restore after the loop
+opts_base = dict(options)
+
+for mouse in opts_base['mice']:
+    opts_mouse = set_options(**{**opts_base, 'mouse': mouse})
+    X, y = get_X_y_days(**opts_mouse)
+    print(f"{mouse}: X={X.shape}, y={y.shape}, n_days={opts_mouse['n_days']}")
+
+    # Center per day using laser-off trials
+    for day in range(1, opts_mouse['n_days'] + 1):
+        idx0 = (y.day == day) & (y.laser == 0)
+        mean_ = np.nanmean(X[idx0], 0, keepdims=True)
+        idx_day = (y.day == day)
+        X[idx_day] = X[idx_day] - mean_
+
+    neuron_counts.append(X.shape[1])
+    y['mouse'] = mouse
+    X_trials.append(X)
+    y_trials.append(y)
+
+# Restore options
+options = set_options(**opts_base)
+
+n_neurons_total = sum(neuron_counts)
+print(f"\nTotal neurons: {n_neurons_total}")
+
+# Pad into common neuron space
+offsets = [0] + list(np.cumsum(neuron_counts[:-1]))
+X_padded = pad_to_common_neurons(X_trials, n_neurons_total, offsets)
+
+X_all = np.concatenate(X_padded, 0)
+y_all = pd.concat(y_trials, ignore_index=True)
+y_all['sample'] = y_all.sample_odor
+y_all['test'] = y_all.test_odor
+print(f"X_all: {X_all.shape}, y_all: {y_all.shape}")
+#+end_src
+
+#+RESULTS:
+#+begin_example
+JawsM01: X=(768, 184, 84), y=(768, 15), n_days=4
+JawsM06: X=(1152, 201, 84), y=(1152, 15), n_days=6
+JawsM12: X=(960, 423, 84), y=(960, 15), n_days=5
+JawsM15: X=(1152, 693, 84), y=(1152, 15), n_days=6
+JawsM18: X=(1152, 444, 84), y=(1152, 15), n_days=6
+ChRM04: X=(1152, 668, 84), y=(1152, 15), n_days=6
+ChRM23: X=(960, 232, 84), y=(960, 15), n_days=5
+ACCM03: X=(960, 361, 84), y=(960, 15), n_days=5
+ACCM04: X=(960, 113, 84), y=(960, 15), n_days=5
+
+Total neurons: 3319
+X_all: (9216, 3319, 84), y_all: (9216, 18)
+#+end_example
+
+#+begin_src jupyter-python
+pkl_save(X_all, 'X_all_nan', path="../data/pca")
+pkl_save(y_all, 'y_all_nan', path="../data/pca")
+#+end_src
+
+#+RESULTS:
+: saving to ../data/pca/X_all_nan.pkl
+: saving to ../data/pca/y_all_nan.pkl
+
+**** Cross-Validated PCA per Mouse + Alignment
+***** Configuration
+
+#+begin_src jupyter-python
+# --- PCA settings ---
+dum = 'fig2'
+epoch_name = 'TEST'
+epoch = options['bins_' + epoch_name] if epoch_name else None
+stage = 'Expert'
+pca_scale = None  # set to 'std' if needed
+
+if epoch_name: dum += '_' + epoch_name
+if stage: dum += '_' + stage
+if pca_scale: dum += '_' + pca_scale
+
+n_comp = 10
+factors = 'odor_pair'
+n_splits, n_repeats = 5, 2
+
+pca = PCA(n_components=n_comp, svd_solver='randomized')
+folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
+
+print(f"Config: {dum}, n_comp={n_comp}, folds={n_splits}x{n_repeats}")
+print(f"Epoch: {epoch_name} -> {epoch[:3]}...{epoch[-3:]} ({len(epoch)} bins)")
+#+end_src
+
+#+RESULTS:
+: Config: fig2_TEST_Expert, n_comp=10, folds=5x2
+: Epoch: TEST -> [54 55 56]...[57 58 59] (6 bins)
+
+***** Run CV-PCA per mouse
+
+#+begin_src jupyter-python
+X_mice, y_mice, w_mice, evr_mice = [], [], [], []
+
+for mouse in options['mice']:
+    idx = (y_all['mouse'] == mouse).values
+    X_m = X_all[idx]
+    y_m = y_all.loc[idx].reset_index(drop=True)
+
+    # Drop NaN-padded neurons (those belonging to other mice)
+    valid = ~np.all(np.isnan(X_m), axis=(0, 2))
+    X_m_valid = X_m[:, valid, :]
+
+    Z, ym, W, evr = cv_pca(
+        X_m_valid, y_m, pca, folds, factors, X_m_valid,
+        epoch=epoch, scale=pca_scale, stage=stage, correct=True,
+        show_pbar=True
+    )
+
+    X_mice.append(Z)
+    y_mice.append(ym)
+    w_mice.append(W)
+    evr_mice.append(evr)
+
+print("CV-PCA complete for all mice")
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Unexpected exception formatting exception. Falling back to standard exception
+Traceback (most recent call last):
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/IPython/core/interactiveshell.py", line 3508, in run_code
+    exec(code_obj, self.user_global_ns, self.user_ns)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leon/tmp/ipykernel_2165043/381839764.py", line 12, in <module>
+    Z, ym, W, evr = cv_pca(
+                    ~~~~~~^
+        X_m_valid, y_m, pca, folds, factors, X_m_valid,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        epoch=epoch, scale=pca_scale, stage=stage, correct=True,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        show_pbar=True
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/leon/tmp/ipykernel_2165043/3894621419.py", line 94, in cv_pca
+    X_avg_all, _ = cv_avg_cond(Xc_ep, yc, factors, levels, drop_missing=True)
+                   ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leon/tmp/ipykernel_2165043/3894621419.py", line 28, in cv_avg_cond
+    return np.stack(X_avg, axis=0), combos
+           ~~~~~~~~^^^^^^^^^^^^^^^
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/numpy/_core/shape_base.py", line 454, in stack
+    raise ValueError('need at least one array to stack')
+ValueError: need at least one array to stack
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/IPython/core/interactiveshell.py", line 2105, in showtraceback
+    stb = self.InteractiveTB.structured_traceback(
+        etype, value, tb, tb_offset=tb_offset
+    )
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/IPython/core/ultratb.py", line 1428, in structured_traceback
+    return FormattedTB.structured_traceback(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self, etype, evalue, etb, tb_offset, number_of_lines_of_context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/IPython/core/ultratb.py", line 1319, in structured_traceback
+    return VerboseTB.structured_traceback(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self, etype, value, tb, tb_offset, number_of_lines_of_context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/IPython/core/ultratb.py", line 1172, in structured_traceback
+    formatted_exception = self.format_exception_as_a_whole(etype, evalue, etb, number_of_lines_of_context,
+                                                           tb_offset)
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/IPython/core/ultratb.py", line 1062, in format_exception_as_a_whole
+    self.get_records(etb, number_of_lines_of_context, tb_offset) if etb else []
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/IPython/core/ultratb.py", line 1159, in get_records
+    res = list(stack_data.FrameInfo.stack_data(etb, options=options))[tb_offset:]
+          ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/stack_data/core.py", line 597, in stack_data
+    yield from collapse_repeated(
+    ...<4 lines>...
+    )
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/stack_data/utils.py", line 83, in collapse_repeated
+    yield from map(mapper, original_group)
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/stack_data/core.py", line 587, in mapper
+    return cls(f, options)
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/stack_data/core.py", line 551, in __init__
+    self.executing = Source.executing(frame_or_tb)
+                     ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/executing/executing.py", line 378, in executing
+    assert_(new_stmts <= stmts)
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/home/leon/mambaforge/lib/python3.14/site-packages/executing/executing.py", line 154, in assert_
+    raise AssertionError(str(message))
+AssertionError
+#+end_example
+***** Cross-Mouse Procrustes Alignment
+
+#+begin_src jupyter-python
+y_pool = pd.concat(y_mice, ignore_index=True)
+levels = get_levels(y_pool, factors)
+
+# Reference mouse: largest neuron count for stability
+ref_idx = np.argmax(neuron_counts)
+print(f"Reference mouse: {options['mice'][ref_idx]} (idx {ref_idx}, "
+      f"{neuron_counts[ref_idx]} neurons)")
+
+A_ref = anchors_from_Z(X_mice[ref_idx], y_mice[ref_idx], factors, levels,
+                        drop_missing=False)
+
+X_mice_aligned = []
+for Z_mouse, y_mouse in zip(X_mice, y_mice):
+    A = anchors_from_Z(Z_mouse, y_mouse, factors, levels, drop_missing=False)
+    R, _ = orthogonal_procrustes(A, A_ref)
+    X_mice_aligned.append(Z_mouse @ R)
+
+X_aligned = np.concatenate(X_mice_aligned, axis=0)
+y_aligned = pd.concat(y_mice, ignore_index=True)
+
+# (trials, time, components) -> (trials, components, time)
+X_single = np.swapaxes(X_aligned, 1, 2)
+y_single = y_aligned
+print(f"X_single: {X_single.shape}, y_single: {y_single.shape}")
+#+end_src
+
+***** Orient PC axes
+
+#+begin_src jupyter-python
+# PC1: positive = sample A preferred (during stimulus)
+bins_stim = options['bins_STIM']
+mask_A = ((y_single.laser == 0) & (y_single.performance == 1) &
+          (y_single.sample_odor == 0)).values
+mask_B = ((y_single.laser == 0) & (y_single.performance == 1) &
+          (y_single.sample_odor == 1)).values
+
+m_A = np.nanmean(X_single[mask_A][:, X_IDX, bins_stim])
+m_B = np.nanmean(X_single[mask_B][:, X_IDX, bins_stim])
+if m_A < m_B:
+    print('Flipping PC1')
+    X_single[:, X_IDX, :] *= -1
+else:
+    print('PC1 OK')
+
+# PC2: positive = lick (during choice/response window)
+bins_choice = options['bins_CHOICE']
+mask_lick = ((y_single.laser == 0) & (y_single.performance == 1) &
+             (y_single.choice == 1)).values
+mask_nolick = ((y_single.laser == 0) & (y_single.performance == 1) &
+               (y_single.choice == 0)).values
+
+m_lick = np.nanmean(X_single[mask_lick][:, Y_IDX, bins_choice])
+m_nolick = np.nanmean(X_single[mask_nolick][:, Y_IDX, bins_choice])
+if m_lick < m_nolick:
+    print('Flipping PC2')
+    X_single[:, Y_IDX, :] *= -1
+else:
+    print('PC2 OK')
+
+# PC3: positive = test C
+bins_test = options['bins_TEST']
+mask_C = ((y_single.laser == 0) & (y_single.performance == 1) &
+          (y_single.test_odor == 0)).values
+mask_D = ((y_single.laser == 0) & (y_single.performance == 1) &
+          (y_single.test_odor == 1)).values
+
+m_C = np.nanmean(X_single[mask_C][:, Z_IDX, bins_test])
+m_D = np.nanmean(X_single[mask_D][:, Z_IDX, bins_test])
+if m_C < m_D:
+    print('Flipping PC3')
+    X_single[:, Z_IDX, :] *= -1
+else:
+    print('PC3 OK')
+
+print('Axis orientation complete')
+#+end_src
+
+***** Aggregate EVR and weights
+
+#+begin_src jupyter-python
+# EVR: average across folds per mouse, then stack across mice
+evr_single = np.vstack([np.mean(np.vstack(e), axis=0) for e in evr_mice])
+# Weights: concatenate neuron dimension across mice, scale for readability
+w_single = np.concatenate(w_mice, axis=-1) * 100
+print(f"Weights: {w_single.shape}, EVR: {evr_single.shape}")
+#+end_src
+
+***** Save / Load
+
+#+begin_src jupyter-python
+pkl_save(X_single, 'X_' + dum, path="../data/pca/")
+pkl_save(y_single, 'y_' + dum, path="../data/pca/")
+pkl_save(w_single, 'w_' + dum, path="../data/pca/")
+pkl_save(evr_single, 'evr_' + dum, path="../data/pca/")
+#+end_src
+
+#+begin_src jupyter-python
+X_single = pkl_load('X_' + dum, path="../data/pca/")
+y_single = pkl_load('y_' + dum, path="../data/pca/")
+w_single = pkl_load('w_' + dum, path="../data/pca/")
+evr_single = pkl_load('evr_' + dum, path="../data/pca/")
+
+# Redefine key epoch bins from options
+bins_stim = options['bins_STIM']
+bins_choice = options['bins_CHOICE']
+bins_test = options['bins_TEST']
+bins_delay = options['bins_DELAY']
+bins_late = options['bins_LD']
+bins_bl = options['bins_BL']
+
+print(f"Loaded: X={X_single.shape}, y={y_single.shape}")
+#+end_src
+
+**** Figure 2B: Scree Plot + Participation Ratio
+
+#+begin_src jupyter-python
+evr_mean = evr_single.mean(0)
+evr_sem = 1.96 * evr_single.std(0, ddof=1) / np.sqrt(evr_single.shape[0])
+n_pcs = np.arange(1, len(evr_mean) + 1)
+
+# Participation ratio per mouse (from mean EVR across folds)
+pr_mice = [participation_ratio(evr_single[i]) for i in range(evr_single.shape[0])]
+pr_mean = np.mean(pr_mice)
+pr_ci = 1.96 * np.std(pr_mice, ddof=1) / np.sqrt(len(pr_mice))
+
+fig, ax = plt.subplots(1, 1, figsize=(width, height))
+ax.plot(n_pcs, evr_mean, '-o', markersize=4)
+ax.fill_between(n_pcs, evr_mean - evr_sem, evr_mean + evr_sem, alpha=0.2)
+ax.set_xlabel('PC #')
+ax.set_ylabel('Explained Variance Ratio')
+ax.set_ylim([0, 0.5])
+ax.set_yticks([0, 0.1, 0.2, 0.3, 0.4, 0.5])
+ax.set_title(f'PR = {pr_mean:.1f} [{pr_mean - pr_ci:.1f}–{pr_mean + pr_ci:.1f}]')
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2B_scree_{dum}.svg')
+plt.show()
+
+print(f"Participation ratio: {pr_mean:.2f} ± {pr_ci:.2f}")
+for i in range(min(5, len(evr_mean))):
+    print(f"  PC{i+1}: {evr_mean[i]:.3f} ± {evr_sem[i]:.3f}")
+#+end_src
+
+**** Figure 2C: Latent Signal Time Courses
+
+#+begin_src jupyter-python
+xtime = np.linspace(0, 14, X_single.shape[-1])
+mask_expert = ((y_single.laser == 0) & (y_single.learning == 'Expert') &
+               (y_single.performance == 1)).values
+
+fig, ax = plt.subplots(1, 3, figsize=(3 * width, height), sharey=False)
+
+# Panel 1: Sample axis (PC1) by sample identity
+for odor, col, lab in [(0, COL_A, 'A'), (1, COL_B, 'B')]:
+    m = mask_expert & (y_single.sample_odor == odor).values
+    X_sel = X_single[m]
+    mean_ = np.nanmean(X_sel[:, X_IDX, :], axis=0)
+    sem_ = np.nanstd(X_sel[:, X_IDX, :], axis=0) / np.sqrt(X_sel.shape[0])
+    ax[0].plot(xtime, mean_, color=col, label=lab)
+    ax[0].fill_between(xtime, mean_ - sem_, mean_ + sem_, color=col, alpha=0.2)
+ax[0].set_ylabel('PC1 (Sample)')
+ax[0].legend(frameon=False)
+add_vlines(ax[0], if_dpa=0)
+
+# Panel 2: Choice axis (PC2) by choice
+for ch, col, lab in [(1, COL_LICK, 'Lick'), (0, COL_NOLICK, 'No Lick')]:
+    m = mask_expert & (y_single.choice == ch).values
+    X_sel = X_single[m]
+    mean_ = np.nanmean(X_sel[:, Y_IDX, :], axis=0)
+    sem_ = np.nanstd(X_sel[:, Y_IDX, :], axis=0) / np.sqrt(X_sel.shape[0])
+    ax[1].plot(xtime, mean_, color=col, label=lab)
+    ax[1].fill_between(xtime, mean_ - sem_, mean_ + sem_, color=col, alpha=0.2)
+ax[1].set_ylabel('PC2 (Choice)')
+ax[1].legend(frameon=False)
+add_vlines(ax[1], if_dpa=0)
+
+# Panel 3: Test axis (PC3) by test identity
+for test, col, lab in [(0, COL_NOLICK, 'C'), (1, COL_LICK, 'D')]:
+    m = mask_expert & (y_single.test_odor == test).values
+    X_sel = X_single[m]
+    mean_ = np.nanmean(X_sel[:, Z_IDX, :], axis=0)
+    sem_ = np.nanstd(X_sel[:, Z_IDX, :], axis=0) / np.sqrt(X_sel.shape[0])
+    ax[2].plot(xtime, mean_, color=col, label=lab)
+    ax[2].fill_between(xtime, mean_ - sem_, mean_ + sem_, color=col, alpha=0.2)
+ax[2].set_ylabel('PC3 (Test)')
+ax[2].legend(frameon=False)
+add_vlines(ax[2], if_dpa=0)
+
+for a in ax:
+    a.axhline(0, ls='--', color='k', lw=0.5)
+    a.set_xlabel('Time (s)')
+    a.set_xlim([0, 14])
+
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2C_latent_timecourses_{dum}.svg')
+plt.show()
+#+end_src
+
+**** Figure 2C supplement: Trajectories by odor pair
+
+#+begin_src jupyter-python
+n_comp_plot = 3
+
+fig, ax = plt.subplots(1, n_comp_plot, figsize=(n_comp_plot * width, height))
+
+for i in range(4):
+    mask = ((y_single.odor_pair == i) & (y_single.laser == 0) &
+            (y_single.learning == 'Expert') & (y_single.performance == 1)).values
+    X_sel = X_single[mask]
+    X_avg = np.nanmean(X_sel, 0)
+    X_sem = np.nanstd(X_sel, 0) / np.sqrt(X_sel.shape[0])
+
+    for k in range(n_comp_plot):
+        ax[k].plot(xtime, X_avg[k], color=COL_PAIRS[i], label=PAIR_LABELS[i])
+        ax[k].fill_between(xtime, X_avg[k] - X_sem[k], X_avg[k] + X_sem[k],
+                           color=COL_PAIRS[i], alpha=0.2)
+        ax[k].axhline(0, ls='--', color='k', lw=0.5)
+        ax[k].set_xlabel('Time (s)')
+        ax[k].set_ylabel(f'PC{k+1}')
+        ax[k].set_xlim([0, 14])
+        ax[k].set_xticks(np.linspace(0, 14, 8)[::2])
+        add_vlines(ax[k], if_dpa=0)
+
+ax[0].legend(fontsize=10, frameon=False)
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2C_supp_pairs_{dum}.svg')
+plt.show()
+#+end_src
+
+**** Figure 2D: Subspace Angles
+
+#+begin_src jupyter-python
+angles_mice = []
+
+for mouse in options['mice']:
+    mask = get_stage_mask(y_single, 'Expert', tasks=['DPA'], laser=0, perf=1)
+    mask &= (y_single.mouse == mouse).values
+    if mask.sum() < 20:
+        print(f"Skipping {mouse}: only {mask.sum()} trials")
+        continue
+
+    X_m = X_single[mask]
+    y_m = y_single.loc[mask].reset_index(drop=True)
+
+    # Sample coding direction: A-B difference during STIM epoch
+    m_A = (y_m.sample_odor == 0).values
+    m_B = (y_m.sample_odor == 1).values
+    w_sample = np.nanmean(
+        np.nanmean(X_m[m_A], 0) - np.nanmean(X_m[m_B], 0),
+        axis=-1
+    )  # average over delay time -> (n_comp,)
+
+    # Actually use epoch-specific means
+    w_sample = (np.nanmean(X_m[m_A][:, :, bins_stim], axis=(0, 2)) -
+                np.nanmean(X_m[m_B][:, :, bins_stim], axis=(0, 2)))
+
+    # Choice coding direction: lick-nolick during CHOICE
+    m_L = (y_m.choice == 1).values
+    m_N = (y_m.choice == 0).values
+    w_choice = (np.nanmean(X_m[m_L][:, :, bins_choice], axis=(0, 2)) -
+                np.nanmean(X_m[m_N][:, :, bins_choice], axis=(0, 2)))
+
+    # Test coding direction: C-D during TEST
+    m_C = (y_m.test_odor == 0).values
+    m_D = (y_m.test_odor == 1).values
+    w_test = (np.nanmean(X_m[m_C][:, :, bins_test], axis=(0, 2)) -
+              np.nanmean(X_m[m_D][:, :, bins_test], axis=(0, 2)))
+
+    ang_sc = subspace_angle_vectors(w_sample, w_choice)
+    ang_st = subspace_angle_vectors(w_sample, w_test)
+    ang_ct = subspace_angle_vectors(w_choice, w_test)
+
+    angles_mice.append({
+        'mouse': mouse,
+        'sample_choice': ang_sc,
+        'sample_test': ang_st,
+        'choice_test': ang_ct,
+    })
+
+df_angles = pd.DataFrame(angles_mice)
+print(df_angles.to_string())
+print(f"\nMean subspace angles (Expert):")
+for col in ['sample_choice', 'sample_test', 'choice_test']:
+    vals = df_angles[col]
+    print(f"  {col}: {vals.mean():.1f} ± {vals.sem():.1f}°")
+#+end_src
+
+#+begin_src jupyter-python
+# Permutation test for subspace angles
+n_perm = 1000
+perm_angles = {k: [] for k in ['sample_choice', 'sample_test', 'choice_test']}
+
+for _ in range(n_perm):
+    # Random unit vectors in n_comp dimensions
+    n_dim = n_comp
+    v1 = np.random.randn(n_dim); v1 /= np.linalg.norm(v1)
+    v2 = np.random.randn(n_dim); v2 /= np.linalg.norm(v2)
+    v3 = np.random.randn(n_dim); v3 /= np.linalg.norm(v3)
+    perm_angles['sample_choice'].append(subspace_angle_vectors(v1, v2))
+    perm_angles['sample_test'].append(subspace_angle_vectors(v1, v3))
+    perm_angles['choice_test'].append(subspace_angle_vectors(v2, v3))
+
+print("\nPermutation null (random subspaces):")
+for col in ['sample_choice', 'sample_test', 'choice_test']:
+    null = np.array(perm_angles[col])
+    obs = df_angles[col].mean()
+    p = np.mean(null >= obs)
+    print(f"  {col}: observed={obs:.1f}°, null mean={null.mean():.1f}°, "
+          f"p(null >= obs) = {p:.4f}")
+#+end_src
+
+**** Figure 2E: Cross-Condition Generalization Decoding (CCGD)
+
+#+begin_src jupyter-python
+def ccgd_sample_across_context(X, y, bins, decode_col='sample_odor',
+                                context_col='odor_pair', n_splits=5, n_repeats=5):
+    """
+    Cross-condition generalization: train sample decoder in one context,
+    test in another. Uses odor_pair to define contexts since all trials
+    are 'Dual' task.
+
+    Contexts: pairs {0,1} (sample A: AC, AD) vs {2,3} (sample B: BD, BC)
+    won't work — instead split by test odor (C vs D context).
+    """
+    mask = ((y.laser == 0) & (y.learning == 'Expert') & (y.performance == 1)).values
+    X_m = X[mask]
+    y_m = y.loc[mask].reset_index(drop=True)
+
+    # Features: mean over epoch bins
+    feat = np.nanmean(X_m[:, :3, bins], axis=-1)
+    labels = y_m[decode_col].values.astype(int)
+
+    # Context: test odor (0=C, 1=D) — each test context contains both samples
+    contexts = y_m['test_odor'].values.astype(int)
+    ctx_vals = np.unique(contexts)
+
+    if len(ctx_vals) < 2:
+        return np.nan, np.nan
+
+    within_scores, cross_scores = [], []
+
+    for rep in range(n_repeats):
+        for ctx_tr, ctx_te in [(ctx_vals[0], ctx_vals[1]),
+                                (ctx_vals[1], ctx_vals[0])]:
+            m_tr = (contexts == ctx_tr)
+            m_te = (contexts == ctx_te)
+
+            if m_tr.sum() < 10 or m_te.sum() < 10:
+                continue
+
+            # Check both classes present
+            if len(np.unique(labels[m_tr])) < 2 or len(np.unique(labels[m_te])) < 2:
+                continue
+
+            clf = LinearSVC(max_iter=5000, dual='auto')
+            clf.fit(feat[m_tr], labels[m_tr])
+            cross_scores.append(clf.score(feat[m_te], labels[m_te]))
+
+            # Within: stratified CV on train context
+            n_min = min(np.bincount(labels[m_tr]))
+            if n_min >= n_splits:
+                cv = StratifiedKFold(n_splits=n_splits, shuffle=True,
+                                     random_state=rep)
+                scores = cross_val_score(
+                    LinearSVC(max_iter=5000, dual='auto'),
+                    feat[m_tr], labels[m_tr], cv=cv
+                )
+                within_scores.extend(scores.tolist())
+
+    within = np.mean(within_scores) if within_scores else np.nan
+    cross = np.mean(cross_scores) if cross_scores else np.nan
+    return within, cross
+
+# Run per mouse, both stages
+ccgd_rows = []
+for mouse in options['mice']:
+    for stage_ccgd in stages:
+        mask_mouse = (y_single.mouse == mouse).values
+        # Temporarily override for this mouse+stage
+        y_temp = y_single.loc[mask_mouse].copy().reset_index(drop=True)
+        X_temp = X_single[mask_mouse]
+
+        # Override learning filter
+        mask_stage = ((y_temp.laser == 0) & (y_temp.learning == stage_ccgd) &
+                      (y_temp.performance == 1)).values
+        if mask_stage.sum() < 20:
+            continue
+
+        X_sub = X_temp[mask_stage]
+        y_sub = y_temp.loc[mask_stage].reset_index(drop=True)
+
+        feat = np.nanmean(X_sub[:, :3, bins_delay], axis=-1)
+        labels = y_sub.sample_odor.values.astype(int)
+        contexts = y_sub.test_odor.values.astype(int)
+        ctx_vals = np.unique(contexts)
+
+        if len(ctx_vals) < 2:
+            continue
+
+        within_scores, cross_scores = [], []
+        for rep in range(5):
+            for ctx_tr, ctx_te in [(ctx_vals[0], ctx_vals[1]),
+                                    (ctx_vals[1], ctx_vals[0])]:
+                m_tr = (contexts == ctx_tr)
+                m_te = (contexts == ctx_te)
+                if m_tr.sum() < 6 or m_te.sum() < 6:
+                    continue
+                if len(np.unique(labels[m_tr])) < 2 or len(np.unique(labels[m_te])) < 2:
+                    continue
+
+                clf = LinearSVC(max_iter=5000, dual='auto')
+                clf.fit(feat[m_tr], labels[m_tr])
+                cross_scores.append(clf.score(feat[m_te], labels[m_te]))
+
+                n_min = min(np.bincount(labels[m_tr]))
+                if n_min >= 3:
+                    cv = StratifiedKFold(n_splits=min(5, n_min), shuffle=True,
+                                         random_state=rep)
+                    sc = cross_val_score(
+                        LinearSVC(max_iter=5000, dual='auto'),
+                        feat[m_tr], labels[m_tr], cv=cv
+                    )
+                    within_scores.extend(sc.tolist())
+
+        ccgd_rows.append({
+            'mouse': mouse,
+            'learning': stage_ccgd,
+            'within': np.mean(within_scores) if within_scores else np.nan,
+            'cross': np.mean(cross_scores) if cross_scores else np.nan,
+        })
+
+df_ccgd = pd.DataFrame(ccgd_rows)
+print(df_ccgd.to_string())
+print()
+for stage_ccgd in stages:
+    sub = df_ccgd[df_ccgd.learning == stage_ccgd]
+    print(f"{stage_ccgd}:")
+    print(f"  Within: {sub.within.mean():.3f} ± {sub.within.sem():.3f}")
+    print(f"  Cross:  {sub.cross.mean():.3f} ± {sub.cross.sem():.3f}")
+#+end_src
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(1, 2, figsize=(2 * width, height))
+
+for i, stage_ccgd in enumerate(stages):
+    sub = df_ccgd[df_ccgd.learning == stage_ccgd].dropna()
+    x_pos = np.array([0, 1])
+    for _, row in sub.iterrows():
+        ax[i].plot(x_pos, [row['within'], row['cross']], '-o', color='0.7', alpha=0.7)
+
+    means = [sub['within'].mean(), sub['cross'].mean()]
+    sems = [sub['within'].sem(), sub['cross'].sem()]
+    ax[i].errorbar(x_pos, means, yerr=sems, fmt='-o', color='k', lw=2, capsize=4)
+
+    ax[i].axhline(0.5, ls='--', color='r', lw=0.8)
+    ax[i].set_xticks(x_pos)
+    ax[i].set_xticklabels(['Within', 'Cross'])
+    ax[i].set_ylabel('Accuracy')
+    ax[i].set_ylim([0.3, 1.05])
+    ax[i].set_title(stage_ccgd)
+
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2E_ccgd_{dum}.svg')
+plt.show()
+#+end_src
+
+**** Figure 2F: State-Space Trajectories (Sample–Choice Plane)
+
+#+begin_src jupyter-python
+bins_plot = np.concatenate((bins_bl, bins_delay))
+zlim = 12
+
+fig, ax = plt.subplots(1, 2, figsize=(2.2 * width, 1.15 * height),
+                        sharex=True, sharey=True)
+pcms = []
+
+for i, stage_f in enumerate(stages):
+    mask = get_stage_mask(y_single, stage_f, tasks='DPA', laser=0, perf=1)
+    X_st = X_single[mask]
+    y_st = y_single.loc[mask].reset_index(drop=True)
+
+    x_t, y_t = traj_xy(X_st, bins=bins_plot, x_idx=X_IDX, y_idx=Y_IDX)
+
+    xedges, yedges, speed, U, V, C = compute_speed_field(
+        x_t, y_t, bins=20, dt=1.0, smooth=1.0, min_count=5
+    )
+
+    # Speed background
+    pcm = ax[i].pcolormesh(xedges, yedges, speed.T, shading='auto', cmap='coolwarm')
+    pcms.append(pcm)
+
+    # Quiver overlay
+    xc = 0.5 * (xedges[:-1] + xedges[1:])
+    yc = 0.5 * (yedges[:-1] + yedges[1:])
+    Xc, Yc = np.meshgrid(xc, yc, indexing='ij')
+    qmask = C >= 5
+    ax[i].quiver(Xc[qmask], Yc[qmask], U[qmask], V[qmask],
+                 color='w', angles='xy', scale_units='xy', scale=0.3, alpha=0.7)
+
+    # Mean sample trajectories
+    for odor, col, lab in [(0, COL_A, 'A'), (1, COL_B, 'B')]:
+        m = (y_st.sample_odor == odor).values
+        if m.sum() == 0: continue
+        x_mean = np.nanmean(X_st[m, X_IDX][:, bins_plot], 0)
+        y_mean = np.nanmean(X_st[m, Y_IDX][:, bins_plot], 0)
+        ax[i].plot(x_mean, y_mean, color=col, lw=2.5, label=lab)
+        ax[i].scatter(x_mean[0], y_mean[0], color=col, s=40, zorder=5)
+        ax[i].scatter(x_mean[-1], y_mean[-1], color=col, s=60, marker='s', zorder=5)
+
+        # Delay centroid marker
+        xd = np.nanmean(X_st[m, X_IDX][:, bins_delay], axis=(0, 1))
+        yd = np.nanmean(X_st[m, Y_IDX][:, bins_delay], axis=(0, 1))
+        ax[i].scatter(xd, yd, color=col, s=100, edgecolor='white',
+                      linewidth=1.2, zorder=6)
+
+    add_crosshair(ax[i])
+    ax[i].set_xlim([-zlim, zlim]); ax[i].set_ylim([-zlim, zlim])
+    ax[i].set_aspect('equal')
+    ax[i].set_xlabel('PC1 (Sample)'); ax[i].set_ylabel('PC2 (Choice)')
+    ax[i].set_title(stage_f)
+    ax[i].legend(frameon=False, fontsize=10)
+
+fig.colorbar(pcms[-1], ax=ax.ravel().tolist(), shrink=0.8, pad=0.02, label='Speed')
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2F_state_maps_{dum}.svg')
+plt.show()
+#+end_src
+
+**** Figure 2G: Across-Animal Delay Centroids
+
+#+begin_src jupyter-python
+rows = []
+for mouse in y_single.mouse.unique():
+    for stage_g in stages:
+        mask = get_stage_mask(y_single, stage_g, tasks='DPA', laser=0, perf=1)
+        mask &= (y_single.mouse == mouse).values
+        if mask.sum() < 5: continue
+
+        x, yc_ = epoch_xy(X_single[mask], bins_late, X_IDX, Y_IDX)
+        rows.append({
+            'mouse': mouse, 'learning': stage_g,
+            'x_centroid': np.nanmean(x),
+            'y_centroid': np.nanmean(yc_),
+            'frac_nolick': np.nanmean(yc_ < 0),
+            'n_trials': mask.sum(),
+        })
+
+df_cent = pd.DataFrame(rows)
+
+# Stats
+wide_y = df_cent.pivot(index='mouse', columns='learning', values='y_centroid').dropna()
+wide_x = df_cent.pivot(index='mouse', columns='learning', values='x_centroid').dropna()
+wide_f = df_cent.pivot(index='mouse', columns='learning', values='frac_nolick').dropna()
+
+print("Paired t-tests (Naive vs Expert):")
+for name, w in [('y_centroid', wide_y), ('x_centroid', wide_x), ('frac_nolick', wide_f)]:
+    if 'Naive' in w.columns and 'Expert' in w.columns:
+        stat, pval = ttest_rel(w['Naive'], w['Expert'])
+        print(f"  {name}: t={stat:.2f}, p={pval:.4f}")
+
+fig, ax = plt.subplots(1, 3, figsize=(3 * width, height))
+for k, (var, ylab) in enumerate([
+    ('x_centroid', 'Delay centroid\n(Sample axis)'),
+    ('y_centroid', 'Delay centroid\n(Choice axis)'),
+    ('frac_nolick', 'Frac. in\nno-lick half-plane'),
+]):
+    for mouse in df_cent.mouse.unique():
+        dfm = df_cent[df_cent.mouse == mouse].set_index('learning')
+        if not all(s in dfm.index for s in stages):
+            continue
+        dfm = dfm.loc[stages]
+        ax[k].plot([0, 1], dfm[var], '-o', color='0.7', alpha=0.8)
+
+    mean_ = df_cent.groupby('learning')[var].mean().reindex(stages).values
+    sem_ = df_cent.groupby('learning')[var].sem().reindex(stages).values
+    ax[k].plot([0, 1], mean_, '-o', color='k', lw=2)
+    ax[k].fill_between([0, 1], mean_ - sem_, mean_ + sem_, color='k', alpha=0.15)
+    ax[k].set_xticks([0, 1]); ax[k].set_xticklabels(stages)
+    ax[k].set_ylabel(ylab)
+    if k < 2: ax[k].axhline(0, ls='--', color='k')
+    if k == 2: ax[k].set_ylim([0, 1])
+
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2G_centroids_{dum}.svg')
+plt.show()
+#+end_src
+
+**** Figure 2H: Distance to Lick Boundary vs Behavioral Improvement
+
+#+begin_src jupyter-python
+# Compute distance to boundary for all trials
+signed_dist, clf_boundary = distance_to_boundary(
+    X_single, y_single, bins_late, X_IDX, Y_IDX, 'choice', 'Expert'
+)
+y_single_dist = y_single.copy()
+y_single_dist['dist_boundary'] = signed_dist
+
+# Per-mouse summary
+rows = []
+for mouse in y_single.mouse.unique():
+    for stage_h in stages:
+        mask = get_stage_mask(y_single, stage_h, tasks='DPA', laser=0)
+        mask &= (y_single.mouse == mouse).values
+        if mask.sum() < 5: continue
+
+        rows.append({
+            'mouse': mouse, 'learning': stage_h,
+            'mean_dist': np.nanmean(signed_dist[mask]),
+            'dpa_perf': np.nanmean(y_single.loc[mask, 'performance'].values),
+        })
+
+df_dist = pd.DataFrame(rows)
+
+# Pivot and compute deltas
+try:
+    pivot = df_dist.pivot(index='mouse', columns='learning')
+    pivot.columns = ['_'.join(c) for c in pivot.columns]
+    pivot['d_dist'] = pivot['mean_dist_Expert'] - pivot['mean_dist_Naive']
+    pivot['d_perf'] = pivot['dpa_perf_Expert'] - pivot['dpa_perf_Naive']
+    pivot = pivot.dropna(subset=['d_dist', 'd_perf'])
+
+    rho, p_rho = spearmanr(pivot['d_dist'], pivot['d_perf'])
+
+    fig, ax = plt.subplots(figsize=(width, height))
+    palette = dict(zip(pivot.index, sns.color_palette("tab10", len(pivot))))
+    for mouse in pivot.index:
+        ax.scatter(pivot.loc[mouse, 'd_dist'], pivot.loc[mouse, 'd_perf'],
+                   color=palette[mouse], s=70, edgecolor='k', linewidth=0.3, zorder=5,
+                   label=mouse)
+
+    sns.regplot(x='d_dist', y='d_perf', data=pivot.reset_index(),
+                scatter=False, color='k', line_kws={'ls': '--', 'lw': 2}, ax=ax)
+
+    ax.axhline(0, ls='--', color='0.5')
+    ax.axvline(0, ls='--', color='0.5')
+    ax.set_xlabel('Δ Distance to lick boundary')
+    ax.set_ylabel('Δ DPA performance')
+    ax.annotate(f"Spearman ρ = {rho:.2f}\np = {p_rho:.3f}",
+                xy=(0.05, 0.95), xycoords='axes fraction', ha='left', va='top',
+                fontsize=10)
+    ax.legend(fontsize=7, frameon=False, loc='lower right')
+
+    plt.tight_layout()
+    plt.savefig(f'figures/fig2/fig2H_dist_boundary_{dum}.svg')
+    plt.show()
+
+    print(f"Spearman ρ = {rho:.3f}, p = {p_rho:.4f}, N = {len(pivot)}")
+
+except Exception as e:
+    print(f"Error in Fig 2H: {e}")
+    import traceback; traceback.print_exc()
+#+end_src
+
+**** Figure 2I: Trial-Level Prediction (Distance → Accuracy)
+
+#+begin_src jupyter-python
+# Trial-level analysis: does distance predict accuracy?
+df_trial = y_single_dist.copy()
+df_trial = df_trial[(df_trial.laser == 0) & (df_trial.learning == 'Expert') &
+                     (df_trial.tasks == 'DPA')].copy()
+df_trial['correct'] = df_trial.performance.astype(int)
+
+print(f"Trial-level data: {len(df_trial)} trials, "
+      f"{df_trial.mouse.nunique()} mice")
+
+# Mixed-effects logistic regression
+try:
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    # Use linear mixed model as approximation (logistic mixed model is slow)
+    model = smf.mixedlm("correct ~ dist_boundary", df_trial,
+                         groups=df_trial["mouse"])
+    result = model.fit(reml=False)
+    print("\nMixed-effects linear model (correct ~ dist_boundary | mouse):")
+    print(result.summary().tables[1])
+
+except Exception as e:
+    print(f"Mixed model error: {e}")
+    # Fallback: simple logistic per mouse
+    print("\nFallback: per-mouse logistic regression")
+    coefs = []
+    for mouse in df_trial.mouse.unique():
+        sub = df_trial[df_trial.mouse == mouse]
+        if sub.correct.nunique() < 2 or len(sub) < 10:
+            continue
+        clf = LogisticRegression(solver='lbfgs', max_iter=1000)
+        clf.fit(sub[['dist_boundary']].values, sub['correct'].values)
+        coefs.append({'mouse': mouse, 'coef': clf.coef_[0][0]})
+    df_coefs = pd.DataFrame(coefs)
+    print(df_coefs)
+    print(f"\nMean coef: {df_coefs.coef.mean():.4f} ± {df_coefs.coef.sem():.4f}")
+    stat, pval = ttest_rel(df_coefs.coef.values, np.zeros(len(df_coefs)))
+    print(f"t-test coef != 0: t={stat:.2f}, p={pval:.4f}")
+#+end_src
+
+**** Figure 2 — Supplement: Correct vs False Alarm Trajectories
+
+#+begin_src jupyter-python
+unpaired_pairs = [1, 3]  # AD, BC
+bins_full = np.concatenate((bins_bl, bins_delay, bins_test))
+
+fig, ax = plt.subplots(1, 2, figsize=(2 * width, height), sharex=True, sharey=True)
+
+for i, stage_e in enumerate(stages):
+    mask0 = ((y_single.tasks == 'DPA') & (y_single.learning == stage_e) &
+             (y_single.laser == 0) & y_single.odor_pair.isin(unpaired_pairs)).values
+
+    n_cr = (mask0 & (y_single.performance == 1).values).sum()
+    n_fa = (mask0 & (y_single.performance == 0).values).sum()
+    print(f"{stage_e}: CR={n_cr}, FA={n_fa}")
+
+    for perf, col, lab in [(1, COL_CR, 'Correct reject'), (0, COL_FA, 'False alarm')]:
+        mask = mask0 & (y_single.performance == perf).values
+        if mask.sum() == 0: continue
+        X_ = X_single[mask]
+        x = np.nanmean(X_[:, X_IDX, bins_full], 0)
+        yy = np.nanmean(X_[:, Y_IDX, bins_full], 0)
+        ax[i].plot(x, yy, color=col, lw=2.5, label=lab)
+        ax[i].scatter(x[0], yy[0], color=col, s=40)
+        ax[i].scatter(x[-1], yy[-1], color=col, s=65, marker='s')
+
+    add_crosshair(ax[i])
+    ax[i].set_title(stage_e)
+    ax[i].set_xlabel('PC1 (Sample)')
+    if i == 0: ax[i].set_ylabel('PC2 (Choice)')
+    ax[i].legend(frameon=False)
+
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2_supp_CR_FA_{dum}.svg')
+plt.show()
+#+end_src
+
+#+begin_src jupyter-python
+# Late-delay choice position: CR vs FA per mouse
+vals = []
+for stage_e in stages:
+    mask0 = ((y_single.tasks == 'DPA') & (y_single.learning == stage_e) &
+             (y_single.laser == 0) & y_single.odor_pair.isin(unpaired_pairs)).values
+
+    for mouse in y_single.mouse.unique():
+        for lab, perf in [('CR', 1), ('FA', 0)]:
+            mm = mask0 & (y_single.mouse == mouse).values & (y_single.performance == perf).values
+            if mm.sum() < 3: continue
+            yv = np.nanmean(X_single[mm][:, Y_IDX, bins_late])
+            vals.append({'mouse': mouse, 'type': lab, 'learning': stage_e,
+                         'late_choice': yv})
+
+df_err = pd.DataFrame(vals)
+
+if len(df_err) > 0:
+    fig, ax = plt.subplots(1, len(stages), figsize=(len(stages) * width, height),
+                           sharey=True)
+    if len(stages) == 1:
+        ax = [ax]
+
+    for i, stage_e in enumerate(stages):
+        sub = df_err[df_err.learning == stage_e]
+        if len(sub) == 0: continue
+
+        sns.barplot(data=sub, x='type', y='late_choice', errorbar='se',
+                    color='white', edgecolor='black', ax=ax[i])
+        sns.stripplot(data=sub, x='type', y='late_choice', hue='mouse',
+                      dodge=False, ax=ax[i], size=6, palette='tab10')
+        ax[i].legend([], [], frameon=False)
+        ax[i].axhline(0, ls='--', color='k')
+        ax[i].set_ylabel('Late-delay choice overlap')
+        ax[i].set_xlabel('')
+        ax[i].set_title(stage_e)
+
+    plt.tight_layout()
+    plt.savefig(f'figures/fig2/fig2_supp_CR_FA_bar_{dum}.svg')
+    plt.show()
+#+end_src
+
+**** Figure 2 — Supplement: Weight Profiles
+
+#+begin_src jupyter-python
+import cmocean
+
+n_comp_plot = 3
+theta = np.arctan2(w_single[1], w_single[0]) * 180 / np.pi
+theta_norm = (theta + 360) % 360
+idx_sort = np.argsort(theta)
+sigma_smooth = max(1, int(0.1 * w_single.shape[1]))
+
+# Histogram of neuron angles
+fig, ax_hist = plt.subplots(figsize=(width, height))
+counts, bins_h, patches = ax_hist.hist(theta_norm, bins='auto', range=(0, 360), density=True)
+bin_centers = 0.5 * (bins_h[:-1] + bins_h[1:])
+for patch, center in zip(patches, bin_centers):
+    patch.set_facecolor(cmocean.cm.phase(center / 360))
+ax_hist.set_xlabel('Neuron angle (°)')
+ax_hist.set_ylabel('Density')
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2_supp_weights_hist_{dum}.svg')
+plt.show()
+
+# Weight profiles vs angle
+fig, ax = plt.subplots(1, n_comp_plot, figsize=(n_comp_plot * width, height))
+z_lim = 5
+
+for k in range(n_comp_plot):
+    ax[k].scatter(theta[idx_sort], w_single[k][idx_sort], alpha=0.3,
+                  c=theta_norm[idx_sort], cmap=cmocean.cm.phase, s=3, rasterized=True)
+    ax[k].plot(theta[idx_sort],
+               gaussian_filter1d(w_single[k][idx_sort], sigma_smooth, mode='wrap'), 'k')
+    ax[k].axhline(0, ls='--', color='k')
+    ax[k].set_ylabel(f'Weights PC{k+1}')
+    ax[k].set_xlabel('Neuron angle (°)')
+    ax[k].set_ylim([-z_lim, z_lim])
+
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2_supp_weights_{dum}.svg')
+plt.show()
+
+# 2D weight scatter
+fig, ax = plt.subplots(1, 3, figsize=(3 * width, width))
+pairs = [(0, 1), (0, 2), (1, 2)]
+for k, (i_, j_) in enumerate(pairs):
+    ax[k].scatter(w_single[i_][idx_sort], w_single[j_][idx_sort],
+                  c=theta_norm[idx_sort], cmap=cmocean.cm.phase, alpha=0.3,
+                  s=3, rasterized=True)
+    ax[k].plot(
+        gaussian_filter1d(w_single[i_][idx_sort], sigma_smooth, mode='wrap'),
+        gaussian_filter1d(w_single[j_][idx_sort], sigma_smooth, mode='wrap'), 'k'
+    )
+    ax[k].set_xlabel(f'PC{i_+1}')
+    ax[k].set_ylabel(f'PC{j_+1}')
+    ax[k].set_xlim(-z_lim, z_lim)
+    ax[k].set_ylim(-z_lim, z_lim)
+
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2_supp_weights_2D_{dum}.svg')
+plt.show()
+#+end_src
+
+**** Figure 2 — Supplement: Binned weight profiles in angle space
+
+#+begin_src jupyter-python
+from scipy.stats import t as t_dist
+
+nbins_w = 16
+theta_bins = np.linspace(0, 360, nbins_w + 1)
+theta_digitized = np.digitize(theta_norm, theta_bins) - 1
+
+w_mean_binned = np.full((3, nbins_w), np.nan)
+w_ci_lo = np.full((3, nbins_w), np.nan)
+w_ci_hi = np.full((3, nbins_w), np.nan)
+
+alpha_ci = 0.05
+for i_bin in range(nbins_w):
+    mask_bin = theta_digitized == i_bin
+    for j in range(3):
+        x = w_single[j, mask_bin]
+        n = x.size
+        if n >= 2:
+            m = np.mean(x)
+            se = np.std(x, ddof=1) / np.sqrt(n)
+            tc = t_dist.ppf(1 - alpha_ci / 2, df=n - 1)
+            w_mean_binned[j, i_bin] = m
+            w_ci_lo[j, i_bin] = m - tc * se
+            w_ci_hi[j, i_bin] = m + tc * se
+        elif n == 1:
+            w_mean_binned[j, i_bin] = x[0]
+
+# Optional smoothing
+sigma_bin = 1
+w_mean_s = gaussian_filter1d(w_mean_binned, sigma=sigma_bin, axis=1, mode='wrap')
+ci_lo_s = gaussian_filter1d(w_ci_lo, sigma=sigma_bin, axis=1, mode='wrap')
+ci_hi_s = gaussian_filter1d(w_ci_hi, sigma=sigma_bin, axis=1, mode='wrap')
+
+bin_centers = 0.5 * (theta_bins[:-1] + theta_bins[1:])
+
+fig, axs = plt.subplots(1, 3, figsize=(3 * width, height))
+for i, ax_ in enumerate(axs):
+    ax_.plot(bin_centers, w_mean_s[i], lw=2)
+    ax_.fill_between(bin_centers, ci_lo_s[i], ci_hi_s[i], alpha=0.25)
+    ax_.axhline(0, ls='--', color='k')
+    ax_.set_ylabel(f'Weights PC{i+1}')
+    ax_.set_xlabel('Neuron angle (°)')
+
+plt.tight_layout()
+plt.savefig(f'figures/fig2/fig2_supp_weights_binned_{dum}.svg')
+plt.show()
+#+end_src
+
+**** Optogenetic Perturbation Data (for Figure 7)
+
+#+begin_src jupyter-python
+tasks_opto = ['DPA']
+
+traj_off, traj_on = [], []
+for mouse in laser_mice:
+    for laser_val in [0, 1]:
+        idx = ((y_single.mouse == mouse) & (y_single.laser == laser_val)).values
+        if idx.sum() == 0:
+            print(f"Warning: no trials for {mouse}, laser={laser_val}")
+            continue
+
+        X_m = X_single[idx]
+        y_m = y_single.loc[idx].reset_index(drop=True)
+
+        traj_ = []
+        for stage_o in stages:
+            for odor in [0, 1]:
+                mask = ((y_m.sample_odor == odor) &
+                        y_m.tasks.isin(tasks_opto) &
+                        (y_m.learning == stage_o)).values
+                if laser_val == 0:
+                    mask &= (y_m.performance == 1).values
+
+                if mask.sum() > 0:
+                    traj_.append(np.nanmean(X_m[mask], axis=0))
+                else:
+                    traj_.append(np.full_like(X_m[0], np.nan))
+
+        if laser_val == 0:
+            traj_off.append(traj_)
+        else:
+            traj_on.append(traj_)
+
+traj_off = np.array(traj_off)
+traj_on = np.array(traj_on)
+print(f"Laser off: {traj_off.shape}, Laser on: {traj_on.shape}")
+#+end_src
+
+#+begin_src jupyter-python
+# Fixed-point analysis: late delay centroids laser-on vs laser-off
+fp_off = np.nanmean(traj_off[..., bins_late], -1)
+fp_on = np.nanmean(traj_on[..., bins_late], -1)
+
+pc1_off, pc2_off = fp_off[..., X_IDX], fp_off[..., Y_IDX]
+pc1_on, pc2_on = fp_on[..., X_IDX], fp_on[..., Y_IDX]
+
+dPC1 = (pc1_on - pc1_off).reshape(-1)
+dPC2 = (pc2_on - pc2_off).reshape(-1)
+
+# Performance deltas
+perf_off_df = y_single[
+    y_single['mouse'].isin(laser_mice) & (y_single.laser == 0)
+].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
+
+perf_on_df = y_single[
+    y_single['mouse'].isin(laser_mice) & (y_single.laser == 1)
+].groupby(['mouse', 'sample_odor', 'learning'])['performance'].mean().reset_index()
+
+perf_off_df = perf_off_df[perf_off_df.learning.isin(stages)].sort_values(
+    ['mouse', 'sample_odor', 'learning']).reset_index(drop=True)
+perf_on_df = perf_on_df[perf_on_df.learning.isin(stages)].sort_values(
+    ['mouse', 'sample_odor', 'learning']).reset_index(drop=True)
+
+if len(perf_off_df) == len(perf_on_df):
+    delta_dpa = (perf_on_df['performance'] - perf_off_df['performance']).values
+
+    df_opto = perf_off_df[['mouse', 'sample_odor', 'learning']].copy()
+    df_opto['delta_dpa'] = delta_dpa
+    df_opto['delta_pc1'] = dPC1[:len(delta_dpa)]
+    df_opto['delta_pc2'] = dPC2[:len(delta_dpa)]
+
+    # Correlation plot
+    fig, ax = plt.subplots(1, 2, figsize=(2 * width, height), sharey=True)
+    palette_opto = dict(zip(laser_mice, sns.color_palette("tab10", len(laser_mice))))
+
+    for i, (dx, xlab) in enumerate([('delta_pc1', 'Δ PC1'), ('delta_pc2', 'Δ PC2')]):
+        sns.regplot(data=df_opto, x=dx, y='delta_dpa', scatter=False,
+                    color='k', line_kws={'ls': '--', 'lw': 2}, ax=ax[i])
+        sns.scatterplot(data=df_opto, x=dx, y='delta_dpa', hue='mouse',
+                        palette=palette_opto, s=80, alpha=0.8, ax=ax[i], legend=False)
+
+        corr, pval = pearsonr(df_opto[dx].dropna(), df_opto['delta_dpa'].dropna())
+        ax[i].annotate(f"r = {corr:.2f}, p = {pval:.3f}",
+                       xy=(0.05, 0.95), xycoords='axes fraction',
+                       ha='left', va='top', fontsize=10)
+        ax[i].set_xlabel(xlab)
+        ax[i].axhline(0, ls='--', color='0.5')
+        ax[i].axvline(0, ls='--', color='0.5')
+
+    ax[0].set_ylabel('Δ DPA Performance')
+
+    plt.tight_layout()
+    plt.savefig(f'figures/fig2/fig7_opto_corr_{dum}.svg')
+    plt.show()
+else:
+    print(f"Shape mismatch: off={len(perf_off_df)}, on={len(perf_on_df)}")
+#+end_src
+
+#+begin_src jupyter-python
+# Save opto data for Figure 7
+pkl_save(traj_off, f'traj_off_{dum}', path="../data/pca/")
+pkl_save(traj_on, f'traj_on_{dum}', path="../data/pca/")
+if 'df_opto' in dir():
+    pkl_save(df_opto, f'df_opto_{dum}', path="../data/pca/")
+#+end_src
+
+**** Summary statistics
+
+#+begin_src jupyter-python
+print("=" * 60)
+print("FIGURE 2 SUMMARY STATISTICS")
+print("=" * 60)
+
+print(f"\nDataset: {len(options['mice'])} mice, {n_neurons_total} neurons")
+print(f"Trials: {X_single.shape[0]} total")
+
+for stage_s in stages:
+    mask = get_stage_mask(y_single, stage_s, laser=0, perf=1)
+    print(f"  {stage_s}: {mask.sum()} correct laser-off trials")
+
+print(f"\n2B. Participation ratio: {pr_mean:.2f} [{pr_mean-pr_ci:.2f}, {pr_mean+pr_ci:.2f}]")
+print(f"    Top 3 PCs explain: {evr_mean[:3].sum():.1%} of variance")
+
+if len(df_angles) > 0:
+    print(f"\n2D. Subspace angles (Expert):")
+    for col in ['sample_choice', 'sample_test', 'choice_test']:
+        vals = df_angles[col]
+        print(f"    {col}: {vals.mean():.1f} ± {vals.sem():.1f}°")
+
+if len(df_ccgd) > 0:
+    print(f"\n2E. CCGD (Expert):")
+    sub = df_ccgd[df_ccgd.learning == 'Expert']
+    print(f"    Within: {sub.within.mean():.3f} ± {sub.within.sem():.3f}")
+    print(f"    Cross:  {sub.cross.mean():.3f} ± {sub.cross.sem():.3f}")
+
+if len(df_cent) > 0:
+    print(f"\n2G. Delay centroids:")
+    for var in ['x_centroid', 'y_centroid', 'frac_nolick']:
+        for s in stages:
+            sub = df_cent[df_cent.learning == s]
+            print(f"    {var} ({s}): {sub[var].mean():.2f} ± {sub[var].sem():.2f}")
+
+if 'rho' in dir():
+    print(f"\n2H. Boundary distance vs perf: ρ={rho:.3f}, p={p_rho:.4f}")
+
+print("\n" + "=" * 60)
+#+end_src
