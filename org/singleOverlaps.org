@@ -1,34 +1,18 @@
 :PROPERTIES:
-:GPTEL_MODEL: gpt-5.4
-:GPTEL_BACKEND: OpenAI
-:GPTEL_SYSTEM: You are a large language model living in Emacs and a helpful assistant. Respond concisely.
+:GPTEL_MODEL: claude-opus-4-7
+:GPTEL_BACKEND: Anthropic
+:GPTEL_SYSTEM: You are a large language model living in Emacs and a helpful assistant. You are an expert in machine learning and computational neuroscience.\n\nGuidelines:\n- Be concise and precise; avoid redundancy.\n- Think step-by-step before answering.\n- Use Emacs-native formats (Org-mode, elisp) when appropriate.\n- Provide code that is clean, well-commented, and idiomatic.\n- When reasoning about ML or neuroscience, state assumptions explicitly and cite relevant methods/frameworks.\n- If a question is ambiguous, ask for clarification rather than guessing.
 :GPTEL_TOOLS:
-:GPTEL_BOUNDS: ((response (124900 137415)))
+:GPTEL_BOUNDS: ((response (18576 20013) (20285 20286) (20442 21685) (21689 21703) (21707 23350) (23354 23741) (23742 23748) (23749 23754) (23965 23966) (23968 24844) (25982 25983) (26032 26086) (26941 26955) (28506 28612) (49694 54171) (54200 55338) (55431 56870) (56963 57799) (57890 59332) (59396 61369)))
 :END:
 #+STARTUP: fold
 #+PROPERTY: header-args:jupyter-python :results both :exports both :async yes :session overlaps :kernel dual :output-dir ./figures/overlaps :file (lc/org-babel-tangle-figure-filename)
-
-* Notebook Settings
-
-#+begin_src jupyter-python
-%load_ext autoreload
-%autoreload 2
-%reload_ext autoreload
-
-%run /home/leon/dual_task/dual_data/notebooks/setup.py
-%config InlineBackend.figure_format = 'png'
-#+end_src
-
-#+RESULTS:
-: The autoreload extension is already loaded. To reload it, use:
-:   %reload_ext autoreload
-: Python exe
-: /home/leon/mambaforge/envs/dual/bin/python
 
 * Imports
 
 #+begin_src jupyter-python
   from sklearn.exceptions import ConvergenceWarning
+  import warnings
   warnings.filterwarnings("ignore")
   import traceback
 
@@ -64,6 +48,23 @@
 #+end_src
 
 #+RESULTS:
+
+* Notebook Settings
+
+#+begin_src jupyter-python
+%load_ext autoreload
+%autoreload 2
+%reload_ext autoreload
+
+%run /home/leon/dual_task/dual_data/notebooks/setup.py
+%config InlineBackend.figure_format = 'png'
+#+end_src
+
+#+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
+: Python exe
+: /home/leon/mambaforge/envs/dual/bin/python
 
 * Helpers
 ** pad
@@ -380,166 +381,206 @@ print(y_all.keys())
 
 ** CV Scores
 *** utils
+**** Imports
 
- #+begin_src jupyter-python
+#+begin_src jupyter-python
 import mne
-mne.set_log_level("ERROR")
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
-from scipy.ndimage import gaussian_filter1d
-
-def smooth_and_bin2(X, sigma=1.0):
-    X_s = gaussian_filter1d(X, sigma=sigma, axis=-1, mode='nearest')
-    T = X_s.shape[-1]
-    assert T % 2 == 0
-    return X_s.reshape(*X_s.shape[:-1], T//2, 2).mean(-1)
-#+end_src
-
-#+RESULTS:
-
-#+begin_src jupyter-python
 import numpy as np
 import pandas as pd
-from time import perf_counter
+from scipy.ndimage import gaussian_filter1d
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold
 from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
+from sklearn.feature_selection import SelectPercentile, SelectKBest, SelectFdr, SelectFpr, f_classif
 from mne.decoding import SlidingEstimator, GeneralizingEstimator
+from joblib import Parallel, delayed
 
-def get_estimator(
-        clf='logcv',
-        scoring="accuracy",
-        mode="generalizing",
-        scaler=None,
-        l1_ratio=0,
-        C=0.1,
-        Cs = np.logspace(-4, 4, 10),
-        n_jobs=-1,
-):
-
-    if l1_ratio in [0, 1]:
-        solver = 'liblinear'
-    else:
-        solver = 'saga'
-
-    if clf=='logcv':
-        clf = LogisticRegressionCV(cv=5, solver=solver, class_weight="balanced", n_jobs=None, l1_ratios=(l1_ratio,), Cs=Cs)
-    else:
-        clf = LogisticRegression(solver=solver, class_weight="balanced", n_jobs=None, l1_ratio=l1_ratio)
-
-    pipeline = []
-    if scaler is not None:
-        if scaler == "standard":
-            pipeline.append(("scaler", StandardScaler()))
-        elif scaler == "center":
-            pipeline.append(("scaler", StandardScaler(with_std=False)))
-
-    pipeline.append(("model", clf))
-    pipe = Pipeline(pipeline)
-
-    if mode == "sliding":
-        estimator = SlidingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-    elif mode=="generalizing":
-        estimator = GeneralizingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
-    else:
-        estimator = pipe
-
-    return estimator
+mne.set_log_level("ERROR")
 #+end_src
 
 #+RESULTS:
 
+**** Preprocessing
+
 #+begin_src jupyter-python
-def get_space_params_timewise(est, raw=False):
+def smooth_and_bin2(X, sigma=1.0):
+    """Gaussian-smooth along time and bin by pairs of samples."""
+    X_s = gaussian_filter1d(X, sigma=sigma, axis=-1, mode="nearest")
+    T = X_s.shape[-1]
+    assert T % 2 == 0
+    return X_s.reshape(*X_s.shape[:-1], T // 2, 2).mean(-1)
+#+end_src
+
+#+RESULTS:
+
+**** Estimator factory
+
+#+begin_src jupyter-python
+def get_estimator(
+    clf="logcv",
+    scoring="accuracy",
+    mode="generalizing",
+    scaler=None,
+    l1_ratio=0,
+    C=0.1,
+    Cs=np.logspace(-4, 4, 10),
+    n_jobs=-1,
+):
+    solver = "liblinear" if l1_ratio in (0, 1) else "saga"
+
+    if clf == "logcv":
+        clf = LogisticRegressionCV(
+            cv=5, solver=solver, class_weight="balanced",
+            n_jobs=None, l1_ratios=(l1_ratio,), Cs=Cs,
+        )
+    else:
+        clf = LogisticRegression(
+            solver=solver, class_weight="balanced",
+            n_jobs=None, l1_ratio=l1_ratio,
+        )
+
+    pipeline = []
+    if scaler == "standard":
+        pipeline.append(("scaler", StandardScaler()))
+    elif scaler == "center":
+        pipeline.append(("scaler", StandardScaler(with_std=False)))
+
+    # pipeline.append("selector", SelectFpr(f_classif, alpha=0.05))
+    pipeline.append(("model", clf))
+    pipe = Pipeline(pipeline)
+
+    if mode == "sliding":
+        return SlidingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
+    if mode == "generalizing":
+        return GeneralizingEstimator(pipe, scoring=scoring, n_jobs=n_jobs, verbose=False)
+    return pipe
+#+end_src
+
+#+RESULTS:
+
+**** Weight / projection utilities
+
+#+begin_src jupyter-python
+def get_space_params_timewise(est, raw=False, min_scale=1e-8):
     """
-    Back-project weights through the scaler to raw feature space.
+    Extract per-timepoint linear weights and intercepts from a fitted
+    SlidingEstimator / GeneralizingEstimator.
+
+    Parameters
+    ----------
+    raw : bool
+        If True, back-project weights through the scaler:
+            w_raw = w_scaled / scale
+            b_raw = b_scaled - w_raw . mean
+    min_scale : float
+        Lower bound on scaler.scale_ to avoid blow-up from near-zero-variance
+        features.
 
     Returns
     -------
     ws : (n_train_times, n_features)
     bs : (n_train_times,)
+    means : (n_train_times, n_features) or None
+        Scaler means per train-time; needed to undo intercept drop in raw space.
     """
-    ws, bs = [], []
+    ws, bs, means = [], [], []
+    any_mean = False
 
     for est_t in est.estimators_:
         if isinstance(est_t, Pipeline):
             clf = est_t.named_steps["model"]
             scaler = est_t.named_steps.get("scaler", None)
         else:
-            clf = est_t
-            scaler = None
+            clf, scaler = est_t, None
 
-        w = np.asarray(clf.coef_).ravel()
-        b = np.asarray(clf.intercept_).item()
+        w = np.asarray(clf.coef_).ravel().astype(float)
+        b = float(np.asarray(clf.intercept_).item())
 
+        mu = None
         if scaler is not None:
             mean = getattr(scaler, "mean_", None)
             scale = getattr(scaler, "scale_", None)
-
-            if mean is None:
-                mean = 0.0
-            if scale is None:
-                scale = 1.0
+            mean = np.zeros_like(w) if mean is None else np.asarray(mean)
+            scale = np.ones_like(w) if scale is None else np.asarray(scale)
+            scale = np.where(scale < min_scale, 1.0, scale)
 
             if raw:
                 w = w / scale
-                b = b - np.dot(w, mean)  # note: w is already rescaled here
+                b = b - np.dot(w, mean)
+                mu = mean
+                any_mean = True
 
         ws.append(w)
         bs.append(b)
+        means.append(mu)
 
-    return np.asarray(ws), np.asarray(bs)
+    ws = np.asarray(ws)
+    bs = np.asarray(bs)
+    means = np.asarray(means) if any_mean else None
+    return ws, bs, means
+
+
+def _apply_scaler_if_needed(est, X, raw):
+    """If raw=False and pipeline has a scaler, transform X per-time."""
+    if raw:
+        return X
+    first = est.estimators_[0]
+    if not isinstance(first, Pipeline) or "scaler" not in first.named_steps:
+        return X
+
+    X_out = np.empty_like(X, dtype=float)
+    for t, est_t in enumerate(est.estimators_):
+        sc = est_t.named_steps.get("scaler", None)
+        X_out[..., t] = X[..., t] if sc is None else sc.transform(X[..., t])
+    return X_out
 
 
 def get_decision_values(est, X, raw=False, remove_intercept=True):
     """
-    Project trials onto the raw-space discriminant axis.
+    Project trials onto the per-time discriminant axis.
 
-    Parameters
-    ----------
-    est : fitted SlidingEstimator or GeneralizingEstimator
-    X : (n_trials, n_features, n_times)
-    remove_intercept : bool
-        If True, pure projection onto w (no intercept).
-
-    Returns
-    -------
-    dec : (n_trials, n_times) or (n_trials, n_train_times, n_test_times)
+    When raw=True and remove_intercept=True, also subtract w_raw . mu so the
+    projection equals w_scaled . z (pure centered projection in raw units).
     """
-
-    ws, bs = get_space_params_timewise(est, raw)
+    ws, bs, means = get_space_params_timewise(est, raw=raw)
 
     if remove_intercept:
         bs = np.zeros_like(bs)
 
-    if est.__class__.__name__ == "SlidingEstimator":
-        return np.einsum("nft,tf->nt", X, ws) + bs[None, :]
+    X_proj = _apply_scaler_if_needed(est, X, raw=raw)
+    is_sliding = est.__class__.__name__ == "SlidingEstimator"
 
-    return np.einsum("nfu,tf->ntu", X, ws) + bs[None, :, None]
+    if is_sliding:
+        dec = np.einsum("nft,tf->nt", X_proj, ws) + bs[None, :]
+    else:
+        dec = np.einsum("nfu,tf->ntu", X_proj, ws) + bs[None, :, None]
+
+    if raw and remove_intercept and means is not None:
+        offsets = np.einsum("tf,tf->t", ws, means)
+        if is_sliding:
+            dec = dec - offsets[None, :]
+        else:
+            dec = dec - offsets[None, :, None]
+
+    return dec
 
 
-def get_norms_timewise(est, raw):
-    """Raw-space weight norms per train-time."""
-    ws, _ = get_space_params_timewise(est, raw)
+def get_norms_timewise(est, raw=False):
+    ws, _, _ = get_space_params_timewise(est, raw=raw)
     return np.linalg.norm(ws, axis=1)
 
 
 def postprocess_decision(dec, norms, y=None, signed=False, eps=1e-6):
-    """
-    Normalize by weight norm, optionally sign by label (0/1 coding).
-    """
+    """Normalize by weight norm; optionally sign by label (0/1 coding)."""
     norms = norms + eps
 
-    if dec.ndim == 2:  # (n_trials, n_times)
+    if dec.ndim == 2:      # (n_trials, n_times)
         dec = dec / norms[None, :]
         if signed:
             dec = (2 * np.asarray(y) - 1)[:, None] * dec
-    elif dec.ndim == 3:  # (n_trials, n_train_times, n_test_times)
+    elif dec.ndim == 3:    # (n_trials, n_train_times, n_test_times)
         dec = dec / norms[None, :, None]
         if signed:
             dec = (2 * np.asarray(y) - 1)[:, None, None] * dec
@@ -551,33 +592,85 @@ def postprocess_decision(dec, norms, y=None, signed=False, eps=1e-6):
 
 #+RESULTS:
 
+**** Null helpers
+
 #+begin_src jupyter-python
-def ccgd_val_score(
-    X,
-    y_df,
-    estimator,
-    selector=None,
-    target="sample",
-    cv=None,
-    stage="Expert",
-    context="DPA",
-    strata=True,
-    signed=False,
-    correct=False,
-    raw=False,
-    remove_intercept=True,
-    fit_param_epoch=False,
-    bins_epoch = None
+def _dec_from_ws(X_proj, ws, bs=None, remove_intercept=True,
+                 means=None, raw=False):
+    """Project with given ws; apply mean-offset correction if raw+remove_int."""
+    if bs is None or remove_intercept:
+        bs = np.zeros(ws.shape[0])
+    dec = np.einsum("nfu,tf->ntu", X_proj, ws) + bs[None, :, None]
+    if raw and remove_intercept and means is not None:
+        offsets = np.einsum("tf,tf->t", ws, means)
+        dec = dec - offsets[None, :, None]
+    return dec
+
+
+def shuffle_weights_timewise(ws, rng, preserve_norm=True):
+    F = ws.shape[1]
+    ws_shuff = np.empty_like(ws)
+    for t in range(ws.shape[0]):
+        perm = rng.permutation(F)
+        ws_shuff[t] = ws[t, perm]
+        if preserve_norm:
+            n0 = np.linalg.norm(ws[t])
+            n1 = np.linalg.norm(ws_shuff[t]) + 1e-12
+            ws_shuff[t] *= n0 / n1
+    return ws_shuff
+
+
+def weight_shuffle_null(
+    est, X, y, n_shuffles=100, raw=False, signed=False,
+    remove_intercept=True, random_state=0, n_jobs=-1,
 ):
-    """
-    Cross-validated single-trial decision values with cross-condition
-    generalization.
-    """
-    start = perf_counter()
+    ws, _, means = get_space_params_timewise(est, raw=raw)
+    X_proj = _apply_scaler_if_needed(est, X, raw=raw)
+    seeds = np.random.SeedSequence(random_state).generate_state(n_shuffles)
 
-    if cv is None:
-        cv = StratifiedKFold(n_splits=5, shuffle=True)
+    def _one(seed):
+        rng = np.random.default_rng(int(seed))
+        ws_s = shuffle_weights_timewise(ws, rng, preserve_norm=True)
+        norms_s = np.linalg.norm(ws_s, axis=1)
+        dec_s = _dec_from_ws(X_proj, ws_s, remove_intercept=remove_intercept,
+                             means=means, raw=raw)
+        return postprocess_decision(dec_s, norms_s, y=y, signed=signed)
 
+    out = Parallel(n_jobs=n_jobs, backend="loky")(delayed(_one)(s) for s in seeds)
+    return np.stack(out, axis=0)
+
+
+def label_permutation_null(
+    estimator, X_train, y_train, X_test, y_test,
+    n_shuffles=100, raw=False, signed=False,
+    remove_intercept=True, random_state=0, n_jobs=-1,
+):
+    seeds = np.random.SeedSequence(random_state).generate_state(n_shuffles)
+
+    def _one(seed):
+        rng = np.random.default_rng(int(seed))
+        y_perm = rng.permutation(y_train)
+        est = clone(estimator)
+        est.fit(X_train, y_perm)
+        norms = get_norms_timewise(est, raw=raw)
+        dec = get_decision_values(est, X_test, raw=raw,
+                                  remove_intercept=remove_intercept)
+        return postprocess_decision(dec, norms, y=y_test, signed=signed)
+
+    out = Parallel(n_jobs=n_jobs, backend="loky")(delayed(_one)(s) for s in seeds)
+    return np.stack(out, axis=0)
+#+end_src
+
+#+RESULTS:
+
+**** Dataloader
+
+#+begin_src jupyter-python
+def dataloader(
+    X, y_df,
+    target="sample", stage="Expert", context="DPA",
+    correct=False, strata=False,
+):
     idx_correct = True
     if correct:
         idx_correct = (y_df.performance == 1) & (
@@ -585,112 +678,192 @@ def ccgd_val_score(
         )
 
     idx_context = True
-
-    if (target == 'distractor') | (target=='odr_choice') | (target=='licks'):
-        context = 'Dual'
-        idx_context = (y_df.tasks!='DPA')
-
-    if context in ['DPA', 'DualGo', 'DualNoGo']:
+    if target in ("distractor", "odr_choice", "licks"):
+        context = "Dual"
+        idx_context = (y_df.tasks != "DPA")
+    if context in ("DPA", "DualGo", "DualNoGo"):
         idx_context = (y_df.tasks == context)
 
-    m_within = (
-        (y_df.laser == 0)
-        & (y_df.learning == stage)
-        & idx_context
-        & idx_correct
-    )
-
+    m_within = ((y_df.laser == 0) & (y_df.learning == stage)
+                & idx_context & idx_correct)
     m_cross = ~m_within
 
     X_within = X[m_within]
     y_within = y_df.loc[m_within].reset_index(drop=True).copy()
     y_within["labels"] = y_within[target].to_numpy()
-    y_within_labels = y_within["labels"].to_numpy()
 
     X_cross = X[m_cross]
     y_cross = y_df.loc[m_cross].reset_index(drop=True).copy()
     y_cross["labels"] = y_cross[target].to_numpy()
-    y_cross_labels = y_cross["labels"].to_numpy()
 
     print(f"X_within {X_within.shape}  y_within {y_within.shape}")
     print(f"X_cross  {X_cross.shape}  y_cross  {y_cross.shape}")
 
     if strata:
-        strata = (
-            y_within["odor_pair"].astype(str)
-            + "_"
-            + y_within["odr_choice"].astype(str)
-            + "_"
-            + y_within["choice"].astype(str)
-            + "_"
-            + y_within["day"].astype(str)
+        strata_vec = (
+            y_within[target].astype(str) + "_"
+            + y_within["tasks"].astype(str) + "_"
+            # + y_within["day"].astype(str)
         ).to_numpy()
     else:
-        strata = y_within[target].astype(str).to_numpy()
+        strata_vec = y_within[target].astype(str).to_numpy()
 
-    within_probas, within_dfs = [], []
-    y_cv_within = []
-    cross_probas, cross_dfs = [], []
+    return X_within, y_within, X_cross, y_cross, strata_vec
+#+end_src
 
-    for train_idx, test_idx in cv.split(X_within, strata):
-        X_train, X_test = X_within[train_idx], X_within[test_idx]
-        y_train = y_within_labels[train_idx]
-        y_test = y_within_labels[test_idx]
+#+RESULTS:
+
+**** Main CCGD validation loop
+
+#+begin_src jupyter-python
+def ccgd_validation(
+    X_y_data,
+    estimator,
+    selector=None,
+    cv=None,
+    signed=False,
+    raw=False,
+    remove_intercept=True,
+    fit_param_epoch=False,
+    bins_epoch=None,
+    random_state=0,
+    null_type=None,
+    n_shuffles=100,
+    null_reduction="zscore",
+):
+    X_within, y_within, X_cross, y_cross, strata = X_y_data
+    y_within_labels = y_within["labels"].to_numpy()
+    y_cross_labels  = y_cross["labels"].to_numpy()
+
+    has_cross = X_cross.shape[0] > 0
+    if not has_cross:
+        print("[ccgd_validation] y_cross is empty — skipping cross-condition block.")
+
+    if cv is None:
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+    splits = list(cv.split(X_within, strata))
+
+    within_probas, within_dfs, y_cv_within = [], [], []
+    cross_probas,  cross_dfs               = [], []
+    null_info = {"within_mu": [], "within_sd": [],
+                 "cross_mu":  [], "cross_sd":  [],
+                 "C_per_fold": []}
+
+    for fold, (train_idx, test_idx) in enumerate(splits):
+        X_tr, X_te = X_within[train_idx], X_within[test_idx]
+        y_tr = y_within_labels[train_idx].copy()
+        y_te = y_within_labels[test_idx]
         y_cv_within.append(y_within.iloc[test_idx].reset_index(drop=True))
 
         est = clone(estimator)
 
         if fit_param_epoch:
             sel = clone(selector)
-            sel.fit(X_train[..., bins_epoch].mean(-1), y_train)
-
+            sel.fit(X_tr[..., bins_epoch].mean(-1), y_tr)
             best_C = sel.named_steps["model"].C_[0]
             est.base_estimator.named_steps["model"].C = best_C
+            null_info["C_per_fold"].append(best_C)
 
-        est.fit(X_train, y_train)
+        est.fit(X_tr, y_tr)
+        norms = get_norms_timewise(est, raw=raw)
 
-        # decision function
-        norms = get_norms_timewise(est, raw)
+        # ---- Observed ----
+        within_obs = get_decision_values(est, X_te, raw=raw,
+                                         remove_intercept=remove_intercept)
+        within_obs = postprocess_decision(within_obs, norms, y=y_te, signed=signed)
 
-        within_dec = get_decision_values(est, X_test, raw=raw, remove_intercept=remove_intercept)
-        within_dec = postprocess_decision(within_dec, norms, y=y_test, signed=signed)
-        within_dfs.append(within_dec)
+        if has_cross:
+            cross_obs = get_decision_values(est, X_cross, raw=raw,
+                                            remove_intercept=remove_intercept)
+            cross_obs = postprocess_decision(cross_obs, norms,
+                                             y=y_cross_labels, signed=signed)
+        else:
+            cross_obs = None
 
-        cross_dec = get_decision_values(est, X_cross, raw=raw, remove_intercept=remove_intercept)
-        cross_dec = postprocess_decision(cross_dec, norms, y=y_cross_labels, signed=signed)
-        cross_dfs.append(cross_dec)
+        # ---- Null ----
+        within_null = cross_null = None
+        if null_type == "weight":
+            within_null = weight_shuffle_null(
+                est, X_te, y_te, n_shuffles=n_shuffles, raw=raw,
+                signed=signed, remove_intercept=remove_intercept,
+                random_state=random_state + fold,
+            )
+            if has_cross:
+                cross_null = weight_shuffle_null(
+                    est, X_cross, y_cross_labels, n_shuffles=n_shuffles,
+                    raw=raw, signed=signed, remove_intercept=remove_intercept,
+                    random_state=random_state + fold,
+                )
+        elif null_type == "label":
+            within_null = label_permutation_null(
+                est, X_tr, y_tr, X_te, y_te,
+                n_shuffles=n_shuffles, raw=raw, signed=signed,
+                remove_intercept=remove_intercept,
+                random_state=random_state + fold,
+            )
+            if has_cross:
+                cross_null = label_permutation_null(
+                    est, X_tr, y_tr, X_cross, y_cross_labels,
+                    n_shuffles=n_shuffles, raw=raw, signed=signed,
+                    remove_intercept=remove_intercept,
+                    random_state=random_state + fold,
+                )
 
-        # probas
-        within_proba = est.predict_proba(X_test)[..., 1]
-        within_proba = y_test[:, None, None] * within_proba + (1 - y_test[:, None, None]) * (1 - within_proba)
-        within_probas.append(within_proba)
+        # ---- Calibration ----
+        def _calibrate(obs, null):
+            if obs is None:
+                return None, None, None
+            if null is None:
+                return obs, None, None
+            if null_reduction == "zscore":
+                return _zscore_against_null(obs, null)
+            if null_reduction == "subtract":
+                mu = null.mean(0)
+                return obs - mu, mu, None
+            return obs, None, None
 
-        cross_proba = est.predict_proba(X_cross)[..., 1]
-        cross_proba = y_cross_labels[:, None, None] * cross_proba + (1 - y_cross_labels[:, None, None]) * (1 - cross_proba)
-        cross_probas.append(cross_proba)
+        within_cal, mu_w, sd_w = _calibrate(within_obs, within_null)
+        cross_cal,  mu_c, sd_c = _calibrate(cross_obs,  cross_null)
 
+        null_info["within_mu"].append(mu_w)
+        null_info["within_sd"].append(sd_w)
+        null_info["cross_mu"].append(mu_c)
+        null_info["cross_sd"].append(sd_c)
+
+        within_dfs.append(within_cal)
+        if has_cross:
+            cross_dfs.append(cross_cal)
+
+        # ---- Probas ----
+        w_proba = est.predict_proba(X_te)[..., 1]
+        w_proba = (y_te[:, None, None] * w_proba
+                   + (1 - y_te[:, None, None]) * (1 - w_proba))
+        within_probas.append(w_proba)
+
+        if has_cross:
+            c_proba = est.predict_proba(X_cross)[..., 1]
+            c_proba = (y_cross_labels[:, None, None] * c_proba
+                       + (1 - y_cross_labels[:, None, None]) * (1 - c_proba))
+            cross_probas.append(c_proba)
+
+    # ---- Aggregate ----
     within_probas = np.vstack(within_probas)
-    within_dfs = np.vstack(within_dfs)
+    within_dfs    = np.vstack(within_dfs)
+    y_cv_within   = pd.concat(y_cv_within, axis=0, ignore_index=True)
 
-    y_cv_within = pd.concat(y_cv_within, axis=0, ignore_index=True)
+    if has_cross:
+        cross_probas = np.mean(np.stack(cross_probas, axis=0), axis=0)
+        cross_dfs    = np.mean(np.stack(cross_dfs,    axis=0), axis=0)
 
-    cross_probas = np.mean(np.stack(cross_probas, axis=0), axis=0)
-    cross_dfs = np.mean(np.stack(cross_dfs, axis=0), axis=0)
+        y_cv   = pd.concat([y_cv_within, y_cross], axis=0, ignore_index=True)
+        probas = np.vstack([within_probas, cross_probas])
+        dfs    = np.vstack([within_dfs,    cross_dfs])
+    else:
+        y_cv   = y_cv_within
+        probas = within_probas
+        dfs    = within_dfs
 
-    y_cv_cross = y_cross
-
-    print(f"within_probas {within_probas.shape}  y_cv_within {y_cv_within.shape}")
-    print(f"cross_probas  {cross_probas.shape}  y_cv_cross  {y_cv_cross.shape}")
-
-    probas = np.vstack([within_probas, cross_probas])
-    dfs = np.vstack([within_dfs, cross_dfs])
-
-    y_cv = pd.concat([y_cv_within, y_cv_cross], axis=0, ignore_index=True)
-
-    end = perf_counter()
-    print("Elapsed = %dh %dm %ds" % convert_seconds(end - start))
-
-    return probas, dfs, y_cv
+    return probas, dfs, y_cv, null_info
 #+end_src
 
 #+RESULTS:
@@ -714,14 +887,22 @@ correct = False
 if correct:
     dum += '_correct'
 
-l1_ratio = 1.0
+l1_ratio = 0.0
 dum += f'_l1_ratio_{l1_ratio}'
+
+raw = False
+if raw:
+    dum+= '_raw'
+
+fit_param_epoch=False
+if fit_param_epoch:
+    dum+= '_fit_epoch'
 
 print(dum)
 #+end_src
 
 #+RESULTS:
-: log_generalizing_overlaps_l1_ratio_1.0
+: log_generalizing_overlaps_l1_ratio_0.0
 
 #+begin_src jupyter-python
 n_splits = 5
@@ -731,8 +912,10 @@ folds = RepeatedStratifiedKFold(n_splits=n_splits, n_repeats=n_repeats)
 # folds = LeaveOneOut()
 
 selector = get_estimator(clf='logcv', scoring='accuracy', mode=None, scaler=scaler, l1_ratio=l1_ratio, n_jobs=-1)
-estimator = get_estimator(clf='log', scoring='accuracy', mode=mne_estimator, scaler=scaler, l1_ratio=l1_ratio, n_jobs=-1)
-estimator = get_estimator(clf='logcv', scoring='accuracy', mode=mne_estimator, scaler=scaler, l1_ratio=l1_ratio, n_jobs=-1)
+if fit_param_epoch:
+    estimator = get_estimator(clf='log', scoring='accuracy', mode=mne_estimator, scaler=scaler, l1_ratio=l1_ratio, n_jobs=-1)
+else:
+    estimator = get_estimator(clf='logcv', scoring='accuracy', mode=mne_estimator, scaler=scaler, l1_ratio=l1_ratio, n_jobs=-1)
 #+end_src
 
 #+RESULTS:
@@ -747,15 +930,14 @@ print(options['mice'])
 #+begin_src jupyter-python
 stages = ['Naive', 'Expert']
 targets = ['choice']
-# contexts = ['DPA', 'DualGo', 'DualNoGo']
 contexts = ['all']
-bins_epoch = options['bins_ED']
+bins_epoch = options['bins_CHOICE']
 
 X_mice, y_mice, w_mice = [], [], []
 for mouse in options['mice']:
 # for mouse in [options['mice'][3]]:
 
-    X_stage, y_stage, w_stage = [], [], []
+    X_stage, y_stage = [], []
 
     for stage in stages:
         idx = (y_all.mouse == mouse) & (y_all.learning == stage)
@@ -763,24 +945,46 @@ for mouse in options['mice']:
         X_df = X_all[idx]
         y_df = y_all.loc[idx].reset_index(drop=True)
 
+        # Drop all-NaN neurons
         valid_neurons = ~np.all(np.isnan(X_df), axis=(0, 2))
         X_df = X_df[:, valid_neurons, :]
-        # X_df = smooth_and_bin2(X_df, sigma=1.0)
+
+        # Light temporal smoothing
+        X_df = gaussian_filter1d(X_df, sigma=0.3, axis=-1, mode='nearest')
 
         Z_list, y_list = [], []
         for context in contexts:
 
             Z_tar, y_tar = [], []
             for target in targets:
-                print('mouse', mouse, 'stage', stage, 'target', target, 'context', context)
+                print(f"mouse={mouse} stage={stage} target={target} context={context}")
 
-                probas, dfs, y_ = ccgd_val_score(X_df, y_df,  estimator, selector, target=target, cv=folds, stage=stage,
-                                                 correct=correct, strata=False, fit_param_epoch=0, bins_epoch=bins_epoch)
+                X_y_data = dataloader(
+                    X_df, y_df,
+                    target=target, stage=stage, context=context,
+                    correct=correct, strata=True,
+                )
+
+                probas, dfs, y_, null_info = ccgd_validation(
+                    X_y_data,
+                    estimator,
+                    selector=selector,
+                    cv=folds,
+                    fit_param_epoch=fit_param_epoch,
+                    bins_epoch=bins_epoch,
+                    null_type=None,            # or "weight" / "label"
+                    null_reduction="zscore",   # used only if null_type is set
+                    n_shuffles=100,
+                    raw=raw,
+                    signed=False,
+                    random_state=0,
+                )
 
                 print(probas.shape, dfs.shape)
-                Z_ = np.stack([probas, dfs], 1)
+                Z_ = np.stack([probas, dfs], axis=1)   # (n_trials, 2, n_train, n_test)
                 print(Z_.shape)
 
+                y_ = y_.copy()
                 y_['target'] = target
                 y_['context'] = context
 
@@ -805,165 +1009,115 @@ for mouse in options['mice']:
 
 #+RESULTS:
 #+begin_example
-mouse JawsM01 stage Naive target choice context all
-X_within (96, 184, 84)  y_within (96, 21)
-X_cross  (480, 184, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 29s
+mouse=JawsM01 stage=Naive target=choice context=all
+X_within (288, 184, 84)  y_within (288, 21)
+X_cross  (288, 184, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse JawsM01 stage Expert target choice context all
-X_within (32, 184, 84)  y_within (32, 21)
-X_cross  (160, 184, 84)  y_cross  (160, 21)
-within_probas (32, 84, 84)  y_cv_within (32, 21)
-cross_probas  (160, 84, 84)  y_cv_cross  (160, 21)
-Elapsed = 0h 0m 13s
+mouse=JawsM01 stage=Expert target=choice context=all
+X_within (96, 184, 84)  y_within (96, 21)
+X_cross  (96, 184, 84)  y_cross  (96, 21)
 (192, 84, 84) (192, 84, 84)
 (192, 2, 84, 84)
 Z (192, 2, 84, 84) y (192, 24)
-mouse JawsM06 stage Naive target choice context all
-X_within (96, 201, 84)  y_within (96, 21)
-X_cross  (480, 201, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 29s
+mouse=JawsM06 stage=Naive target=choice context=all
+X_within (288, 201, 84)  y_within (288, 21)
+X_cross  (288, 201, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse JawsM06 stage Expert target choice context all
-X_within (96, 201, 84)  y_within (96, 21)
-X_cross  (480, 201, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 31s
+mouse=JawsM06 stage=Expert target=choice context=all
+X_within (288, 201, 84)  y_within (288, 21)
+X_cross  (288, 201, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse JawsM12 stage Naive target choice context all
-X_within (96, 423, 84)  y_within (96, 21)
-X_cross  (480, 423, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 45s
+mouse=JawsM12 stage=Naive target=choice context=all
+X_within (288, 423, 84)  y_within (288, 21)
+X_cross  (288, 423, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse JawsM12 stage Expert target choice context all
-X_within (64, 423, 84)  y_within (64, 21)
-X_cross  (320, 423, 84)  y_cross  (320, 21)
-within_probas (64, 84, 84)  y_cv_within (64, 21)
-cross_probas  (320, 84, 84)  y_cv_cross  (320, 21)
-Elapsed = 0h 0m 36s
+mouse=JawsM12 stage=Expert target=choice context=all
+X_within (192, 423, 84)  y_within (192, 21)
+X_cross  (192, 423, 84)  y_cross  (192, 21)
 (384, 84, 84) (384, 84, 84)
 (384, 2, 84, 84)
 Z (384, 2, 84, 84) y (384, 24)
-mouse JawsM15 stage Naive target choice context all
-X_within (96, 693, 84)  y_within (96, 21)
-X_cross  (480, 693, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 50s
+mouse=JawsM15 stage=Naive target=choice context=all
+X_within (288, 693, 84)  y_within (288, 21)
+X_cross  (288, 693, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse JawsM15 stage Expert target choice context all
-X_within (96, 693, 84)  y_within (96, 21)
-X_cross  (480, 693, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 49s
+mouse=JawsM15 stage=Expert target=choice context=all
+X_within (288, 693, 84)  y_within (288, 21)
+X_cross  (288, 693, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse JawsM18 stage Naive target choice context all
-X_within (96, 444, 84)  y_within (96, 21)
-X_cross  (480, 444, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 34s
+mouse=JawsM18 stage=Naive target=choice context=all
+X_within (288, 444, 84)  y_within (288, 21)
+X_cross  (288, 444, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse JawsM18 stage Expert target choice context all
-X_within (96, 444, 84)  y_within (96, 21)
-X_cross  (480, 444, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 33s
+mouse=JawsM18 stage=Expert target=choice context=all
+X_within (288, 444, 84)  y_within (288, 21)
+X_cross  (288, 444, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse ChRM04 stage Naive target choice context all
-X_within (96, 668, 84)  y_within (96, 21)
-X_cross  (480, 668, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 48s
+mouse=ChRM04 stage=Naive target=choice context=all
+X_within (288, 668, 84)  y_within (288, 21)
+X_cross  (288, 668, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse ChRM04 stage Expert target choice context all
-X_within (96, 668, 84)  y_within (96, 21)
-X_cross  (480, 668, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 48s
+mouse=ChRM04 stage=Expert target=choice context=all
+X_within (288, 668, 84)  y_within (288, 21)
+X_cross  (288, 668, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse ChRM23 stage Naive target choice context all
-X_within (96, 232, 84)  y_within (96, 21)
-X_cross  (480, 232, 84)  y_cross  (480, 21)
-within_probas (96, 84, 84)  y_cv_within (96, 21)
-cross_probas  (480, 84, 84)  y_cv_cross  (480, 21)
-Elapsed = 0h 0m 30s
+mouse=ChRM23 stage=Naive target=choice context=all
+X_within (288, 232, 84)  y_within (288, 21)
+X_cross  (288, 232, 84)  y_cross  (288, 21)
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse ChRM23 stage Expert target choice context all
-X_within (64, 232, 84)  y_within (64, 21)
-X_cross  (320, 232, 84)  y_cross  (320, 21)
-within_probas (64, 84, 84)  y_cv_within (64, 21)
-cross_probas  (320, 84, 84)  y_cv_cross  (320, 21)
-Elapsed = 0h 0m 19s
+mouse=ChRM23 stage=Expert target=choice context=all
+X_within (192, 232, 84)  y_within (192, 21)
+X_cross  (192, 232, 84)  y_cross  (192, 21)
 (384, 84, 84) (384, 84, 84)
 (384, 2, 84, 84)
 Z (384, 2, 84, 84) y (384, 24)
-mouse ACCM03 stage Naive target choice context all
-X_within (192, 361, 84)  y_within (192, 21)
-X_cross  (384, 361, 84)  y_cross  (384, 21)
-within_probas (192, 84, 84)  y_cv_within (192, 21)
-cross_probas  (384, 84, 84)  y_cv_cross  (384, 21)
-Elapsed = 0h 0m 49s
+mouse=ACCM03 stage=Naive target=choice context=all
+X_within (576, 361, 84)  y_within (576, 21)
+X_cross  (0, 361, 84)  y_cross  (0, 21)
+[ccgd_validation] y_cross is empty — skipping cross-condition block.
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse ACCM03 stage Expert target choice context all
-X_within (128, 361, 84)  y_within (128, 21)
-X_cross  (256, 361, 84)  y_cross  (256, 21)
-within_probas (128, 84, 84)  y_cv_within (128, 21)
-cross_probas  (256, 84, 84)  y_cv_cross  (256, 21)
-Elapsed = 0h 0m 28s
+mouse=ACCM03 stage=Expert target=choice context=all
+X_within (384, 361, 84)  y_within (384, 21)
+X_cross  (0, 361, 84)  y_cross  (0, 21)
+[ccgd_validation] y_cross is empty — skipping cross-condition block.
 (384, 84, 84) (384, 84, 84)
 (384, 2, 84, 84)
 Z (384, 2, 84, 84) y (384, 24)
-mouse ACCM04 stage Naive target choice context all
-X_within (192, 113, 84)  y_within (192, 21)
-X_cross  (384, 113, 84)  y_cross  (384, 21)
-within_probas (192, 84, 84)  y_cv_within (192, 21)
-cross_probas  (384, 84, 84)  y_cv_cross  (384, 21)
-Elapsed = 0h 0m 54s
+mouse=ACCM04 stage=Naive target=choice context=all
+X_within (576, 113, 84)  y_within (576, 21)
+X_cross  (0, 113, 84)  y_cross  (0, 21)
+[ccgd_validation] y_cross is empty — skipping cross-condition block.
 (576, 84, 84) (576, 84, 84)
 (576, 2, 84, 84)
 Z (576, 2, 84, 84) y (576, 24)
-mouse ACCM04 stage Expert target choice context all
-X_within (128, 113, 84)  y_within (128, 21)
-X_cross  (256, 113, 84)  y_cross  (256, 21)
-within_probas (128, 84, 84)  y_cv_within (128, 21)
-cross_probas  (256, 84, 84)  y_cv_cross  (256, 21)
-Elapsed = 0h 0m 28s
+mouse=ACCM04 stage=Expert target=choice context=all
+X_within (384, 113, 84)  y_within (384, 21)
+X_cross  (0, 113, 84)  y_cross  (0, 21)
+[ccgd_validation] y_cross is empty — skipping cross-condition block.
 (384, 84, 84) (384, 84, 84)
 (384, 2, 84, 84)
 Z (384, 2, 84, 84) y (384, 24)
@@ -984,8 +1138,8 @@ pkl_save(y_single, 'labels_' + dum, path="../data/overlaps/")
 #+end_src
 
 #+RESULTS:
-: saving to ../data/overlaps//X_log_generalizing_overlaps_l1_ratio_1.0.pkl
-: saving to ../data/overlaps//labels_log_generalizing_overlaps_l1_ratio_1.0.pkl
+: saving to ../data/overlaps//X_log_generalizing_overlaps_l1_ratio_0.0.pkl
+: saving to ../data/overlaps//labels_log_generalizing_overlaps_l1_ratio_0.0.pkl
 
 ** Load
 
@@ -995,8 +1149,8 @@ y_single = pkl_load( 'labels_' + dum, path="../data/overlaps/")
 #+end_src
 
 #+RESULTS:
-: loading from ../data/overlaps//X_log_generalizing_overlaps_standard_l1_ratio_0.pkl
-: loading from ../data/overlaps//labels_log_generalizing_overlaps_standard_l1_ratio_0.pkl
+: loading from ../data/overlaps//X_log_generalizing_overlaps_standard_l1_ratio_1.0_raw.pkl
+: loading from ../data/overlaps//labels_log_generalizing_overlaps_standard_l1_ratio_1.0_raw.pkl
 
 #+begin_src jupyter-python
 print(X_single.shape, y_single.shape)
@@ -1009,9 +1163,9 @@ print(X_single.shape, y_single.shape)
 
 #+begin_src jupyter-python
 X_epoch = np.diagonal(X_single, axis1=-2, axis2=-1)[:, 1]
-# X_epoch = X_single[..., options['bins_TEST']].mean(-1)
-# X_epoch = X_single[..., options['bins_CHOICE'], :].mean(-2)[:, 0]
-# X_epoch -= X_epoch[..., options['bins_BL']].mean(-1, keepdims=True)
+# X_epoch = X_single[..., options['bins_CHOICE']].mean(-1)[:, 1]
+X_epoch = X_single[..., options['bins_POST_GNG'], :].mean(-2)[:, 1]
+X_epoch -= X_epoch[..., options['bins_BL']].mean(-1, keepdims=True)
 print(X_epoch.shape)
 #+end_src
 
@@ -1024,58 +1178,40 @@ laser = 0
 i_mouse= -1
 
 idx_context = True # (y_single.context!='DPA')
-idx_correct = (y_single.laser==0) & (y_single.performance==1) & ((y_single.tasks=='DPA') | (y_single.odr_perf==1))# & (y_single.choice==1)
+idx_correct = (y_single.laser==0)  # & (y_single.performance==1) & ((y_single.tasks=='DPA') | (y_single.odr_perf==1)) # & (y_single.choice==1)
 idx_mouse = True
 if i_mouse !=-1:
-    # idx_mouse = (y_single.mouse==options['mice'][i_mouse])
-    idx_mouse = y_single.mouse.isin(options['new_mice'])
+    idx_mouse = (y_single.mouse==options['mice'][i_mouse])
+    # idx_mouse = y_single.mouse.isin(options['new_mice'])
     print(y_single[idx_mouse].mouse.unique())
 #+end_src
 
 #+RESULTS:
 
 #+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-xtime = np.linspace(0, 14, X_single.shape[-1])
+def plot_mat(X, ax, vmin=-1, vmax=1, palette='bwr'):
+  im = ax.imshow(
+    X,
+    interpolation=None,
+    origin="lower",
+    cmap=palette,
+    extent=[0, 14, 0, 14],
+    vmin=vmin,
+    vmax=vmax,
+  )
 
-idx_stage = (y_single.learning=='Naive')
+  add_vdashed(ax,1)
+  ax.set_xlim([2, 12])
+  ax.set_xticks([2, 4, 6, 8, 10, 12])
+  ax.set_ylim([2, 12])
+  ax.set_yticks([2, 4, 6, 8, 10, 12])
 
-palette = sns.color_palette("muted")
-color = [palette[3], palette[0], palette[2]]
-
-tasks = ['DPA', 'DualGo', 'DualNoGo']
-targets = y_single.target.unique()
-labels = y_single.labels.unique()
-
-for k, target in enumerate(targets):
-    for i, task in enumerate(tasks):
-        for j, label in enumerate(labels):
-
-            mask = (y_single.tasks==task) & (y_single.target==target) & (y_single.labels==label) & idx_mouse & idx_stage & idx_correct & idx_context
-
-            X_sel = X_epoch[mask]
-            y_avg = X_sel.mean(0)
-            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
-
-            ax[k].plot(xtime, y_avg, color=color[i], label=task if j==1 else None)
-            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-            ax[k].axhline(0.0, ls='--', color='k')
-            ax[k].set_xlabel('Time')
-            add_vlines(ax[k], if_dpa=0)
-
-            ax[k].legend(fontsize=12, frameon=0, loc='best')
-            ax[k].set_xlim([0, 14])
-            # ax[k].set_ylim([0.4, 1.0])
-            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-            ax[k].set_ylabel(f'{target} Overlap')
-
-plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
-plt.show()
+  ax.set_xlabel("Testing Time (s)")
+  ax.set_ylabel("Training Time (s)")
+  return im
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_29.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1090,113 +1226,16 @@ tasks = ['DPA', 'DualGo', 'DualNoGo']
 targets = y_single.target.unique()
 labels = y_single.labels.unique()
 
-for k, target in enumerate(targets):
-    for i, task in enumerate(tasks):
-        for j, label in enumerate(labels):
+for i, task in enumerate(tasks):
+        mask = (y_single.tasks==task) & (y_single.labels==1) & idx_mouse & idx_stage & idx_correct & idx_context
 
-            mask = (y_single.tasks==task) & (y_single.target==target) & (y_single.labels==label) & idx_mouse & idx_stage & idx_correct & idx_context
+        X_sel = X_single[mask].mean(0)[1]
+        vmin, vmax =np.percentile(X_sel, [5, 95])
+        plot_mat(X_sel, ax[i], vmin=vmin, vmax=vmax, palette='jet')
 
-            X_sel = X_epoch[mask]
-            y_avg = X_sel.mean(0)
-            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
-
-            ax[k].plot(xtime, y_avg, color=color[i], label=task if j==1 else None)
-            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-            ax[k].axhline(0.0, ls='--', color='k')
-            ax[k].set_xlabel('Time')
-            add_vlines(ax[k], if_dpa=0)
-
-            ax[k].legend(fontsize=12, frameon=0, loc='best')
-            ax[k].set_xlim([0, 14])
-            # ax[k].set_ylim([0.4, 1.0])
-            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-            ax[k].set_ylabel(f'{target} Overlap')
-
-plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_30.png]]
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-xtime = np.linspace(0, 14, X_single.shape[-1])
-
-idx_stage = (y_single.learning=='Naive')
-
-palette = sns.color_palette("muted")
-color = [palette[3], palette[0], palette[2]]
-
-tasks = ['DPA', 'DualGo', 'DualNoGo']
-targets = y_single.target.unique()
-labels = y_single.labels.unique()
-
-for choice in range(2):
-    for j, task in enumerate(tasks):
-
-            mask = (y_single.choice==choice) & (y_single.tasks==task) & idx_mouse & idx_stage & idx_correct & idx_context
-
-            X_sel = X_epoch[mask]
-            y_avg = X_sel.mean(0)
-            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
-
-            ax[k].plot(xtime, y_avg, color=color[j], label=task if choice==1 else None)
-            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[j], alpha=0.2)
-            ax[k].axhline(0.0, ls='--', color='k')
-            ax[k].set_xlabel('Time')
-            add_vlines(ax[k], if_dpa=0)
-
-            ax[k].legend(fontsize=12, frameon=0, loc='best')
-            ax[k].set_xlim([0, 14])
-            # ax[k].set_ylim([0.4, 1.0])
-            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-            ax[k].set_ylabel(f'{target} Overlap')
-
-plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
-plt.show()
-#+end_src
-
-#+RESULTS:
-[[file:./figures/overlaps/figure_31.png]]
-
-#+begin_src jupyter-python
-fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
-idx_stage = (y_single.learning=='Expert')
-
-palette = sns.color_palette("muted")
-color = [palette[3], palette[0], palette[2]]
-
-tasks = ['DPA', 'DualGo', 'DualNoGo']
-
-targets = y_single.target.unique()
-labels = y_single.labels.unique()
-
-for k, target in enumerate(targets):
-    for i, task in enumerate(tasks):
-        for j, label in enumerate(labels):
-
-            mask = (y_single.tasks==task) & (y_single.target==target) & (y_single.labels==label) & idx_mouse & idx_stage & idx_correct & idx_context
-
-            X_sel = X_epoch[mask]
-            y_avg = X_sel.mean(0)
-            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
-
-            ax[k].plot(xtime, y_avg, color=color[i], label=task if j==1 else None)
-
-            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
-            ax[k].axhline(0.0, ls='--', color='k')
-            ax[k].set_xlabel('Time')
-            add_vlines(ax[k], if_dpa=0)
-
-            ax[k].legend(fontsize=12, frameon=0, loc='best')
-            ax[k].set_xlim([0, 14])
-            # ax[k].set_ylim([0.4, 1.0])
-            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
-
-            ax[k].set_ylabel(f'{target} Overlap')
+        ax[i].set_xlim([0, 14])
+        ax[i].set_ylim([0, 14])
+        ax[i].set_xticks((np.linspace(0, 14, 8)[::2]))
 
 plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
 plt.show()
@@ -1209,7 +1248,7 @@ plt.show()
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
 xtime = np.linspace(0, 14, X_single.shape[-1])
 
-idx_stage = (y_single.learning=='Expert')
+idx_stage = (y_single.learning=='Naive')
 
 palette = sns.color_palette("muted")
 color = [palette[3], palette[0], palette[2]]
@@ -1218,17 +1257,18 @@ tasks = ['DPA', 'DualGo', 'DualNoGo']
 targets = y_single.target.unique()
 labels = y_single.labels.unique()
 
-for choice in range(2):
-    for j, task in enumerate(tasks):
+for k, target in enumerate(targets):
+    for i, task in enumerate(tasks):
+        for j, label in enumerate(labels):
 
-            mask = (y_single.choice==choice) & (y_single.tasks==task) & idx_mouse & idx_stage & idx_correct & idx_context
+            mask = (y_single.tasks==task) & (y_single.target==target) & (y_single.labels==label) & idx_mouse & idx_stage & idx_correct & idx_context
 
             X_sel = X_epoch[mask]
             y_avg = X_sel.mean(0)
             y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
 
-            ax[k].plot(xtime, y_avg, color=color[j], label=task if choice==1 else None)
-            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[j], alpha=0.2)
+            ax[k].plot(xtime, y_avg, color=color[i], label=task if j==1 else None)
+            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
             ax[k].axhline(0.0, ls='--', color='k')
             ax[k].set_xlabel('Time')
             add_vlines(ax[k], if_dpa=0)
@@ -1246,6 +1286,176 @@ plt.show()
 
 #+RESULTS:
 [[file:./figures/overlaps/figure_33.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+xtime = np.linspace(0, 14, X_single.shape[-1])
+
+idx_stage = (y_single.learning=='Expert')
+
+palette = sns.color_palette("muted")
+color = [palette[3], palette[0], palette[2]]
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+targets = y_single.target.unique()
+labels = y_single.labels.unique()
+
+for k, target in enumerate(targets):
+    for i, task in enumerate(tasks):
+        for j, label in enumerate(labels):
+
+            mask = (y_single.tasks==task) & (y_single.target==target) & (y_single.labels==label) & idx_mouse & idx_stage & idx_correct & idx_context
+
+            X_sel = X_epoch[mask]
+            y_avg = X_sel.mean(0)
+            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
+
+            ax[k].plot(xtime, y_avg, color=color[i], label=task if j==1 else None)
+            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+            ax[k].axhline(0.0, ls='--', color='k')
+            ax[k].set_xlabel('Time')
+            add_vlines(ax[k], if_dpa=0)
+
+            ax[k].legend(fontsize=12, frameon=0, loc='best')
+            ax[k].set_xlim([0, 14])
+            # ax[k].set_ylim([0.4, 1.0])
+            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+
+            ax[k].set_ylabel(f'{target} Overlap')
+
+plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_34.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+xtime = np.linspace(0, 14, X_single.shape[-1])
+
+idx_stage = (y_single.learning=='Naive')
+
+palette = sns.color_palette("muted")
+color = [palette[3], palette[0], palette[2]]
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+targets = y_single.target.unique()
+labels = y_single.labels.unique()
+
+for choice in range(2):
+    for j, task in enumerate(tasks):
+
+            mask = (y_single.choice==choice) & (y_single.tasks==task) & idx_mouse & idx_stage & idx_correct & idx_context
+
+            X_sel = X_epoch[mask]
+            y_avg = X_sel.mean(0)
+            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
+
+            ax[k].plot(xtime, y_avg, color=color[j], label=task if choice==1 else None)
+            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[j], alpha=0.2)
+            ax[k].axhline(0.0, ls='--', color='k')
+            ax[k].set_xlabel('Time')
+            add_vlines(ax[k], if_dpa=0)
+
+            ax[k].legend(fontsize=12, frameon=0, loc='best')
+            ax[k].set_xlim([0, 14])
+            # ax[k].set_ylim([0.4, 1.0])
+            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+
+            ax[k].set_ylabel(f'{target} Overlap')
+
+plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_35.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+idx_stage = (y_single.learning=='Expert')
+
+palette = sns.color_palette("muted")
+color = [palette[3], palette[0], palette[2]]
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+
+targets = y_single.target.unique()
+labels = y_single.labels.unique()
+
+for k, target in enumerate(targets):
+    for i, task in enumerate(tasks):
+        for j, label in enumerate(labels):
+
+            mask = (y_single.tasks==task) & (y_single.target==target) & (y_single.labels==label) & idx_mouse & idx_stage & idx_correct & idx_context
+
+            X_sel = X_epoch[mask]
+            y_avg = X_sel.mean(0)
+            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
+
+            ax[k].plot(xtime, y_avg, color=color[i], label=task if j==1 else None)
+
+            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[i], alpha=0.2)
+            ax[k].axhline(0.0, ls='--', color='k')
+            ax[k].set_xlabel('Time')
+            add_vlines(ax[k], if_dpa=0)
+
+            ax[k].legend(fontsize=12, frameon=0, loc='best')
+            ax[k].set_xlim([0, 14])
+            # ax[k].set_ylim([0.4, 1.0])
+            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+
+            ax[k].set_ylabel(f'{target} Overlap')
+
+plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_36.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
+xtime = np.linspace(0, 14, X_single.shape[-1])
+
+idx_stage = (y_single.learning=='Expert')
+
+palette = sns.color_palette("muted")
+color = [palette[3], palette[0], palette[2]]
+
+tasks = ['DPA', 'DualGo', 'DualNoGo']
+targets = y_single.target.unique()
+labels = y_single.labels.unique()
+
+for choice in range(2):
+    for j, task in enumerate(tasks):
+
+            mask = (y_single.choice==choice) & (y_single.tasks==task) & idx_mouse & idx_stage & idx_correct & idx_context
+
+            X_sel = X_epoch[mask]
+            y_avg = X_sel.mean(0)
+            y_sem = X_sel.std(0) / np.sqrt(X_sel.shape[0])
+
+            ax[k].plot(xtime, y_avg, color=color[j], label=task if choice==1 else None)
+            ax[k].fill_between(xtime, y_avg-y_sem, y_avg+y_sem, color=color[j], alpha=0.2)
+            ax[k].axhline(0.0, ls='--', color='k')
+            ax[k].set_xlabel('Time')
+            add_vlines(ax[k], if_dpa=0)
+
+            ax[k].legend(fontsize=12, frameon=0, loc='best')
+            ax[k].set_xlim([0, 14])
+            # ax[k].set_ylim([0.4, 1.0])
+            ax[k].set_xticks((np.linspace(0, 14, 8)[::2]))
+
+            ax[k].set_ylabel(f'{target} Overlap')
+
+plt.savefig('./figures/overlaps/_%s_tasks.svg' % dum)
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_37.png]]
 
 #+begin_src jupyter-python
 fig, ax = plt.subplots(nrows=1, ncols=n_comp, figsize=(n_comp*width, height), sharey=1)
@@ -1287,7 +1497,7 @@ plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_34.png]]
+[[file:./figures/overlaps/figure_38.png]]
 
 #+begin_src jupyter-python
 
@@ -1297,147 +1507,322 @@ plt.show()
 
 ** Individuals
 
+Here's a cleaner, unified version of the /Individuals/ section. I factored out the repeated logic (stage normalization, per-mouse aggregation, delta construction, correlation plotting) into small helpers, then rebuilt all 4 figures on top of them.
+
 #+begin_src jupyter-python
+# ============================================================
+# Individuals — refactored
+# ============================================================
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.stats import pearsonr, spearmanr
 
-assert isinstance(y_single, pd.DataFrame)
-assert X_single.shape[0] == len(y_single)
+# ------------------------------------------------------------
+# Config
+# ------------------------------------------------------------
+DELAY_BINS = options["bins_LD"]
+TASKS      = ["DPA", "DualGo", "DualNoGo"]
+FIG_DIR    = "./figures/single"
 
-# decoding strength on the diagonal
-# X_epoch = np.diagonal(X_single, axis1=-2, axis2=-1)   # (n_trials, n_time)
+# ------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------
+def normalize_stage(s):
+    """Map learning labels to {'Naive','Expert'}."""
+    if np.issubdtype(s.dtype, np.number):
+        return s.map({0: "Naive", 1: "Expert"})
+    return (s.astype(str).str.strip().str.lower()
+             .map({"naive": "Naive", "expert": "Expert",
+                   "0": "Naive", "1": "Expert"}))
 
-df = y_single.reset_index(drop=True).copy()
-df["traj"] = list(X_epoch)
 
-# keep only correct non-laser trials
-df = df[(df["laser"] == 0)].copy()
+def correct_trials(df):
+    """Standard correct, non-laser trial mask."""
+    return (df.laser == 0) & (df.performance == 1) & (
+        (df.tasks == "DPA") | (df.odr_perf == 1)
+    )
 
-# delay bins after binning-by-2
-# if options["bins_DELAY"] exists in original 84-bin space, divide by 2
-delay_bins = options["bins_LD"]
 
-rows = []
-for (mouse, context, task, stage), g in df.groupby(
-    ["mouse", "context", "tasks", "learning"], sort=False
-):
-    T = np.stack(g["traj"].to_numpy(), axis=0)   # (n_trials, n_time)
+def attach_delay_value(X_epoch, y_df, delay_bins=DELAY_BINS, trial_mask=None):
+    """Return y_df with a per-trial 'value' = mean trajectory in delay_bins."""
+    d = y_df.reset_index(drop=True).copy()
+    d["traj"] = list(X_epoch)
+    if trial_mask is not None:
+        d = d[trial_mask.values if isinstance(trial_mask, pd.Series)
+              else trial_mask].copy()
+    d["value"] = d["traj"].apply(lambda t: np.nanmean(np.asarray(t)[delay_bins]))
+    d["stage"] = normalize_stage(d["learning"])
+    d = d[d["stage"].isin(["Naive", "Expert"])]
+    return d
 
-    # mean decoding trajectory across trials
-    mean_traj = np.nanmean(T, axis=0)            # (n_time,)
 
-    # average strength in delay period
-    val = np.nanmean(mean_traj[delay_bins])
+def pivot_delta(df, index_cols, value_col):
+    """Pivot Naive/Expert and compute delta = Expert - Naive."""
+    w = (df.pivot_table(index=index_cols, columns="stage",
+                        values=value_col, aggfunc="mean")
+           .dropna(subset=["Naive", "Expert"])
+           .reset_index())
+    w["delta"] = w["Expert"] - w["Naive"]
+    return w
 
-    rows.append({
-        "mouse": mouse,
-        "context": context,
-        "task": task,
-        "stage": stage,
-        "value": val,
-        "n_trials": len(g),
-    })
 
-plot_df = pd.DataFrame(rows)
+def corr_annotate(ax, x, y):
+    """Fit line + Pearson/Spearman annotation."""
+    ok = np.isfinite(x) & np.isfinite(y)
+    x, y = x[ok], y[ok]
+    if len(x) < 3 or np.std(x) == 0 or np.std(y) == 0:
+        return
+    r, p   = pearsonr(x, y)
+    rs, ps = spearmanr(x, y)
+    b1, b0 = np.polyfit(x, y, 1)
+    xs = np.linspace(x.min(), x.max(), 50)
+    ax.plot(xs, b0 + b1 * xs, "k", lw=1)
+    ax.set_title(ax.get_title() +
+                 f"\nr={r:.2f} p={p:.2g} | ρ={rs:.2f} p={ps:.2g}",
+                 fontsize=10)
+
+
+def style_axes(ax, xlabel, ylabel, identity=False):
+    ax.axhline(0, ls="--", color="0.4", lw=1)
+    ax.axvline(0, ls="--", color="0.4", lw=1)
+    ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
+    if identity:
+        xl, yl = ax.get_xlim(), ax.get_ylim()
+        lo, hi = min(xl[0], yl[0]), max(xl[1], yl[1])
+        ax.plot([lo, hi], [lo, hi], "--", color="0.6", lw=1)
+        ax.set_xlim(lo, hi); ax.set_ylim(lo, hi)
+
+
+# ------------------------------------------------------------
+# 1. Per-mouse delay-overlap table (Naive vs Expert) by task/context
+# ------------------------------------------------------------
+d_all = attach_delay_value(X_epoch, y_single,
+                           trial_mask=correct_trials(y_single))
+
+wide = pivot_delta(
+    d_all, index_cols=["mouse", "context", "tasks"], value_col="value"
+).rename(columns={"tasks": "task", "delta": "d_overlap"})
+
+
+
+
 #+end_src
 
 #+RESULTS:
 
+
+Key changes:
+
+1. /Stage normalization/ and /correct-trial mask/ are single helpers (=normalize_stage=, =correct_trials=).
+2. /Delay value extraction/ is one function (=attach_delay_value=) replacing 3 near-duplicate loops.
+3. /Δ computation/ via a generic =pivot_delta(df, index_cols, value_col)=.
+4. /Correlation + regression annotation/ and /axis styling/ are reusable (=corr_annotate=, =style_axes=).
+5. All four figures share the same scaffolding; only the scatter variables change.
+6. File naming is consistent via =FIG_DIR= and =dum=.
+
+If you want, I can also add bootstrap CIs on the regression lines or switch to partial correlations controlling for mouse identity.
+
 #+begin_src jupyter-python
-df = plot_df.copy()
+# ------------------------------------------------------------
+# Figure 1: Naive vs Expert scatter, one panel per context
+# ------------------------------------------------------------
+def fig_naive_vs_expert(wide, col, col_order, fname):
+    g = sns.FacetGrid(wide, col=col, col_order=col_order,
+                      height=height, aspect=1.0, sharex=True, sharey=True)
 
-# normalize stage labels
-if np.issubdtype(df["stage"].dtype, np.number):
-    df["stage"] = df["stage"].map({0: "Naive", 1: "Expert"})
-else:
-    df["stage"] = (
-        df["stage"].astype(str).str.strip().str.lower()
-        .map({"naive": "Naive", "expert": "Expert", "0": "Naive", "1": "Expert"})
-    )
+    def _plot(data, **kw):
+        ax = plt.gca()
+        sns.scatterplot(data=data, x="Naive", y="Expert",
+                        hue="mouse", style="task",
+                        s=80, edgecolor="black", linewidth=0.4,
+                        legend=False, ax=ax)
 
-df = df[df["stage"].isin(["Naive", "Expert"])].copy()
+    g.map_dataframe(_plot)
 
-wide = (
-    df.pivot_table(
-        index=["mouse", "context", "task"],
-        columns="stage",
-        values="value",
-        aggfunc="mean"
-    )
-    .reset_index()
-    .dropna(subset=["Naive", "Expert"])
+    for ax, key in zip(g.axes.flat, col_order):
+        sub = wide[wide[col] == key]
+        style_axes(ax, "Naive", "Expert", identity=True)
+        ax.set_title(str(key))
+        corr_annotate(ax, sub["Naive"].values, sub["Expert"].values)
+
+    g.fig.tight_layout()
+    g.fig.savefig(f"{FIG_DIR}/{fname}_{dum}.svg")
+    plt.show()
+
+
+fig_naive_vs_expert(
+    wide, col="context",
+    col_order=sorted(wide["context"].unique()),
+    fname="scatter_delay_by_context",
 )
 #+end_src
 
 #+RESULTS:
+[[file:./figures/overlaps/figure_41.png]]
 
 #+begin_src jupyter-python
-mouse_order = sorted(wide["mouse"].unique())
-task_order = sorted(wide["task"].unique())
-context_order = sorted(wide["context"].unique())
+# ------------------------------------------------------------
+# Figure 4: Naive vs Expert (per-mouse and per-(mouse,sample))
+# ------------------------------------------------------------
+# per-mouse (collapse across tasks/contexts)
+ov_mouse = (wide.groupby("mouse", as_index=False)[["Naive", "Expert"]].mean())
 
-palette = dict(zip(mouse_order, sns.color_palette("tab10", n_colors=len(mouse_order))))
-markers = dict(zip(task_order, ["o", "s", "^", "D", "P", "X"][:len(task_order)]))
-
-g = sns.FacetGrid(
-    wide,
-    col="context",
-    col_order=context_order,
-    height=height,
-    aspect=1.0,
-    sharex=True,
-    sharey=True
+# per-(mouse, sample) on DPA correct trials only
+d_sample = attach_delay_value(
+    X_epoch, y_single,
+    trial_mask=(y_single.laser == 0)
+               & (y_single.tasks == "DPA")
+               & (y_single.performance == 1),
 )
+wide_sample = (d_sample.pivot_table(index=["mouse", "sample"],
+                                    columns="stage", values="value")
+                        .dropna(subset=["Naive", "Expert"])
+                        .reset_index())
 
-def _scatter(data, **kwargs):
-    ax = plt.gca()
-    for task in task_order:
-        dsub = data[data["task"] == task]
-        sns.scatterplot(
-            data=dsub,
-            x="Naive", y="Expert",
-            hue="mouse", palette=palette,
-            style="task", markers=markers,
-            s=80, edgecolor="black", linewidth=0.4,
-            legend=False, ax=ax
-        )
+fig, axes = plt.subplots(1, 2, figsize=(2 * height, height))
+for ax, data, style, title in [
+    (axes[0], ov_mouse, None, "per mouse"),
+    (axes[1], wide_sample, "sample", "per (mouse, sample)"),
+]:
+    sns.scatterplot(data=data, x="Naive", y="Expert",
+                    hue="mouse", style=style,
+                    s=100, edgecolor="black", linewidth=0.5,
+                    legend=False, ax=ax)
+    ax.set_title(title)
+    style_axes(ax, "Naive", "Expert", identity=True)
+    corr_annotate(ax, data["Naive"].values, data["Expert"].values)
 
-g.map_dataframe(_scatter)
-
-for ax, context in zip(g.axes.flat, context_order):
-    dsub = wide[wide["context"] == context]
-    vals = dsub[["Naive", "Expert"]].to_numpy().ravel()
-    vals = vals[np.isfinite(vals)]
-
-    if len(vals):
-        lo = vals.min()
-        hi = vals.max()
-        pad = 0.05 * (hi - lo + 1e-12)
-        lo -= pad
-        hi += pad
-    else:
-        lo, hi = 0.4, 1.0
-
-    ax.plot([lo, hi], [lo, hi], "--", color="0.4", lw=1)
-    ax.axhline(0, ls='--', lw=1, color="0.4")
-    ax.axvline(0, ls='--', lw=1, color="0.4")
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(lo, hi)
-    ax.set_xlabel("Naive")
-    ax.set_ylabel("Expert")
-    ax.set_title(context)
-    ax.grid(False)
-    ax.tick_params(axis="both", which="both", direction="out", length=4, width=1)
-
-g.fig.tight_layout()
-plt.savefig(f'./figures/single/scatter_delay_context_task_{dum}.svg')
+fig.tight_layout()
+fig.savefig(f"{FIG_DIR}/scatter_choice_overlap_naive_vs_expert_combined_{dum}.svg")
 plt.show()
 #+end_src
 
 #+RESULTS:
-[[file:./figures/overlaps/figure_39.png]]
+[[file:./figures/overlaps/figure_42.png]]
+
+#+begin_src jupyter-python
+# ------------------------------------------------------------
+# Figure 3: Naive vs Expert overlap per task (one panel per task)
+# ------------------------------------------------------------
+fig, axes = plt.subplots(1, len(TASKS),
+                         figsize=(len(TASKS) * height, height),
+                         sharex=True, sharey=True)
+for ax, t in zip(axes, TASKS):
+    sub = wide[wide["task"] == t]
+    sns.scatterplot(data=sub, x="Naive", y="Expert",
+                    hue="mouse", s=100, edgecolor="black",
+                    linewidth=0.5, legend=False, ax=ax)
+    ax.set_title(t)
+    style_axes(ax, "Overlap Naive", "Overlap Expert", identity=True)
+    corr_annotate(ax, sub["Naive"].values, sub["Expert"].values)
+
+fig.tight_layout()
+fig.savefig(f"{FIG_DIR}/scatter_naive_expert_overlap_bytask_{dum}.svg")
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_43.png]]
+
+
+#+begin_src jupyter-python
+# ------------------------------------------------------------
+# Figure 2: Δ overlap  vs  Δ performance  per task
+# ------------------------------------------------------------
+d_perf = []
+for t in TASKS:
+    sub = y_single[y_single["tasks"] == t].copy()
+    sub["stage"] = normalize_stage(sub["learning"])
+    sub = sub[(sub["laser"] == 0) & sub["stage"].isin(["Naive", "Expert"])]
+    perf_col = "performance" if t == "DPA" else "odr_perf"
+    w = pivot_delta(sub, index_cols=["mouse"], value_col=perf_col)
+    w["task"] = t
+    w = w.rename(columns={"delta": "d_perf"})
+    d_perf.append(w[["mouse", "task", "d_perf"]])
+d_perf = pd.concat(d_perf, ignore_index=True)
+
+d_ov_task = (wide.groupby(["mouse", "task"], as_index=False)["d_overlap"].mean())
+merged = d_perf.merge(d_ov_task, on=["mouse", "task"])
+
+fig, axes = plt.subplots(1, len(TASKS),
+                         figsize=(len(TASKS) * height, height),
+                         sharex=True, sharey=True)
+for ax, t in zip(axes, TASKS):
+    sub = merged[merged["task"] == t]
+    sns.scatterplot(data=sub, x="d_overlap", y="d_perf",
+                    hue="mouse", s=100, edgecolor="black",
+                    linewidth=0.5, legend=False, ax=ax)
+    ax.set_title(t)
+    style_axes(ax, "Δ choice overlap", "Δ performance")
+    corr_annotate(ax, sub["d_overlap"].values, sub["d_perf"].values)
+
+fig.tight_layout()
+fig.savefig(f"{FIG_DIR}/corr_dperf_doverlap_bytask_{dum}.svg")
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_44.png]]
+
+
+#+begin_src jupyter-python
+# ------------------------------------------------------------
+# Figure 5b: Δ DPA performance (all trials)  |  Δ GNG performance (Dual)
+#            vs Δ choice overlap on DPA trials, per mouse
+# ------------------------------------------------------------
+
+# --- Δ DPA performance (all trials) ---
+sub_dpa = y_single.copy()
+sub_dpa["stage"] = normalize_stage(sub_dpa["learning"])
+sub_dpa = sub_dpa[(sub_dpa["laser"] == 0)
+                  & sub_dpa["stage"].isin(["Naive", "Expert"])]
+
+d_perf_dpa = pivot_delta(
+    sub_dpa, index_cols=["mouse"], value_col="performance"
+).rename(columns={"delta": "d_perf"})[["mouse", "d_perf"]]
+
+# --- Δ GNG performance (all Dual trials) ---
+sub_gng = y_single[y_single["tasks"] != "DPA"].copy()
+sub_gng["stage"] = normalize_stage(sub_gng["learning"])
+sub_gng = sub_gng[(sub_gng["laser"] == 0)
+                  & sub_gng["stage"].isin(["Naive", "Expert"])]
+
+d_perf_gng = pivot_delta(
+    sub_gng, index_cols=["mouse"], value_col="odr_perf"
+).rename(columns={"delta": "d_perf"})[["mouse", "d_perf"]]
+
+# --- Δ choice overlap (DPA trials only) ---
+d_ov_dpa = (
+    wide[wide["task"] == "DPA"]
+    .groupby("mouse", as_index=False)["d_overlap"].mean()
+)
+
+panels = [
+    ("DPA (all trials)", d_perf_dpa.merge(d_ov_dpa, on="mouse"),
+     "Δ DPA performance"),
+    ("GNG (all Dual)",   d_perf_gng.merge(d_ov_dpa, on="mouse"),
+     "Δ GNG performance"),
+]
+
+fig, axes = plt.subplots(1, 2, figsize=(2 * height, height), sharex=True)
+
+for ax, (title, merged, ylab) in zip(axes, panels):
+    sns.scatterplot(data=merged, x="d_overlap", y="d_perf",
+                    hue="mouse", s=100, edgecolor="black",
+                    linewidth=0.5, legend=False, ax=ax)
+    ax.set_title(title)
+    style_axes(ax, "Δ choice overlap (DPA)", ylab)
+    corr_annotate(ax, merged["d_overlap"].values, merged["d_perf"].values)
+
+fig.tight_layout()
+fig.savefig(f"{FIG_DIR}/corr_dperf_dDPAoverlap_DPA_GNG_{dum}.svg")
+plt.show()
+#+end_src
+
+#+RESULTS:
+[[file:./figures/overlaps/figure_45.png]]
 
 #+begin_src jupyter-python
 

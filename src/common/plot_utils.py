@@ -306,34 +306,29 @@ def plot_grid(
     plt.tight_layout()
     plt.show()
 
-def add_vdashed(ax):
+def add_vdashed(ax, dim2=0):
     # STIM
     ax.axvline(2, color="w", ls="--", lw=0.5)
-    #ax.axhline(2, color="w", ls="--", lw=0.5)
-
     ax.axvline(3, color="w", ls="--", lw=0.5)
-    # ax.axhline(3, color="w", ls="--", lw=0.5)
-
     # Dist
     ax.axvline(4.5, color="w", ls="--", lw=0.5)
-    # ax.axhline(4.5, color="w", ls="--", lw=0.5)
-
     ax.axvline(5.5, color="w", ls="--", lw=0.5)
-    # ax.axhline(5.5, color="w", ls="--", lw=0.5)
-
     # Cue
     ax.axvline(6.5, color="w", ls="--", lw=0.5)
-    # ax.axhline(6.5, color="w", ls="--", lw=0.5)
-
     ax.axvline(7, color="w", ls="--", lw=0.5)
-    # ax.axhline(7, color="w", ls="--", lw=0.5)
-
     # Test
     ax.axvline(9, color="w", ls="--", lw=0.5)
-    # ax.axhline(9, color="w", ls="--", lw=0.5)
-
     ax.axvline(10, color="w", ls="--", lw=0.5)
-    # ax.axhline(10, color="w", ls="--", lw=0.5)
+
+    if dim2:
+        ax.axhline(2, color="w", ls="--", lw=0.5)
+        ax.axhline(3, color="w", ls="--", lw=0.5)
+        ax.axhline(4.5, color="w", ls="--", lw=0.5)
+        ax.axhline(5.5, color="w", ls="--", lw=0.5)
+        ax.axhline(6.5, color="w", ls="--", lw=0.5)
+        ax.axhline(7, color="w", ls="--", lw=0.5)
+        ax.axhline(9, color="w", ls="--", lw=0.5)
+        ax.axhline(10, color="w", ls="--", lw=0.5)
 
 
 
